@@ -15,7 +15,6 @@ import {
   Unlock,
   Eye,
   X,
-  FileText,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
@@ -23,10 +22,7 @@ import {
   calcularComissaoProgressiva,
   type ConfiguracaoFinanceira,
 } from '@/lib/configuracoes-financeiras';
-import {
-  gerarRelatorioFinanceiro,
-  type DadosRelatorioFinanceiro,
-} from '@/lib/pdf/gerarRelatorioFinanceiro';
+import { RelatorioFinanceiroPdfButton } from './RelatorioFinanceiroPdfButton';
 
 // ======================================================================
 // TIPOS E INTERFACES
@@ -127,8 +123,7 @@ export default function FinanceiroPage() {
   // Histórico de meses fechados
   const [historicoMeses, setHistoricoMeses] = useState<ResumoMensal[]>([]);
 
-  // Estado de geração de PDF
-  const [gerandoPDF, setGerandoPDF] = useState(false);
+
 
   // ======================================================================
   // CARREGAMENTO DE DADOS
@@ -192,10 +187,11 @@ export default function FinanceiroPage() {
       const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
       const dataFim = ultimoDiaMes.toISOString().split('T')[0];
 
-      // 4. Buscar vendas do mês
+      // 4. Buscar vendas do mês (APENAS FECHADAS)
       const { data: vendasData, error: vendasError } = await supabase
         .from('vendas')
         .select('*')
+        .eq('estado', 'FECHADA')
         .gte('data', dataInicio)
         .lte('data', dataFim);
 
@@ -408,130 +404,7 @@ export default function FinanceiroPage() {
     setMesSelecionado(mes);
   };
 
-  // ======================================================================
-  // GERAÇÃO DE RELATÓRIO PDF
-  // ======================================================================
 
-  const handleGerarRelatorioPdf = async () => {
-    if (!mesFechado) {
-      alert('Apenas meses fechados podem gerar relatórios em PDF.');
-      return;
-    }
-
-    try {
-      setGerandoPDF(true);
-
-      // Buscar dados dos vendedores para o relatório
-      const primeiroDiaMes = new Date(anoSelecionado, mesSelecionado - 1, 1);
-      const ultimoDiaMes = new Date(anoSelecionado, mesSelecionado, 0);
-      const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-      const dataFim = ultimoDiaMes.toISOString().split('T')[0];
-
-      // Buscar vendas do mês
-      const { data: vendasData, error: vendasError } = await supabase
-        .from('vendas')
-        .select('*, vendedor:vendedores(nome)')
-        .gte('data', dataInicio)
-        .lte('data', dataFim);
-
-      if (vendasError) throw vendasError;
-
-      // Buscar itens de vendas para contar frascos
-      const vendasIds = (vendasData || []).map((v) => v.id);
-      let vendaItensData: VendaItem[] = [];
-
-      if (vendasIds.length > 0) {
-        const { data: itensData, error: itensError } = await supabase
-          .from('venda_itens')
-          .select('*')
-          .in('venda_id', vendasIds);
-
-        if (itensError) throw itensError;
-        vendaItensData = itensData || [];
-      }
-
-      // Buscar configuração para calcular comissões
-      const config = await buscarConfiguracaoFinanceira();
-
-      // Agrupar por vendedor
-      const vendedoresMap = new Map<string, {
-        nome: string;
-        faturacao: number;
-        frascos: number;
-        comissao: number;
-      }>();
-
-      for (const venda of vendasData || []) {
-        const vendedorId = venda.vendedor_id;
-        const vendedorNome = (venda.vendedor as any)?.nome || 'Desconhecido';
-
-        if (!vendedoresMap.has(vendedorId)) {
-          vendedoresMap.set(vendedorId, {
-            nome: vendedorNome,
-            faturacao: 0,
-            frascos: 0,
-            comissao: 0,
-          });
-        }
-
-        const vendedorResumo = vendedoresMap.get(vendedorId)!;
-        vendedorResumo.faturacao += venda.total_com_iva || 0;
-
-        // Contar frascos desta venda
-        const frascosVenda = vendaItensData
-          .filter((item) => item.venda_id === venda.id)
-          .reduce((sum, item) => sum + (item.quantidade || 0), 0);
-        vendedorResumo.frascos += frascosVenda;
-      }
-
-      // Calcular comissões
-      for (const [vendedorId, vendedorResumo] of vendedoresMap.entries()) {
-        vendedorResumo.comissao = calcularComissaoProgressiva(
-          vendedorResumo.faturacao,
-          config
-        );
-      }
-
-      const vendedores = Array.from(vendedoresMap.values());
-
-      // Construir objeto de dados para o PDF
-      const dadosRelatorio: DadosRelatorioFinanceiro = {
-        ano: anoSelecionado,
-        mes: mesSelecionado,
-        faturacaoBruta: dados.faturacaoBruta,
-        frascosVendidos: dados.frascosVendidos,
-        resultadoOperacional: dados.resultadoOperacional,
-        comissaoTotal: dados.comissaoTotal,
-        custoKm: dados.custoKmTotal,
-        incentivoPodologista: dados.incentivoPodologista,
-        fundoFarmaceutico: dados.fundoFarmaceutico,
-        custosFixos: dados.custosFixos,
-        resultadoLiquido: dados.resultadoLiquido,
-        vendedores: vendedores,
-        observacoes: dados.observacoes,
-      };
-
-      // Gerar PDF
-      const blob = await gerarRelatorioFinanceiro(dadosRelatorio);
-
-      // Criar URL e disparar download
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Relatorio_Financeiro_100PHARMA_${anoSelecionado}_${mesSelecionado
-        .toString()
-        .padStart(2, '0')}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (error: any) {
-      console.error('Erro ao gerar PDF:', error);
-      alert(
-        'Não foi possível gerar o PDF. Verifique a consola para mais detalhes.'
-      );
-    } finally {
-      setGerandoPDF(false);
-    }
-  };
 
   // ======================================================================
   // HELPERS
@@ -677,23 +550,22 @@ export default function FinanceiroPage() {
 
             {/* Botão Gerar Relatório PDF */}
             {mesFechado && (
-              <button
-                onClick={handleGerarRelatorioPdf}
-                disabled={gerandoPDF}
-                className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-3 rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-colors font-semibold shadow-md flex items-center gap-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {gerandoPDF ? (
-                  <>
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                    Gerando...
-                  </>
-                ) : (
-                  <>
-                    <FileText className="w-5 h-5" />
-                    Gerar Relatório (PDF)
-                  </>
-                )}
-              </button>
+              <RelatorioFinanceiroPdfButton
+                dados={{
+                  ano: anoSelecionado,
+                  mesNumero: mesSelecionado,
+                  mesNome: meses[mesSelecionado - 1],
+                  faturacaoBruta: dados.faturacaoBruta,
+                  frascosVendidos: dados.frascosVendidos,
+                  comissaoTotal: dados.comissaoTotal,
+                  custoKm: dados.custoKmTotal,
+                  incentivoPodologista: dados.incentivoPodologista,
+                  fundoFarmaceutico: dados.fundoFarmaceutico,
+                  custoFixo: dados.custosFixos || 0,
+                  resultadoOperacional: dados.resultadoOperacional,
+                  resultadoLiquido: dados.resultadoLiquido || 0,
+                }}
+              />
             )}
           </div>
         </div>

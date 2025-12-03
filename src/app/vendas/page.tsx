@@ -1,144 +1,428 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
-  Plus, Search, Filter, Download, Eye, Edit, Trash2, 
-  FileText, ShoppingCart, CheckCircle, X, ChevronRight,
-  AlertCircle, TrendingUp, Users, Package, Calendar
+  Plus, Search, Eye, Edit, Trash2, 
+  FileText, CheckCircle, X, ChevronRight,
+  AlertCircle, TrendingUp, Package, Calendar, Save, XCircle
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
-// Tipos
-type EstadoVenda = 'RASCUNHO' | 'ORÇAMENTO' | 'PEDIDO' | 'FATURADO';
-type TipoCliente = 'FARMÁCIA' | 'PODOLOGISTA' | 'CLÍNICA';
+// ======================================================================
+// CONSTANTES
+// ======================================================================
+
+const TAXA_IVA = 0.23;
+
+// ======================================================================
+// TIPOS
+// ======================================================================
+
+type EstadoVenda = 'ORCAMENTO' | 'ABERTA' | 'FECHADA' | 'CANCELADA';
 
 interface Cliente {
   id: string;
   nome: string;
-  tipo: TipoCliente;
+  tipo: string;
   nif: string;
-  limiteCredito: number;
-  saldoAberto: number;
-  condicaoPagamento: string;
-  ativo: boolean;
+  email: string;
+  telefone: string;
+  endereco?: string;
+  cidade?: string;
+  codigo_postal?: string;
+}
+
+interface Vendedor {
+  id: string;
+  nome: string;
+  email: string;
 }
 
 interface Produto {
   id: string;
   nome: string;
   preco: number;
-  iva: number;
   estoque: number;
-  temIncentivo: boolean;
-  temFundoFarmaceutico: boolean;
 }
 
 interface ItemVenda {
-  id: string;
-  produto: Produto;
+  id?: string;
+  venda_id?: string;
+  produto_id: string;
+  produto?: Produto;
   quantidade: number;
-  precoUnitario: number;
-  iva: number;
-  totalSemIva: number;
-  totalIva: number;
-  totalComIva: number;
+  preco_unitario: number;
+  total_linha: number;
 }
 
 interface Venda {
   id: string;
-  numero?: string;
-  tipo: EstadoVenda;
-  cliente: Cliente;
-  vendedor: string;
-  dataCriacao: Date;
-  itens: ItemVenda[];
-  totalSemIva: number;
-  totalIva: number;
-  totalComIva: number;
+  numero: string;
+  cliente_id: string;
+  vendedor_id: string;
+  data: string;
   estado: EstadoVenda;
-  podologistaAssociado?: string;
+  subtotal: number;
+  iva: number;
+  total_com_iva: number;
+  observacoes: string;
+  created_at: string;
+  updated_at: string;
+  // Relacionamentos
+  clientes?: Cliente;
+  vendedores?: Vendedor;
+  venda_itens?: ItemVenda[];
 }
 
-interface Vendedor {
-  id: string;
-  nome: string;
-  farmaciasCarteira: number;
-  farmaciasAtivasMes: number;
-  comissoesEstimadas: number;
-}
-
-// Dados mockados
-const clientesMock: Cliente[] = [
-  { id: '1', nome: 'Farmácia Central', tipo: 'FARMÁCIA', nif: '123456789', limiteCredito: 10000, saldoAberto: 2500, condicaoPagamento: '30 dias', ativo: true },
-  { id: '2', nome: 'Clínica São José', tipo: 'CLÍNICA', nif: '987654321', limiteCredito: 15000, saldoAberto: 5000, condicaoPagamento: '60 dias', ativo: true },
-  { id: '3', nome: 'Dr. João Silva', tipo: 'PODOLOGISTA', nif: '456789123', limiteCredito: 5000, saldoAberto: 1000, condicaoPagamento: '15 dias', ativo: true },
-];
-
-const produtosMock: Produto[] = [
-  { id: '1', nome: 'Creme Hidratante 50ml', preco: 15.50, iva: 23, estoque: 100, temIncentivo: true, temFundoFarmaceutico: false },
-  { id: '2', nome: 'Óleo Essencial 30ml', preco: 25.00, iva: 23, estoque: 50, temIncentivo: false, temFundoFarmaceutico: true },
-  { id: '3', nome: 'Gel Podológico 100ml', preco: 18.75, iva: 23, estoque: 75, temIncentivo: true, temFundoFarmaceutico: true },
-];
-
-const vendedorMock: Vendedor = {
-  id: '1',
-  nome: 'Maria Santos',
-  farmaciasCarteira: 45,
-  farmaciasAtivasMes: 32,
-  comissoesEstimadas: 2500
-};
+// ======================================================================
+// COMPONENTE PRINCIPAL
+// ======================================================================
 
 export default function VendasPage() {
-  const [modalAberto, setModalAberto] = useState(false);
-  const [etapaAtual, setEtapaAtual] = useState(1);
+  const [carregando, setCarregando] = useState(true);
   const [vendas, setVendas] = useState<Venda[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
+  const [produtos, setProdutos] = useState<Produto[]>([]);
   
-  // Estados do formulário
-  const [clienteSelecionado, setClienteSelecionado] = useState<Cliente | null>(null);
-  const [vendedorSelecionado, setVendedorSelecionado] = useState<Vendedor>(vendedorMock);
+  // Modal
+  const [modalAberto, setModalAberto] = useState(false);
+  const [vendaEditando, setVendaEditando] = useState<Venda | null>(null);
+  const [etapaAtual, setEtapaAtual] = useState(1);
+  
+  // Formulário
+  const [clienteSelecionado, setClienteSelecionado] = useState('');
+  const [vendedorSelecionado, setVendedorSelecionado] = useState('');
+  const [dataVenda, setDataVenda] = useState(new Date().toISOString().split('T')[0]);
+  const [estadoVenda, setEstadoVenda] = useState<EstadoVenda>('ORCAMENTO');
+  const [observacoes, setObservacoesVenda] = useState('');
   const [itensVenda, setItensVenda] = useState<ItemVenda[]>([]);
-  const [produtoSelecionado, setProdutoSelecionado] = useState<Produto | null>(null);
+  
+  // Item sendo adicionado
+  const [produtoSelecionado, setProdutoSelecionado] = useState('');
   const [quantidade, setQuantidade] = useState(1);
-  const [podologistaAssociado, setPodologistaAssociado] = useState('');
-  const [associarPodologista, setAssociarPodologista] = useState(false);
-
+  
   // Filtros
   const [filtroEstado, setFiltroEstado] = useState<EstadoVenda | 'TODOS'>('TODOS');
-  const [filtroCliente, setFiltroCliente] = useState('');
   const [busca, setBusca] = useState('');
 
-  // Funções auxiliares
-  const calcularTotais = (itens: ItemVenda[]) => {
-    const totalSemIva = itens.reduce((acc, item) => acc + item.totalSemIva, 0);
-    const totalIva = itens.reduce((acc, item) => acc + item.totalIva, 0);
-    const totalComIva = itens.reduce((acc, item) => acc + item.totalComIva, 0);
-    return { totalSemIva, totalIva, totalComIva };
+  // ======================================================================
+  // CARREGAMENTO INICIAL
+  // ======================================================================
+
+  useEffect(() => {
+    carregarDados();
+  }, []);
+
+  const carregarDados = async () => {
+    try {
+      setCarregando(true);
+      
+      // Carregar vendas com relacionamentos
+      const { data: vendasData, error: vendasError } = await supabase
+        .from('vendas')
+        .select(`
+          *,
+          clientes (id, nome, tipo, nif, email, telefone, endereco, cidade, codigo_postal),
+          vendedores (id, nome, email),
+          venda_itens (
+            id,
+            produto_id,
+            quantidade,
+            preco_unitario,
+            total_linha,
+            produtos (id, nome, preco, estoque)
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (vendasError) throw vendasError;
+      setVendas(vendasData || []);
+
+      // Carregar clientes REAIS do Supabase
+      const { data: clientesData, error: clientesError } = await supabase
+        .from('clientes')
+        .select('*')
+        .order('nome');
+
+      if (clientesError) throw clientesError;
+      setClientes(clientesData || []);
+
+      // Carregar vendedores
+      const { data: vendedoresData, error: vendedoresError } = await supabase
+        .from('vendedores')
+        .select('*')
+        .order('nome');
+
+      if (vendedoresError) throw vendedoresError;
+      setVendedores(vendedoresData || []);
+
+      // Carregar produtos
+      const { data: produtosData, error: produtosError } = await supabase
+        .from('produtos')
+        .select('*')
+        .order('nome');
+
+      if (produtosError) throw produtosError;
+      setProdutos(produtosData || []);
+
+    } catch (error: any) {
+      console.error('Erro ao carregar dados:', error);
+      alert('Erro ao carregar dados: ' + error.message);
+    } finally {
+      setCarregando(false);
+    }
   };
 
-  const adicionarItem = () => {
-    if (!produtoSelecionado || quantidade <= 0) return;
+  // ======================================================================
+  // CÁLCULOS
+  // ======================================================================
 
-    const totalSemIva = produtoSelecionado.preco * quantidade;
-    const totalIva = totalSemIva * (produtoSelecionado.iva / 100);
-    const totalComIva = totalSemIva + totalIva;
+  const calcularTotais = (itens: ItemVenda[]) => {
+    const subtotal = itens.reduce((acc, item) => acc + item.total_linha, 0);
+    const iva = subtotal * TAXA_IVA;
+    const total_com_iva = subtotal + iva;
+    return { subtotal, iva, total_com_iva };
+  };
+
+  // ======================================================================
+  // GERENCIAMENTO DE ITENS
+  // ======================================================================
+
+  const adicionarItem = () => {
+    if (!produtoSelecionado || quantidade <= 0) {
+      alert('Selecione um produto e quantidade válida');
+      return;
+    }
+
+    const produto = produtos.find(p => p.id === produtoSelecionado);
+    if (!produto) return;
+
+    const total_linha = produto.preco * quantidade;
 
     const novoItem: ItemVenda = {
-      id: Date.now().toString(),
-      produto: produtoSelecionado,
+      produto_id: produto.id,
+      produto,
       quantidade,
-      precoUnitario: produtoSelecionado.preco,
-      iva: produtoSelecionado.iva,
-      totalSemIva,
-      totalIva,
-      totalComIva
+      preco_unitario: produto.preco,
+      total_linha
     };
 
     setItensVenda([...itensVenda, novoItem]);
-    setProdutoSelecionado(null);
+    setProdutoSelecionado('');
     setQuantidade(1);
   };
 
-  const removerItem = (id: string) => {
-    setItensVenda(itensVenda.filter(item => item.id !== id));
+  const removerItem = (index: number) => {
+    setItensVenda(itensVenda.filter((_, i) => i !== index));
+  };
+
+  // ======================================================================
+  // SALVAR VENDA
+  // ======================================================================
+
+  const salvarVenda = async () => {
+    try {
+      if (!clienteSelecionado || !vendedorSelecionado) {
+        alert('Selecione cliente e vendedor');
+        return;
+      }
+
+      if (itensVenda.length === 0) {
+        alert('Adicione pelo menos um produto');
+        return;
+      }
+
+      const totais = calcularTotais(itensVenda);
+
+      if (vendaEditando) {
+        // Atualizar venda existente
+        const { error: vendaError } = await supabase
+          .from('vendas')
+          .update({
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: estadoVenda,
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', vendaEditando.id);
+
+        if (vendaError) throw vendaError;
+
+        // Deletar itens antigos
+        const { error: deleteError } = await supabase
+          .from('venda_itens')
+          .delete()
+          .eq('venda_id', vendaEditando.id);
+
+        if (deleteError) throw deleteError;
+
+        // Inserir novos itens
+        const itensParaInserir = itensVenda.map(item => ({
+          venda_id: vendaEditando.id,
+          produto_id: item.produto_id,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha
+        }));
+
+        const { error: itensError } = await supabase
+          .from('venda_itens')
+          .insert(itensParaInserir);
+
+        if (itensError) throw itensError;
+
+        alert('Venda atualizada com sucesso!');
+      } else {
+        // Criar nova venda
+        const numeroVenda = `VD${Date.now()}`;
+
+        const { data: vendaData, error: vendaError } = await supabase
+          .from('vendas')
+          .insert({
+            numero: numeroVenda,
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: estadoVenda,
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes
+          })
+          .select()
+          .single();
+
+        if (vendaError) throw vendaError;
+
+        // Inserir itens
+        const itensParaInserir = itensVenda.map(item => ({
+          venda_id: vendaData.id,
+          produto_id: item.produto_id,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha
+        }));
+
+        const { error: itensError } = await supabase
+          .from('venda_itens')
+          .insert(itensParaInserir);
+
+        if (itensError) throw itensError;
+
+        alert('Venda criada com sucesso!');
+      }
+
+      fecharModal();
+      carregarDados();
+    } catch (error: any) {
+      console.error('Erro ao salvar venda:', error);
+      alert('Erro ao salvar venda: ' + error.message);
+    }
+  };
+
+  // ======================================================================
+  // MUDAR ESTADO DA VENDA
+  // ======================================================================
+
+  const mudarEstadoVenda = async (vendaId: string, novoEstado: EstadoVenda) => {
+    try {
+      const { error } = await supabase
+        .from('vendas')
+        .update({ 
+          estado: novoEstado,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', vendaId);
+
+      if (error) throw error;
+
+      alert(`Venda alterada para ${novoEstado}`);
+      carregarDados();
+    } catch (error: any) {
+      console.error('Erro ao mudar estado:', error);
+      alert('Erro ao mudar estado: ' + error.message);
+    }
+  };
+
+  // ======================================================================
+  // DELETAR VENDA
+  // ======================================================================
+
+  const deletarVenda = async (vendaId: string) => {
+    if (!confirm('Tem certeza que deseja deletar esta venda?')) return;
+
+    try {
+      // Deletar itens primeiro
+      const { error: itensError } = await supabase
+        .from('venda_itens')
+        .delete()
+        .eq('venda_id', vendaId);
+
+      if (itensError) throw itensError;
+
+      // Deletar venda
+      const { error: vendaError } = await supabase
+        .from('vendas')
+        .delete()
+        .eq('id', vendaId);
+
+      if (vendaError) throw vendaError;
+
+      alert('Venda deletada com sucesso!');
+      carregarDados();
+    } catch (error: any) {
+      console.error('Erro ao deletar venda:', error);
+      alert('Erro ao deletar venda: ' + error.message);
+    }
+  };
+
+  // ======================================================================
+  // MODAL
+  // ======================================================================
+
+  const abrirModalNovo = () => {
+    setVendaEditando(null);
+    setClienteSelecionado('');
+    setVendedorSelecionado('');
+    setDataVenda(new Date().toISOString().split('T')[0]);
+    setEstadoVenda('ORCAMENTO');
+    setObservacoesVenda('');
+    setItensVenda([]);
+    setEtapaAtual(1);
+    setModalAberto(true);
+  };
+
+  const abrirModalEditar = (venda: Venda) => {
+    setVendaEditando(venda);
+    setClienteSelecionado(venda.cliente_id);
+    setVendedorSelecionado(venda.vendedor_id);
+    setDataVenda(venda.data);
+    setEstadoVenda(venda.estado);
+    setObservacoesVenda(venda.observacoes || '');
+    
+    // Carregar itens
+    const itens = (venda.venda_itens || []).map(item => ({
+      produto_id: item.produto_id,
+      produto: item.produtos,
+      quantidade: item.quantidade,
+      preco_unitario: item.preco_unitario,
+      total_linha: item.total_linha
+    }));
+    setItensVenda(itens);
+    
+    setEtapaAtual(1);
+    setModalAberto(true);
+  };
+
+  const fecharModal = () => {
+    setModalAberto(false);
+    setVendaEditando(null);
   };
 
   const proximaEtapa = () => {
@@ -146,7 +430,11 @@ export default function VendasPage() {
       alert('Selecione um cliente');
       return;
     }
-    if (etapaAtual === 3 && itensVenda.length === 0) {
+    if (etapaAtual === 1 && !vendedorSelecionado) {
+      alert('Selecione um vendedor');
+      return;
+    }
+    if (etapaAtual === 2 && itensVenda.length === 0) {
       alert('Adicione pelo menos um produto');
       return;
     }
@@ -157,45 +445,43 @@ export default function VendasPage() {
     setEtapaAtual(etapaAtual - 1);
   };
 
-  const salvarVenda = (estado: EstadoVenda) => {
-    if (!clienteSelecionado) return;
-
-    const totais = calcularTotais(itensVenda);
-    const novaVenda: Venda = {
-      id: Date.now().toString(),
-      numero: estado === 'FATURADO' ? `FT${Date.now()}` : undefined,
-      tipo: estado,
-      cliente: clienteSelecionado,
-      vendedor: vendedorSelecionado.nome,
-      dataCriacao: new Date(),
-      itens: itensVenda,
-      ...totais,
-      estado,
-      podologistaAssociado: associarPodologista ? podologistaAssociado : undefined
-    };
-
-    setVendas([...vendas, novaVenda]);
-    fecharModal();
-    alert(`${estado} criado com sucesso!`);
-  };
-
-  const fecharModal = () => {
-    setModalAberto(false);
-    setEtapaAtual(1);
-    setClienteSelecionado(null);
-    setItensVenda([]);
-    setProdutoSelecionado(null);
-    setQuantidade(1);
-    setAssociarPodologista(false);
-    setPodologistaAssociado('');
-  };
+  // ======================================================================
+  // FILTROS
+  // ======================================================================
 
   const vendasFiltradas = vendas.filter(venda => {
     const matchEstado = filtroEstado === 'TODOS' || venda.estado === filtroEstado;
-    const matchCliente = !filtroCliente || venda.cliente.nome.toLowerCase().includes(filtroCliente.toLowerCase());
-    const matchBusca = !busca || venda.cliente.nome.toLowerCase().includes(busca.toLowerCase()) || venda.numero?.toLowerCase().includes(busca.toLowerCase());
-    return matchEstado && matchCliente && matchBusca;
+    const matchBusca = !busca || 
+      venda.numero.toLowerCase().includes(busca.toLowerCase()) ||
+      venda.clientes?.nome.toLowerCase().includes(busca.toLowerCase());
+    return matchEstado && matchBusca;
   });
+
+  // ======================================================================
+  // ESTATÍSTICAS
+  // ======================================================================
+
+  const totalVendas = vendas.length;
+  const vendasFechadas = vendas.filter(v => v.estado === 'FECHADA').length;
+  const vendasAbertas = vendas.filter(v => v.estado === 'ABERTA').length;
+  const totalFaturado = vendas
+    .filter(v => v.estado === 'FECHADA')
+    .reduce((acc, v) => acc + v.total_com_iva, 0);
+
+  // ======================================================================
+  // RENDERIZAÇÃO
+  // ======================================================================
+
+  if (carregando) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Carregando vendas...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
@@ -205,12 +491,12 @@ export default function VendasPage() {
           <div className="flex justify-between items-center">
             <div>
               <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-2">
-                Vendas / Orçamentos / Pedidos
+                Gestão de Vendas
               </h1>
-              <p className="text-gray-600">Gestão completa do ciclo de vendas</p>
+              <p className="text-gray-600">Orçamentos, vendas abertas e fechadas</p>
             </div>
             <button
-              onClick={() => setModalAberto(true)}
+              onClick={abrirModalNovo}
               className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-300 flex items-center gap-2 hover:scale-105"
             >
               <Plus className="w-5 h-5" />
@@ -227,7 +513,7 @@ export default function VendasPage() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Total Vendas</p>
-                  <p className="text-2xl font-bold text-blue-600">{vendas.length}</p>
+                  <p className="text-2xl font-bold text-blue-600">{totalVendas}</p>
                 </div>
               </div>
             </div>
@@ -238,10 +524,8 @@ export default function VendasPage() {
                   <CheckCircle className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Faturadas</p>
-                  <p className="text-2xl font-bold text-green-600">
-                    {vendas.filter(v => v.estado === 'FATURADO').length}
-                  </p>
+                  <p className="text-sm text-gray-600">Fechadas</p>
+                  <p className="text-2xl font-bold text-green-600">{vendasFechadas}</p>
                 </div>
               </div>
             </div>
@@ -249,13 +533,11 @@ export default function VendasPage() {
             <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-xl">
               <div className="flex items-center gap-3">
                 <div className="bg-orange-600 p-3 rounded-lg">
-                  <ShoppingCart className="w-6 h-6 text-white" />
+                  <Package className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Pedidos</p>
-                  <p className="text-2xl font-bold text-orange-600">
-                    {vendas.filter(v => v.estado === 'PEDIDO').length}
-                  </p>
+                  <p className="text-sm text-gray-600">Abertas</p>
+                  <p className="text-2xl font-bold text-orange-600">{vendasAbertas}</p>
                 </div>
               </div>
             </div>
@@ -268,7 +550,7 @@ export default function VendasPage() {
                 <div>
                   <p className="text-sm text-gray-600">Total Faturado</p>
                   <p className="text-2xl font-bold text-purple-600">
-                    €{vendas.filter(v => v.estado === 'FATURADO').reduce((acc, v) => acc + v.totalComIva, 0).toFixed(2)}
+                    €{totalFaturado.toFixed(2)}
                   </p>
                 </div>
               </div>
@@ -278,7 +560,7 @@ export default function VendasPage() {
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
@@ -296,24 +578,11 @@ export default function VendasPage() {
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="TODOS">Todos os Estados</option>
-              <option value="RASCUNHO">Rascunho</option>
-              <option value="ORÇAMENTO">Orçamento</option>
-              <option value="PEDIDO">Pedido</option>
-              <option value="FATURADO">Faturado</option>
+              <option value="ORCAMENTO">Orçamento</option>
+              <option value="ABERTA">Aberta</option>
+              <option value="FECHADA">Fechada</option>
+              <option value="CANCELADA">Cancelada</option>
             </select>
-
-            <input
-              type="text"
-              placeholder="Filtrar por cliente..."
-              value={filtroCliente}
-              onChange={(e) => setFiltroCliente(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-
-            <button className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg flex items-center gap-2 justify-center transition-colors">
-              <Filter className="w-5 h-5" />
-              Mais Filtros
-            </button>
           </div>
         </div>
 
@@ -323,14 +592,13 @@ export default function VendasPage() {
             <table className="w-full">
               <thead className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
                 <tr>
-                  <th className="px-6 py-4 text-left text-sm font-semibold">Nº Documento</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold">Tipo</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold">Número</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold">Cliente</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold">Vendedor</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold">Data</th>
-                  <th className="px-6 py-4 text-right text-sm font-semibold">Total s/ IVA</th>
+                  <th className="px-6 py-4 text-right text-sm font-semibold">Subtotal</th>
                   <th className="px-6 py-4 text-right text-sm font-semibold">IVA</th>
-                  <th className="px-6 py-4 text-right text-sm font-semibold">Total c/ IVA</th>
+                  <th className="px-6 py-4 text-right text-sm font-semibold">Total</th>
                   <th className="px-6 py-4 text-center text-sm font-semibold">Estado</th>
                   <th className="px-6 py-4 text-center text-sm font-semibold">Ações</th>
                 </tr>
@@ -338,7 +606,7 @@ export default function VendasPage() {
               <tbody className="divide-y divide-gray-200">
                 {vendasFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
                       <Package className="w-16 h-16 mx-auto mb-4 text-gray-300" />
                       <p className="text-lg font-semibold mb-2">Nenhuma venda encontrada</p>
                       <p className="text-sm">Clique em "Nova Venda" para começar</p>
@@ -348,28 +616,31 @@ export default function VendasPage() {
                   vendasFiltradas.map((venda) => (
                     <tr key={venda.id} className="hover:bg-blue-50 transition-colors">
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                        {venda.numero || '-'}
+                        {venda.numero}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{venda.tipo}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{venda.cliente.nome}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{venda.vendedor}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {venda.clientes?.nome || '-'}
+                      </td>
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {venda.dataCriacao.toLocaleDateString('pt-PT')}
+                        {venda.vendedores?.nome || '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {new Date(venda.data).toLocaleDateString('pt-PT')}
                       </td>
                       <td className="px-6 py-4 text-sm text-right text-gray-900">
-                        €{venda.totalSemIva.toFixed(2)}
+                        €{venda.subtotal.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 text-sm text-right text-gray-600">
-                        €{venda.totalIva.toFixed(2)}
+                        €{venda.iva.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 text-sm text-right font-semibold text-gray-900">
-                        €{venda.totalComIva.toFixed(2)}
+                        €{venda.total_com_iva.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 text-center">
                         <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                          venda.estado === 'FATURADO' ? 'bg-green-100 text-green-800' :
-                          venda.estado === 'PEDIDO' ? 'bg-orange-100 text-orange-800' :
-                          venda.estado === 'ORÇAMENTO' ? 'bg-blue-100 text-blue-800' :
+                          venda.estado === 'FECHADA' ? 'bg-green-100 text-green-800' :
+                          venda.estado === 'ABERTA' ? 'bg-orange-100 text-orange-800' :
+                          venda.estado === 'ORCAMENTO' ? 'bg-blue-100 text-blue-800' :
                           'bg-gray-100 text-gray-800'
                         }`}>
                           {venda.estado}
@@ -377,17 +648,40 @@ export default function VendasPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2">
-                          <button className="p-2 hover:bg-blue-100 rounded-lg transition-colors" title="Ver">
-                            <Eye className="w-4 h-4 text-blue-600" />
-                          </button>
-                          <button className="p-2 hover:bg-green-100 rounded-lg transition-colors" title="Editar">
+                          <button 
+                            onClick={() => abrirModalEditar(venda)}
+                            className="p-2 hover:bg-green-100 rounded-lg transition-colors" 
+                            title="Editar"
+                          >
                             <Edit className="w-4 h-4 text-green-600" />
                           </button>
-                          <button className="p-2 hover:bg-purple-100 rounded-lg transition-colors" title="Exportar">
-                            <Download className="w-4 h-4 text-purple-600" />
-                          </button>
-                          {venda.estado !== 'FATURADO' && (
-                            <button className="p-2 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar">
+                          
+                          {venda.estado !== 'FECHADA' && venda.estado !== 'CANCELADA' && (
+                            <button 
+                              onClick={() => mudarEstadoVenda(venda.id, 'FECHADA')}
+                              className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
+                              title="Fechar Venda"
+                            >
+                              <CheckCircle className="w-4 h-4 text-blue-600" />
+                            </button>
+                          )}
+                          
+                          {venda.estado !== 'CANCELADA' && (
+                            <button 
+                              onClick={() => mudarEstadoVenda(venda.id, 'CANCELADA')}
+                              className="p-2 hover:bg-yellow-100 rounded-lg transition-colors" 
+                              title="Cancelar"
+                            >
+                              <XCircle className="w-4 h-4 text-yellow-600" />
+                            </button>
+                          )}
+                          
+                          {venda.estado !== 'FECHADA' && (
+                            <button 
+                              onClick={() => deletarVenda(venda.id)}
+                              className="p-2 hover:bg-red-100 rounded-lg transition-colors" 
+                              title="Eliminar"
+                            >
                               <Trash2 className="w-4 h-4 text-red-600" />
                             </button>
                           )}
@@ -402,7 +696,7 @@ export default function VendasPage() {
         </div>
       </div>
 
-      {/* Modal Nova Venda */}
+      {/* Modal Nova/Editar Venda */}
       {modalAberto && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -410,8 +704,10 @@ export default function VendasPage() {
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 rounded-t-2xl">
               <div className="flex justify-between items-center">
                 <div>
-                  <h2 className="text-2xl font-bold">Nova Venda</h2>
-                  <p className="text-blue-100 text-sm mt-1">Etapa {etapaAtual} de 6</p>
+                  <h2 className="text-2xl font-bold">
+                    {vendaEditando ? 'Editar Venda' : 'Nova Venda'}
+                  </h2>
+                  <p className="text-blue-100 text-sm mt-1">Etapa {etapaAtual} de 3</p>
                 </div>
                 <button
                   onClick={fecharModal}
@@ -425,151 +721,107 @@ export default function VendasPage() {
               <div className="mt-4 bg-white/20 rounded-full h-2">
                 <div
                   className="bg-white h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${(etapaAtual / 6) * 100}%` }}
+                  style={{ width: `${(etapaAtual / 3) * 100}%` }}
                 />
               </div>
             </div>
 
             {/* Conteúdo do Modal */}
             <div className="p-6">
-              {/* Etapa 1: Seleção do Cliente */}
+              {/* Etapa 1: Cliente, Vendedor e Data */}
               {etapaAtual === 1 && (
                 <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <Users className="w-6 h-6 text-blue-600" />
-                      Seleção do Cliente
-                    </h3>
-                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-4">
+                    Informações Básicas
+                  </h3>
 
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       Cliente *
                     </label>
                     <select
-                      value={clienteSelecionado?.id || ''}
-                      onChange={(e) => {
-                        const cliente = clientesMock.find(c => c.id === e.target.value);
-                        setClienteSelecionado(cliente || null);
-                      }}
+                      value={clienteSelecionado}
+                      onChange={(e) => setClienteSelecionado(e.target.value)}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                       <option value="">Selecione um cliente</option>
-                      {clientesMock.map((cliente) => (
+                      {clientes.map((cliente) => (
                         <option key={cliente.id} value={cliente.id}>
-                          {cliente.nome} - {cliente.tipo}
+                          {cliente.nome} – {cliente.tipo}
                         </option>
                       ))}
                     </select>
                   </div>
 
-                  {clienteSelecionado && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-gray-600">Tipo de Cliente</p>
-                          <p className="font-semibold text-gray-900">{clienteSelecionado.tipo}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">NIF</p>
-                          <p className="font-semibold text-gray-900">{clienteSelecionado.nif}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Condição de Pagamento</p>
-                          <p className="font-semibold text-gray-900">{clienteSelecionado.condicaoPagamento}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Limite de Crédito</p>
-                          <p className="font-semibold text-gray-900">€{clienteSelecionado.limiteCredito.toFixed(2)}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Saldo em Aberto</p>
-                          <p className="font-semibold text-red-600">€{clienteSelecionado.saldoAberto.toFixed(2)}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Crédito Disponível</p>
-                          <p className="font-semibold text-green-600">
-                            €{(clienteSelecionado.limiteCredito - clienteSelecionado.saldoAberto).toFixed(2)}
-                          </p>
-                        </div>
-                      </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Vendedor *
+                    </label>
+                    <select
+                      value={vendedorSelecionado}
+                      onChange={(e) => setVendedorSelecionado(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">Selecione um vendedor</option>
+                      {vendedores.map((vendedor) => (
+                        <option key={vendedor.id} value={vendedor.id}>
+                          {vendedor.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                      {clienteSelecionado.saldoAberto > clienteSelecionado.limiteCredito * 0.8 && (
-                        <div className="flex items-start gap-2 bg-orange-100 border border-orange-300 rounded-lg p-3">
-                          <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-sm font-semibold text-orange-900">Atenção ao Limite de Crédito</p>
-                            <p className="text-xs text-orange-700 mt-1">
-                              Cliente próximo do limite. Considere apenas orçamento.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      {!clienteSelecionado.ativo && (
-                        <div className="flex items-start gap-2 bg-red-100 border border-red-300 rounded-lg p-3">
-                          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-sm font-semibold text-red-900">Cliente Inativo</p>
-                            <p className="text-xs text-red-700 mt-1">
-                              Cliente inativo por falta de compras. Confirmar continuação?
-                            </p>
-                          </div>
-                        </div>
-                      )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Data da Venda *
+                      </label>
+                      <input
+                        type="date"
+                        value={dataVenda}
+                        onChange={(e) => setDataVenda(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
                     </div>
-                  )}
+
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Estado *
+                      </label>
+                      <select
+                        value={estadoVenda}
+                        onChange={(e) => setEstadoVenda(e.target.value as EstadoVenda)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="ORCAMENTO">Orçamento</option>
+                        <option value="ABERTA">Aberta</option>
+                        <option value="FECHADA">Fechada</option>
+                        <option value="CANCELADA">Cancelada</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Observações
+                    </label>
+                    <textarea
+                      value={observacoes}
+                      onChange={(e) => setObservacoesVenda(e.target.value)}
+                      rows={3}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Observações sobre a venda..."
+                    />
+                  </div>
                 </div>
               )}
 
-              {/* Etapa 2: Vendedor */}
+              {/* Etapa 2: Produtos */}
               {etapaAtual === 2 && (
                 <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <Users className="w-6 h-6 text-blue-600" />
-                      Identificação do Vendedor
-                    </h3>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="bg-blue-600 p-3 rounded-full">
-                        <Users className="w-8 h-8 text-white" />
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-600">Vendedor</p>
-                        <p className="text-2xl font-bold text-gray-900">{vendedorSelecionado.nome}</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4 mt-6">
-                      <div className="bg-white rounded-lg p-4">
-                        <p className="text-sm text-gray-600 mb-1">Farmácias na Carteira</p>
-                        <p className="text-2xl font-bold text-blue-600">{vendedorSelecionado.farmaciasCarteira}</p>
-                      </div>
-                      <div className="bg-white rounded-lg p-4">
-                        <p className="text-sm text-gray-600 mb-1">Ativas no Mês</p>
-                        <p className="text-2xl font-bold text-green-600">{vendedorSelecionado.farmaciasAtivasMes}</p>
-                      </div>
-                      <div className="bg-white rounded-lg p-4">
-                        <p className="text-sm text-gray-600 mb-1">Comissões Estimadas</p>
-                        <p className="text-2xl font-bold text-purple-600">€{vendedorSelecionado.comissoesEstimadas}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Etapa 3: Produtos */}
-              {etapaAtual === 3 && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <Package className="w-6 h-6 text-blue-600" />
-                      Adição de Produtos
-                    </h3>
-                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-4">
+                    Produtos da Venda
+                  </h3>
 
                   {/* Adicionar Produto */}
                   <div className="bg-gray-50 rounded-xl p-4 space-y-4">
@@ -579,15 +831,12 @@ export default function VendasPage() {
                           Produto
                         </label>
                         <select
-                          value={produtoSelecionado?.id || ''}
-                          onChange={(e) => {
-                            const produto = produtosMock.find(p => p.id === e.target.value);
-                            setProdutoSelecionado(produto || null);
-                          }}
+                          value={produtoSelecionado}
+                          onChange={(e) => setProdutoSelecionado(e.target.value)}
                           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         >
                           <option value="">Selecione um produto</option>
-                          {produtosMock.map((produto) => (
+                          {produtos.map((produto) => (
                             <option key={produto.id} value={produto.id}>
                               {produto.nome} - €{produto.preco.toFixed(2)} (Estoque: {produto.estoque})
                             </option>
@@ -609,40 +858,6 @@ export default function VendasPage() {
                       </div>
                     </div>
 
-                    {produtoSelecionado && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                        <div className="grid grid-cols-4 gap-4 text-sm">
-                          <div>
-                            <p className="text-gray-600">Preço Unit.</p>
-                            <p className="font-semibold">€{produtoSelecionado.preco.toFixed(2)}</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">IVA</p>
-                            <p className="font-semibold">{produtoSelecionado.iva}%</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Estoque</p>
-                            <p className={`font-semibold ${produtoSelecionado.estoque < quantidade ? 'text-red-600' : 'text-green-600'}`}>
-                              {produtoSelecionado.estoque} un.
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Total</p>
-                            <p className="font-semibold text-blue-600">
-                              €{(produtoSelecionado.preco * quantidade * (1 + produtoSelecionado.iva / 100)).toFixed(2)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {produtoSelecionado.estoque < quantidade && (
-                          <div className="flex items-center gap-2 mt-2 text-orange-700">
-                            <AlertCircle className="w-4 h-4" />
-                            <p className="text-xs">Estoque insuficiente. Venda permitida com alerta.</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
                     <button
                       onClick={adicionarItem}
                       disabled={!produtoSelecionado || quantidade <= 0}
@@ -661,23 +876,29 @@ export default function VendasPage() {
                           <tr>
                             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Produto</th>
                             <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700">Qtd</th>
-                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Preço</th>
-                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">IVA</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Preço Unit.</th>
                             <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total</th>
                             <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700">Ações</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                          {itensVenda.map((item) => (
-                            <tr key={item.id} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 text-sm text-gray-900">{item.produto.nome}</td>
-                              <td className="px-4 py-3 text-sm text-center text-gray-600">{item.quantidade}</td>
-                              <td className="px-4 py-3 text-sm text-right text-gray-900">€{item.precoUnitario.toFixed(2)}</td>
-                              <td className="px-4 py-3 text-sm text-right text-gray-600">€{item.totalIva.toFixed(2)}</td>
-                              <td className="px-4 py-3 text-sm text-right font-semibold text-gray-900">€{item.totalComIva.toFixed(2)}</td>
+                          {itensVenda.map((item, index) => (
+                            <tr key={index} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {item.produto?.nome || 'Produto'}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-center text-gray-600">
+                                {item.quantidade}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-right text-gray-900">
+                                €{item.preco_unitario.toFixed(2)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-right font-semibold text-gray-900">
+                                €{item.total_linha.toFixed(2)}
+                              </td>
                               <td className="px-4 py-3 text-center">
                                 <button
-                                  onClick={() => removerItem(item.id)}
+                                  onClick={() => removerItem(index)}
                                   className="p-1 hover:bg-red-100 rounded transition-colors"
                                 >
                                   <Trash2 className="w-4 h-4 text-red-600" />
@@ -692,310 +913,90 @@ export default function VendasPage() {
                 </div>
               )}
 
-              {/* Etapa 4: Podologista */}
-              {etapaAtual === 4 && (
+              {/* Etapa 3: Resumo */}
+              {etapaAtual === 3 && (
                 <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <Users className="w-6 h-6 text-blue-600" />
-                      Associar Podologista (Opcional)
-                    </h3>
-                  </div>
-
-                  {clienteSelecionado?.tipo === 'FARMÁCIA' ? (
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          id="associarPodo"
-                          checked={associarPodologista}
-                          onChange={(e) => setAssociarPodologista(e.target.checked)}
-                          className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <label htmlFor="associarPodo" className="text-sm font-semibold text-gray-700">
-                          Associar podologista a esta venda
-                        </label>
-                      </div>
-
-                      {associarPodologista && (
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-700 mb-2">
-                            Selecione o Podologista
-                          </label>
-                          <select
-                            value={podologistaAssociado}
-                            onChange={(e) => setPodologistaAssociado(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">Selecione um podologista</option>
-                            {clientesMock
-                              .filter(c => c.tipo === 'PODOLOGISTA')
-                              .map((podo) => (
-                                <option key={podo.id} value={podo.id}>
-                                  {podo.nome}
-                                </option>
-                              ))}
-                          </select>
-
-                          <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                            <p className="text-sm text-blue-900">
-                              <strong>Incentivo Podologista:</strong> Ao associar um podologista, 
-                              ele receberá incentivos trimestrais baseados no volume de vendas desta farmácia.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
-                      <p className="text-gray-600">
-                        Associação de podologista disponível apenas para clientes do tipo FARMÁCIA.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Etapa 5: Resumo */}
-              {etapaAtual === 5 && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <FileText className="w-6 h-6 text-blue-600" />
-                      Resumo Financeiro
-                    </h3>
-                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-4">
+                    Resumo da Venda
+                  </h3>
 
                   {/* Totais */}
                   <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="text-sm text-gray-600">Subtotal sem IVA</p>
+                        <p className="text-sm text-gray-600">Subtotal (sem IVA)</p>
                         <p className="text-2xl font-bold text-gray-900">
-                          €{calcularTotais(itensVenda).totalSemIva.toFixed(2)}
+                          €{calcularTotais(itensVenda).subtotal.toFixed(2)}
                         </p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-600">Total IVA</p>
+                        <p className="text-sm text-gray-600">IVA (23%)</p>
                         <p className="text-2xl font-bold text-gray-900">
-                          €{calcularTotais(itensVenda).totalIva.toFixed(2)}
+                          €{calcularTotais(itensVenda).iva.toFixed(2)}
                         </p>
                       </div>
                       <div className="col-span-2 border-t border-blue-300 pt-4 mt-2">
                         <p className="text-sm text-gray-600">Total com IVA</p>
                         <p className="text-4xl font-bold text-blue-600">
-                          €{calcularTotais(itensVenda).totalComIva.toFixed(2)}
+                          €{calcularTotais(itensVenda).total_com_iva.toFixed(2)}
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  {/* Informações Adicionais */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Incentivo Podologista</p>
-                      <p className="text-xl font-bold text-green-600">
-                        €{associarPodologista && podologistaAssociado ? (calcularTotais(itensVenda).totalSemIva * 0.05).toFixed(2) : '0.00'}
-                      </p>
+                  {/* Informações */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Cliente:</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {clientes.find(c => c.id === clienteSelecionado)?.nome}
+                      </span>
                     </div>
-                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Fundo Farmacêutico</p>
-                      <p className="text-xl font-bold text-purple-600">
-                        €{(calcularTotais(itensVenda).totalSemIva * 0.03).toFixed(2)}
-                      </p>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Tipo de Cliente:</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {clientes.find(c => c.id === clienteSelecionado)?.tipo}
+                      </span>
                     </div>
-                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Comissão Estimada</p>
-                      <p className="text-xl font-bold text-orange-600">
-                        €{(calcularTotais(itensVenda).totalSemIva * 0.08).toFixed(2)}
-                      </p>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Vendedor:</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {vendedores.find(v => v.id === vendedorSelecionado)?.nome}
+                      </span>
                     </div>
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Frascos Equivalentes</p>
-                      <p className="text-xl font-bold text-blue-600">
-                        {itensVenda.reduce((acc, item) => acc + item.quantidade, 0)}
-                      </p>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Data:</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {new Date(dataVenda).toLocaleDateString('pt-PT')}
+                      </span>
                     </div>
-                  </div>
-
-                  {/* Status Crédito */}
-                  {clienteSelecionado && (
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <p className="text-sm font-semibold text-gray-700">Status do Limite de Crédito</p>
-                        <p className="text-sm text-gray-600">
-                          Vencimento: {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-PT')}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="flex-1">
-                          <div className="bg-gray-200 rounded-full h-3">
-                            <div
-                              className={`h-3 rounded-full ${
-                                (clienteSelecionado.saldoAberto + calcularTotais(itensVenda).totalComIva) / clienteSelecionado.limiteCredito > 0.9
-                                  ? 'bg-red-500'
-                                  : (clienteSelecionado.saldoAberto + calcularTotais(itensVenda).totalComIva) / clienteSelecionado.limiteCredito > 0.7
-                                  ? 'bg-orange-500'
-                                  : 'bg-green-500'
-                              }`}
-                              style={{
-                                width: `${Math.min(
-                                  ((clienteSelecionado.saldoAberto + calcularTotais(itensVenda).totalComIva) / clienteSelecionado.limiteCredito) * 100,
-                                  100
-                                )}%`
-                              }}
-                            />
-                          </div>
-                        </div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          €{(clienteSelecionado.saldoAberto + calcularTotais(itensVenda).totalComIva).toFixed(2)} / €{clienteSelecionado.limiteCredito.toFixed(2)}
-                        </p>
-                      </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Estado:</span>
+                      <span className={`text-sm font-semibold ${
+                        estadoVenda === 'FECHADA' ? 'text-green-600' :
+                        estadoVenda === 'ABERTA' ? 'text-orange-600' :
+                        estadoVenda === 'ORCAMENTO' ? 'text-blue-600' :
+                        'text-gray-600'
+                      }`}>
+                        {estadoVenda}
+                      </span>
                     </div>
-                  )}
-
-                  {/* Botões de Ação */}
-                  <div className="grid grid-cols-3 gap-4">
-                    <button
-                      onClick={() => salvarVenda('ORÇAMENTO')}
-                      className="bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold transition-colors"
-                    >
-                      Salvar como Orçamento
-                    </button>
-                    <button
-                      onClick={() => salvarVenda('PEDIDO')}
-                      className="bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold transition-colors"
-                    >
-                      Transformar em Pedido
-                    </button>
-                    <button
-                      onClick={() => setEtapaAtual(6)}
-                      className="bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition-colors"
-                    >
-                      Faturar
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Etapa 6: Faturar */}
-              {etapaAtual === 6 && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <CheckCircle className="w-6 h-6 text-green-600" />
-                      Faturar (Gerar Documento Legal)
-                    </h3>
-                  </div>
-
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-6">
-                    <div className="text-center mb-6">
-                      <CheckCircle className="w-16 h-16 text-green-600 mx-auto mb-4" />
-                      <h4 className="text-xl font-bold text-green-900 mb-2">Confirmação de Faturação</h4>
-                      <p className="text-green-700">
-                        Ao confirmar, será gerado um documento legal português com todos os dados necessários.
-                      </p>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="bg-white rounded-lg p-4 border">
-                        <h5 className="font-semibold text-gray-900 mb-3">Dados da Empresa</h5>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <p className="text-gray-600">Nome</p>
-                            <p className="font-semibold">Empresa Exemplo, Lda</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">NIF</p>
-                            <p className="font-semibold">123456789</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Morada</p>
-                            <p className="font-semibold">Rua Exemplo, 123, Lisboa</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Contacto</p>
-                            <p className="font-semibold">+351 123 456 789</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-white rounded-lg p-4 border">
-                        <h5 className="font-semibold text-gray-900 mb-3">Cliente</h5>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <p className="text-gray-600">Nome</p>
-                            <p className="font-semibold">{clienteSelecionado?.nome}</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">NIF</p>
-                            <p className="font-semibold">{clienteSelecionado?.nif}</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Morada</p>
-                            <p className="font-semibold">Morada do cliente</p>
-                          </div>
-                          <div>
-                            <p className="text-gray-600">Tipo</p>
-                            <p className="font-semibold">{clienteSelecionado?.tipo}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-white rounded-lg p-4 border">
-                        <h5 className="font-semibold text-gray-900 mb-3">Resumo da Fatura</h5>
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Número da Fatura:</span>
-                            <span className="font-semibold">FT{Date.now()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Data:</span>
-                            <span className="font-semibold">{new Date().toLocaleDateString('pt-PT')}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Total sem IVA:</span>
-                            <span className="font-semibold">€{calcularTotais(itensVenda).totalSemIva.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">IVA:</span>
-                            <span className="font-semibold">€{calcularTotais(itensVenda).totalIva.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between border-t pt-2">
-                            <span className="text-gray-900 font-semibold">Total com IVA:</span>
-                            <span className="font-bold text-green-600">€{calcularTotais(itensVenda).totalComIva.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <h5 className="font-semibold text-blue-900 mb-2">Ações Automáticas</h5>
-                        <ul className="text-sm text-blue-800 space-y-1">
-                          <li>• Gerar PDF legal português</li>
-                          <li>• Registrar saída de estoque</li>
-                          <li>• Criar conta a receber</li>
-                          <li>• Aplicar incentivos e comissões</li>
-                          <li>• Atualizar ranking do concurso</li>
-                          <li>• Enviar por email (opcional)</li>
-                        </ul>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 mt-6">
-                      <button
-                        onClick={() => setEtapaAtual(5)}
-                        className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-semibold transition-colors"
-                      >
-                        Voltar
-                      </button>
-                      <button
-                        onClick={() => salvarVenda('FATURADO')}
-                        className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition-colors"
-                      >
-                        Confirmar Faturação
-                      </button>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Total de Itens:</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {itensVenda.length}
+                      </span>
                     </div>
                   </div>
+
+                  {/* Botão Salvar */}
+                  <button
+                    onClick={salvarVenda}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Save className="w-5 h-5" />
+                    {vendaEditando ? 'Atualizar Venda' : 'Salvar Venda'}
+                  </button>
                 </div>
               )}
             </div>
@@ -1011,7 +1012,7 @@ export default function VendasPage() {
                   Anterior
                 </button>
 
-                {etapaAtual < 5 && (
+                {etapaAtual < 3 && (
                   <button
                     onClick={proximaEtapa}
                     className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2"

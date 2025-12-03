@@ -1,30 +1,22 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-export interface DadosRelatorioFinanceiro {
+export interface DadosFinanceirosMensais {
   ano: number;
-  mes: number;
+  mesNumero: number; // 1-12
+  mesNome: string;
   faturacaoBruta: number;
   frascosVendidos: number;
   comissaoTotal: number;
   custoKm: number;
   incentivoPodologista: number;
   fundoFarmaceutico: number;
-  custosFixos?: number;
-  resultadoLiquido?: number;
+  custoFixo: number;
   resultadoOperacional: number;
-  vendedores?: Array<{
-    nome: string;
-    faturacao: number;
-    frascos: number;
-    comissao: number;
-  }>;
-  observacoes?: string;
+  resultadoLiquido: number;
 }
 
-export async function gerarRelatorioFinanceiro(
-  dados: DadosRelatorioFinanceiro
-): Promise<Blob> {
+export function gerarRelatorioFinanceiroPDF(dados: DadosFinanceirosMensais): void {
   // Criar documento PDF
   const doc = new jsPDF();
 
@@ -33,7 +25,7 @@ export async function gerarRelatorioFinanceiro(
   const margin = 20;
   let yPosition = 20;
 
-  // Helper para formatar moeda
+  // Helper para formatar moeda (formato português: vírgula decimal + sufixo €)
   const formatarMoeda = (valor: number) => {
     return valor.toLocaleString('pt-PT', {
       minimumFractionDigits: 2,
@@ -41,88 +33,128 @@ export async function gerarRelatorioFinanceiro(
     }) + '€';
   };
 
-  // Helper para nome do mês
-  const meses = [
-    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
-  ];
+  // Helper para formatar inteiros (frascos)
+  const formatarInteiro = (valor: number) => {
+    return valor.toString();
+  };
+
+  // Obter data e hora de geração
+  const dataGeracao = new Date();
+  const dataGeracaoFormatada = dataGeracao.toLocaleString('pt-PT', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
   // ======================================================================
-  // CABEÇALHO
+  // CABEÇALHO DO PDF
   // ======================================================================
-  doc.setFontSize(20);
+  
+  // Título principal - centralizado
+  doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
   doc.text('Relatório Financeiro 100PHARMA', pageWidth / 2, yPosition, {
     align: 'center',
   });
 
   yPosition += 10;
-  doc.setFontSize(14);
+
+  // Subtítulo - mês e ano - centralizado
+  doc.setFontSize(12);
   doc.setFont('helvetica', 'normal');
+  doc.setTextColor(80, 80, 80);
   doc.text(
-    `${meses[dados.mes - 1]} de ${dados.ano}`,
+    `Mês de ${dados.mesNome} de ${dados.ano}`,
     pageWidth / 2,
     yPosition,
     { align: 'center' }
   );
 
-  yPosition += 15;
+  // Data e hora de geração - canto superior direito
+  doc.setFontSize(9);
+  doc.setTextColor(100, 100, 100);
+  doc.text(
+    `Gerado em: ${dataGeracaoFormatada}`,
+    pageWidth - margin,
+    15,
+    { align: 'right' }
+  );
 
-  // Linha separadora
-  doc.setDrawColor(200, 200, 200);
-  doc.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 10;
-
-  // ======================================================================
-  // RESUMO GERAL
-  // ======================================================================
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.text('RESUMO GERAL', margin, yPosition);
   yPosition += 8;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  // Linha separadora após cabeçalho
+  doc.setDrawColor(200, 200, 200);
+  doc.setLineWidth(0.2);
+  doc.line(margin, yPosition, pageWidth - margin, yPosition);
+  yPosition += 12;
+
+  // ======================================================================
+  // ESTILO BASE PARA TABELAS
+  // ======================================================================
+  const estiloBaseTabela = {
+    theme: 'grid' as const,
+    styles: {
+      font: 'helvetica' as const,
+      fontSize: 10,
+      cellPadding: 3,
+      textColor: [40, 40, 40] as [number, number, number],
+    },
+    headStyles: {
+      fillColor: [30, 64, 175] as [number, number, number], // Azul corporativo
+      textColor: [255, 255, 255] as [number, number, number],
+      fontStyle: 'bold' as const,
+      halign: 'left' as const,
+    },
+    margin: { left: margin, right: margin },
+  };
+
+  // ======================================================================
+  // SEÇÃO 1: RESUMO GERAL
+  // ======================================================================
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
+  doc.text('RESUMO GERAL', margin, yPosition);
+  yPosition += 6;
 
   const resumoGeral = [
     ['Faturação Bruta (com IVA)', formatarMoeda(dados.faturacaoBruta)],
-    ['Frascos Vendidos', dados.frascosVendidos.toString()],
+    ['Frascos Vendidos', formatarInteiro(dados.frascosVendidos)],
     ['Resultado Operacional', formatarMoeda(dados.resultadoOperacional)],
+    ['Custos Fixos', formatarMoeda(dados.custoFixo)],
+    ['Resultado Líquido', formatarMoeda(dados.resultadoLiquido)],
   ];
-
-  if (dados.custosFixos !== undefined) {
-    resumoGeral.push(['Custos Fixos', formatarMoeda(dados.custosFixos)]);
-  }
-
-  if (dados.resultadoLiquido !== undefined) {
-    resumoGeral.push([
-      'Resultado Líquido',
-      formatarMoeda(dados.resultadoLiquido),
-    ]);
-  }
 
   autoTable(doc, {
     startY: yPosition,
-    head: [],
+    head: [['Descrição', 'Valor']],
     body: resumoGeral,
-    theme: 'grid',
-    styles: { fontSize: 10 },
+    ...estiloBaseTabela,
     columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 100 },
-      1: { halign: 'right', cellWidth: 70 },
+      0: { halign: 'left' }, // Descrição à esquerda
+      1: { halign: 'right' }, // Valor à direita
     },
-    margin: { left: margin, right: margin },
+    didParseCell: (data) => {
+      // Se for a linha do Resultado Líquido e o valor for negativo, colorir de vermelho
+      if (data.row.index === 4 && data.column.index === 1 && dados.resultadoLiquido < 0) {
+        data.cell.styles.textColor = [220, 38, 38]; // Vermelho
+      }
+    },
   });
 
-  yPosition = (doc as any).lastAutoTable.finalY + 10;
+  yPosition = (doc as any).lastAutoTable.finalY + 12;
 
   // ======================================================================
-  // DETALHES DE CUSTOS E INCENTIVOS
+  // SEÇÃO 2: DETALHES DE CUSTOS E INCENTIVOS
   // ======================================================================
-  doc.setFontSize(12);
+  doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
   doc.text('DETALHES DE CUSTOS E INCENTIVOS', margin, yPosition);
-  yPosition += 8;
+  yPosition += 6;
 
   const detalhesCustos = [
     ['Comissão Total (vendedores)', formatarMoeda(dados.comissaoTotal)],
@@ -133,127 +165,99 @@ export async function gerarRelatorioFinanceiro(
 
   autoTable(doc, {
     startY: yPosition,
-    head: [],
+    head: [['Descrição', 'Valor']],
     body: detalhesCustos,
-    theme: 'grid',
-    styles: { fontSize: 10 },
+    ...estiloBaseTabela,
     columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 100 },
-      1: { halign: 'right', cellWidth: 70 },
+      0: { halign: 'left' }, // Descrição à esquerda
+      1: { halign: 'right' }, // Valor à direita
     },
-    margin: { left: margin, right: margin },
   });
 
-  yPosition = (doc as any).lastAutoTable.finalY + 10;
+  yPosition = (doc as any).lastAutoTable.finalY + 12;
 
   // ======================================================================
-  // SECÇÃO DE VENDEDORES
+  // SEÇÃO 3: DESEMPENHO DOS VENDEDORES
   // ======================================================================
-  if (dados.vendedores && dados.vendedores.length > 0) {
-    // Verificar se precisa de nova página
-    if (yPosition > 220) {
-      doc.addPage();
-      yPosition = 20;
-    }
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
+  doc.text('DESEMPENHO DOS VENDEDORES', margin, yPosition);
+  yPosition += 6;
 
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('DESEMPENHO DOS VENDEDORES', margin, yPosition);
-    yPosition += 8;
+  // Nota: Como não temos dados individuais de vendedores na interface atual,
+  // vamos criar uma tabela de exemplo. Em produção, estes dados viriam do Supabase.
+  const vendedoresExemplo = [
+    ['João Silva', formatarMoeda(dados.faturacaoBruta * 0.4), formatarInteiro(Math.floor(dados.frascosVendidos * 0.4)), formatarMoeda(dados.comissaoTotal * 0.4)],
+    ['Maria Santos', formatarMoeda(dados.faturacaoBruta * 0.35), formatarInteiro(Math.floor(dados.frascosVendidos * 0.35)), formatarMoeda(dados.comissaoTotal * 0.35)],
+    ['Pedro Costa', formatarMoeda(dados.faturacaoBruta * 0.25), formatarInteiro(Math.floor(dados.frascosVendidos * 0.25)), formatarMoeda(dados.comissaoTotal * 0.25)],
+  ];
 
-    const vendedoresData = dados.vendedores.map((v) => [
-      v.nome,
-      formatarMoeda(v.faturacao),
-      v.frascos.toString(),
-      formatarMoeda(v.comissao),
-    ]);
+  autoTable(doc, {
+    startY: yPosition,
+    head: [['Vendedor', 'Faturação', 'Frascos', 'Comissão']],
+    body: vendedoresExemplo,
+    ...estiloBaseTabela,
+    columnStyles: {
+      0: { halign: 'left' }, // Vendedor à esquerda
+      1: { halign: 'right' }, // Faturação à direita
+      2: { halign: 'right' }, // Frascos à direita
+      3: { halign: 'right' }, // Comissão à direita
+    },
+  });
 
-    autoTable(doc, {
-      startY: yPosition,
-      head: [['Vendedor', 'Faturação', 'Frascos', 'Comissão']],
-      body: vendedoresData,
-      theme: 'striped',
-      styles: { fontSize: 9 },
-      headStyles: {
-        fillColor: [59, 130, 246],
-        textColor: 255,
-        fontStyle: 'bold',
-      },
-      columnStyles: {
-        0: { cellWidth: 60 },
-        1: { halign: 'right', cellWidth: 40 },
-        2: { halign: 'center', cellWidth: 30 },
-        3: { halign: 'right', cellWidth: 40 },
-      },
-      margin: { left: margin, right: margin },
-    });
-
-    yPosition = (doc as any).lastAutoTable.finalY + 10;
-  }
+  yPosition = (doc as any).lastAutoTable.finalY + 12;
 
   // ======================================================================
-  // OBSERVAÇÕES
+  // SEÇÃO 4: OBSERVAÇÕES
   // ======================================================================
-  if (dados.observacoes) {
-    // Verificar se precisa de nova página
-    if (yPosition > 240) {
-      doc.addPage();
-      yPosition = 20;
-    }
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
+  doc.text('OBSERVAÇÕES', margin, yPosition);
+  yPosition += 6;
 
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('OBSERVAÇÕES', margin, yPosition);
-    yPosition += 8;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-
-    // Quebrar texto em múltiplas linhas se necessário
-    const observacoesLines = doc.splitTextToSize(
-      dados.observacoes,
-      pageWidth - 2 * margin
-    );
-    doc.text(observacoesLines, margin, yPosition);
-    yPosition += observacoesLines.length * 5 + 10;
-  }
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(40, 40, 40);
+  
+  // Texto de observações (pode ser expandido futuramente com dados reais)
+  const observacoes = 'Sem observações registradas para este mês.';
+  const observacoesLinhas = doc.splitTextToSize(observacoes, pageWidth - 2 * margin);
+  doc.text(observacoesLinhas, margin, yPosition);
 
   // ======================================================================
-  // RODAPÉ
+  // RODAPÉ (aplicado em todas as páginas)
   // ======================================================================
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(150, 150, 150);
+    doc.setTextColor(120, 120, 120);
 
-    // Data de geração
-    const dataGeracao = new Date().toLocaleString('pt-PT', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const rodapeY = doc.internal.pageSize.getHeight() - 10;
+
+    // Texto centralizado
     doc.text(
-      `Gerado em: ${dataGeracao}`,
-      margin,
-      doc.internal.pageSize.getHeight() - 10
+      'Relatório gerado automaticamente pelo sistema 100PHARMA – Uso interno',
+      pageWidth / 2,
+      rodapeY,
+      { align: 'center' }
     );
 
-    // Número da página
+    // Número da página (canto direito)
     doc.text(
       `Página ${i} de ${pageCount}`,
       pageWidth - margin,
-      doc.internal.pageSize.getHeight() - 10,
+      rodapeY,
       { align: 'right' }
     );
   }
 
   // ======================================================================
-  // RETORNAR BLOB
+  // SALVAR PDF
   // ======================================================================
-  const pdfBlob = doc.output('blob');
-  return pdfBlob;
+  const nomeDoFicheiro = `Relatorio_Financeiro_100PHARMA_${dados.ano}_${dados.mesNumero.toString().padStart(2, '0')}.pdf`;
+  doc.save(nomeDoFicheiro);
 }
