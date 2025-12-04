@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { TrendingUp, DollarSign, Award, Users, Calendar } from 'lucide-react';
 import { comissoesMock, vendedoresMock } from '@/lib/data';
+import { formatCurrency } from '@/utils/formatCurrency';
 
 const statusColors = {
   CALCULADA: 'bg-blue-100 text-blue-800',
@@ -63,7 +64,7 @@ export default function ComissoesPage() {
             <span className="text-sm text-gray-600">Total</span>
           </div>
           <p className="text-2xl sm:text-3xl font-bold text-gray-900">
-            {stats.totalComissoes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+            {formatCurrency(stats.totalComissoes)}
           </p>
         </div>
 
@@ -75,7 +76,7 @@ export default function ComissoesPage() {
             <span className="text-sm text-gray-600">Fase 1</span>
           </div>
           <p className="text-2xl sm:text-3xl font-bold text-green-600">
-            {stats.totalFase1.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+            {formatCurrency(stats.totalFase1)}
           </p>
         </div>
 
@@ -87,7 +88,7 @@ export default function ComissoesPage() {
             <span className="text-sm text-gray-600">Fase 2</span>
           </div>
           <p className="text-2xl sm:text-3xl font-bold text-purple-600">
-            {stats.totalFase2.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+            {formatCurrency(stats.totalFase2)}
           </p>
         </div>
 
@@ -99,7 +100,7 @@ export default function ComissoesPage() {
             <span className="text-sm text-gray-600">Bónus</span>
           </div>
           <p className="text-2xl sm:text-3xl font-bold text-orange-600">
-            {stats.totalBonus.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+            {formatCurrency(stats.totalBonus)}
           </p>
         </div>
       </div>
@@ -155,27 +156,27 @@ export default function ComissoesPage() {
                     </td>
                     <td className="py-4 px-4 text-right hidden md:table-cell">
                       <span className="text-sm font-medium text-gray-900">
-                        {comissao.totalVendas.toLocaleString('pt-PT')}€
+                        {formatCurrency(comissao.totalVendas)}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-right hidden lg:table-cell">
                       <span className="text-sm text-green-600 font-medium">
-                        {comissao.comissaoFase1.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {formatCurrency(comissao.comissaoFase1)}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-right hidden lg:table-cell">
                       <span className="text-sm text-purple-600 font-medium">
-                        {fase2Total.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {formatCurrency(fase2Total)}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-right hidden xl:table-cell">
                       <span className="text-sm text-orange-600 font-medium">
-                        {bonusTotal.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {formatCurrency(bonusTotal)}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-right">
                       <span className="text-base font-bold text-gray-900">
-                        {comissao.totalComissao.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {formatCurrency(comissao.totalComissao)}
                       </span>
                     </td>
                     <td className="py-4 px-4 sm:px-6 text-center">
@@ -206,13 +207,13 @@ export default function ComissoesPage() {
                 <div className="bg-purple-50 rounded-lg p-3">
                   <p className="text-sm text-gray-600 mb-1">Farmácias Novas</p>
                   <p className="text-lg font-bold text-purple-600">
-                    {comissao.comissaoFase2FarmaciasNovas.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                    {formatCurrency(comissao.comissaoFase2FarmaciasNovas)}
                   </p>
                 </div>
                 <div className="bg-indigo-50 rounded-lg p-3">
                   <p className="text-sm text-gray-600 mb-1">Farmácias Ativas</p>
                   <p className="text-lg font-bold text-indigo-600">
-                    {comissao.comissaoFase2FarmaciasAtivas.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                    {formatCurrency(comissao.comissaoFase2FarmaciasAtivas)}
                   </p>
                 </div>
               </div>

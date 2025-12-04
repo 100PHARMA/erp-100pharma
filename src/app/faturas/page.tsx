@@ -3,16 +3,19 @@
 import { useState, useMemo, useEffect } from 'react';
 import { FileText, Search, Calendar, DollarSign, CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { formatCurrency } from '@/utils/formatCurrency';
 
 interface Fatura {
   id: string;
   numero: string;
-  cliente_nome: string;
+  cliente_id: string;
+  cliente_nome?: string;
   data_emissao: string;
   data_vencimento: string;
-  valor_total: number;
-  estado_pagamento: string;
-  forma_pagamento?: string;
+  total: number;
+  total_com_iva?: number;
+  estado: string;
+  metodo_pagamento?: string;
 }
 
 export default function FaturasPage() {
@@ -28,14 +31,32 @@ export default function FaturasPage() {
         setLoading(true);
         const { data, error } = await supabase
           .from('faturas')
-          .select('id, numero, cliente_nome, data_emissao, data_vencimento, valor_total, estado_pagamento, forma_pagamento')
+          .select(`
+            id,
+            numero,
+            cliente_id,
+            data_emissao,
+            data_vencimento,
+            total,
+            total_com_iva,
+            estado,
+            metodo_pagamento,
+            clientes:cliente_id (
+              nome
+            )
+          `)
           .order('data_emissao', { ascending: false });
 
         if (error) {
           console.error('Erro ao carregar faturas:', error);
           setFaturas([]);
         } else {
-          setFaturas(data || []);
+          // Mapear dados para incluir cliente_nome
+          const faturasComCliente = (data || []).map((fatura: any) => ({
+            ...fatura,
+            cliente_nome: fatura.clientes?.nome || 'Cliente não informado'
+          }));
+          setFaturas(faturasComCliente);
         }
       } catch (err) {
         console.error('Erro ao buscar faturas:', err);
@@ -53,7 +74,7 @@ export default function FaturasPage() {
     return faturas.filter(fatura => {
       const matchSearch = fatura.cliente_nome?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          fatura.numero?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchStatus = filtroStatus === 'todos' || fatura.estado_pagamento === filtroStatus;
+      const matchStatus = filtroStatus === 'todos' || fatura.estado.toLowerCase() === filtroStatus.toLowerCase();
       return matchSearch && matchStatus;
     });
   }, [faturas, searchTerm, filtroStatus]);
@@ -61,20 +82,20 @@ export default function FaturasPage() {
   // Estatísticas calculadas a partir dos dados reais
   const stats = useMemo(() => {
     const totalFaturas = faturas.length;
-    const faturasPagas = faturas.filter(f => f.estado_pagamento === 'pago').length;
-    const faturasPendentes = faturas.filter(f => f.estado_pagamento === 'pendente').length;
-    const faturasVencidas = faturas.filter(f => f.estado_pagamento === 'vencido').length;
+    const faturasPagas = faturas.filter(f => f.estado.toUpperCase() === 'PAGO').length;
+    const faturasPendentes = faturas.filter(f => f.estado.toUpperCase() === 'PENDENTE').length;
+    const faturasVencidas = faturas.filter(f => f.estado.toUpperCase() === 'VENCIDO').length;
     
-    const valorTotal = faturas.reduce((acc, f) => acc + (f.valor_total || 0), 0);
+    const valorTotal = faturas.reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
     const valorRecebido = faturas
-      .filter(f => f.estado_pagamento === 'pago')
-      .reduce((acc, f) => acc + (f.valor_total || 0), 0);
+      .filter(f => f.estado.toUpperCase() === 'PAGO')
+      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
     const valorPendente = faturas
-      .filter(f => f.estado_pagamento === 'pendente')
-      .reduce((acc, f) => acc + (f.valor_total || 0), 0);
+      .filter(f => f.estado.toUpperCase() === 'PENDENTE')
+      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
     const valorVencido = faturas
-      .filter(f => f.estado_pagamento === 'vencido')
-      .reduce((acc, f) => acc + (f.valor_total || 0), 0);
+      .filter(f => f.estado.toUpperCase() === 'VENCIDO')
+      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
 
     return {
       totalFaturas,
@@ -89,37 +110,38 @@ export default function FaturasPage() {
   }, [faturas]);
 
   const getStatusConfig = (status: string) => {
+    const statusUpper = status.toUpperCase();
     const configs = {
-      pago: {
+      PAGO: {
         badge: 'bg-green-100 text-green-800',
         icon: CheckCircle,
         label: 'Pago',
         color: 'text-green-600',
       },
-      pendente: {
+      PENDENTE: {
         badge: 'bg-yellow-100 text-yellow-800',
         icon: Clock,
         label: 'Pendente',
         color: 'text-yellow-600',
       },
-      vencido: {
+      VENCIDO: {
         badge: 'bg-red-100 text-red-800',
         icon: AlertCircle,
         label: 'Vencido',
         color: 'text-red-600',
       },
-      cancelado: {
+      CANCELADO: {
         badge: 'bg-gray-100 text-gray-800',
         icon: XCircle,
         label: 'Cancelado',
         color: 'text-gray-600',
       },
     };
-    return configs[status as keyof typeof configs] || configs.pendente;
+    return configs[statusUpper as keyof typeof configs] || configs.PENDENTE;
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('pt-BR', {
+    return new Date(dateString).toLocaleDateString('pt-PT', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -165,7 +187,7 @@ export default function FaturasPage() {
             </div>
           </div>
           <p className="text-sm text-gray-500">
-            Valor: R$ {stats.valorTotal.toFixed(2)}
+            Valor: {formatCurrency(stats.valorTotal)}
           </p>
         </div>
 
@@ -180,7 +202,7 @@ export default function FaturasPage() {
             </div>
           </div>
           <p className="text-sm text-green-600 font-semibold">
-            R$ {stats.valorRecebido.toFixed(2)}
+            {formatCurrency(stats.valorRecebido)}
           </p>
         </div>
 
@@ -195,7 +217,7 @@ export default function FaturasPage() {
             </div>
           </div>
           <p className="text-sm text-yellow-600 font-semibold">
-            R$ {stats.valorPendente.toFixed(2)}
+            {formatCurrency(stats.valorPendente)}
           </p>
         </div>
 
@@ -210,7 +232,7 @@ export default function FaturasPage() {
             </div>
           </div>
           <p className="text-sm text-red-600 font-semibold">
-            R$ {stats.valorVencido.toFixed(2)}
+            {formatCurrency(stats.valorVencido)}
           </p>
         </div>
       </div>
@@ -269,7 +291,7 @@ export default function FaturasPage() {
                 </thead>
                 <tbody>
                   {faturasFiltradas.map((fatura, index) => {
-                    const statusConfig = getStatusConfig(fatura.estado_pagamento);
+                    const statusConfig = getStatusConfig(fatura.estado);
                     const StatusIcon = statusConfig.icon;
                     
                     return (
@@ -287,9 +309,9 @@ export default function FaturasPage() {
                             <p className="text-xs text-gray-500 mt-1 md:hidden">
                               {fatura.cliente_nome || 'Cliente não informado'}
                             </p>
-                            {fatura.forma_pagamento && (
+                            {fatura.metodo_pagamento && (
                               <p className="text-xs text-gray-400 mt-1">
-                                {fatura.forma_pagamento}
+                                {fatura.metodo_pagamento}
                               </p>
                             )}
                           </div>
@@ -306,13 +328,13 @@ export default function FaturasPage() {
                         <td className="py-4 px-4 text-center text-sm text-gray-600 hidden lg:table-cell">
                           <div className="flex items-center justify-center gap-1">
                             <Calendar className="w-4 h-4" />
-                            {formatDate(fatura.data_vencimento)}
+                            {fatura.data_vencimento ? formatDate(fatura.data_vencimento) : 'N/A'}
                           </div>
                         </td>
                         <td className="py-4 px-4 text-right">
                           <div className="flex flex-col items-end">
                             <span className="font-bold text-gray-900 text-sm sm:text-base">
-                              R$ {(fatura.valor_total || 0).toFixed(2)}
+                              {formatCurrency(fatura.total_com_iva || fatura.total || 0)}
                             </span>
                           </div>
                         </td>

@@ -9,6 +9,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { finalizarVendaECriarFatura } from './actions';
 import { useRouter } from 'next/navigation';
+import { formatCurrency } from '@/utils/formatCurrency';
 
 // ======================================================================
 // CONSTANTES
@@ -358,7 +359,12 @@ export default function VendasPage() {
   // ======================================================================
 
   const fecharVendaECriarFatura = async (vendaId: string) => {
+    console.log('🎯 [FRONTEND] ========================================');
+    console.log('🎯 [FRONTEND] INICIANDO PROCESSO DE FECHAMENTO DE VENDA');
+    console.log('🎯 [FRONTEND] ========================================');
     console.log('🎯 [FRONTEND] Botão clicado para venda:', vendaId);
+    console.log('🎯 [FRONTEND] Tipo do vendaId:', typeof vendaId);
+    console.log('🎯 [FRONTEND] Timestamp:', new Date().toISOString());
     
     if (!confirm('Deseja fechar esta venda e criar a fatura automaticamente?')) {
       console.log('⚠️ [FRONTEND] Usuário cancelou a operação');
@@ -370,18 +376,32 @@ export default function VendasPage() {
       
       console.log('🔄 [FRONTEND] Chamando server action finalizarVendaECriarFatura...');
       console.log('📋 [FRONTEND] Parâmetro vendaId:', vendaId);
+      console.log('📋 [FRONTEND] Tipo do parâmetro:', typeof vendaId);
+      console.log('📋 [FRONTEND] Valor exato:', JSON.stringify(vendaId));
       
       const resultado = await finalizarVendaECriarFatura(vendaId);
 
-      console.log('📦 [FRONTEND] Resultado recebido:', resultado);
+      console.log('📦 [FRONTEND] ========================================');
+      console.log('📦 [FRONTEND] RESULTADO RECEBIDO DA SERVER ACTION');
+      console.log('📦 [FRONTEND] ========================================');
+      console.log('📦 [FRONTEND] Resultado completo:', JSON.stringify(resultado, null, 2));
+      console.log('📦 [FRONTEND] Success:', resultado.success);
+      console.log('📦 [FRONTEND] FaturaId:', resultado.faturaId);
+      console.log('📦 [FRONTEND] Error:', resultado.error);
 
       if (!resultado.success) {
+        console.error('❌ [FRONTEND] ========================================');
+        console.error('❌ [FRONTEND] ERRO AO FINALIZAR VENDA');
+        console.error('❌ [FRONTEND] ========================================');
         console.error('❌ [FRONTEND] Erro retornado:', resultado.error);
         alert(`❌ Erro ao finalizar venda:\n\n${resultado.error}\n\nVerifique o console do navegador para mais detalhes.`);
         return;
       }
 
-      console.log('✅ [FRONTEND] Sucesso! Fatura criada com ID:', resultado.faturaId);
+      console.log('✅ [FRONTEND] ========================================');
+      console.log('✅ [FRONTEND] SUCESSO! FATURA CRIADA');
+      console.log('✅ [FRONTEND] ========================================');
+      console.log('✅ [FRONTEND] Fatura criada com ID:', resultado.faturaId);
       alert('✅ Venda fechada e fatura criada com sucesso!');
       
       // Recarregar dados
@@ -398,11 +418,17 @@ export default function VendasPage() {
       }
 
     } catch (error: any) {
-      console.error('❌ [FRONTEND] Erro inesperado:', error);
+      console.error('❌ [FRONTEND] ========================================');
+      console.error('❌ [FRONTEND] ERRO INESPERADO');
+      console.error('❌ [FRONTEND] ========================================');
+      console.error('❌ [FRONTEND] Erro:', error);
+      console.error('❌ [FRONTEND] Nome:', error.name);
+      console.error('❌ [FRONTEND] Mensagem:', error.message);
       console.error('❌ [FRONTEND] Stack trace:', error.stack);
       alert(`❌ Erro inesperado ao processar venda:\n\n${error.message}\n\nVerifique o console do navegador para mais detalhes.`);
     } finally {
       setCarregando(false);
+      console.log('🏁 [FRONTEND] Processo finalizado');
     }
   };
 
