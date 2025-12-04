@@ -358,37 +358,49 @@ export default function VendasPage() {
   // ======================================================================
 
   const fecharVendaECriarFatura = async (vendaId: string) => {
+    console.log('🎯 [FRONTEND] Botão clicado para venda:', vendaId);
+    
     if (!confirm('Deseja fechar esta venda e criar a fatura automaticamente?')) {
+      console.log('⚠️ [FRONTEND] Usuário cancelou a operação');
       return;
     }
 
     try {
       setCarregando(true);
       
-      console.log('🔄 Finalizando venda e criando fatura...');
+      console.log('🔄 [FRONTEND] Chamando server action finalizarVendaECriarFatura...');
+      console.log('📋 [FRONTEND] Parâmetro vendaId:', vendaId);
+      
       const resultado = await finalizarVendaECriarFatura(vendaId);
 
+      console.log('📦 [FRONTEND] Resultado recebido:', resultado);
+
       if (!resultado.success) {
-        alert(`Erro ao finalizar venda: ${resultado.error}`);
+        console.error('❌ [FRONTEND] Erro retornado:', resultado.error);
+        alert(`❌ Erro ao finalizar venda:\n\n${resultado.error}\n\nVerifique o console do navegador para mais detalhes.`);
         return;
       }
 
+      console.log('✅ [FRONTEND] Sucesso! Fatura criada com ID:', resultado.faturaId);
       alert('✅ Venda fechada e fatura criada com sucesso!');
       
       // Recarregar dados
+      console.log('🔄 [FRONTEND] Recarregando lista de vendas...');
       await carregarDados();
 
       // Redirecionar para a página de detalhes da fatura
       if (resultado.faturaId) {
+        console.log('🔀 [FRONTEND] Redirecionando para /faturas/' + resultado.faturaId);
         router.push(`/faturas/${resultado.faturaId}`);
       } else {
-        // Se não tiver ID, redirecionar para listagem de faturas
+        console.log('🔀 [FRONTEND] Redirecionando para /faturas (sem ID específico)');
         router.push('/faturas');
       }
 
     } catch (error: any) {
-      console.error('❌ Erro ao processar venda:', error);
-      alert('Erro ao processar venda: ' + error.message);
+      console.error('❌ [FRONTEND] Erro inesperado:', error);
+      console.error('❌ [FRONTEND] Stack trace:', error.stack);
+      alert(`❌ Erro inesperado ao processar venda:\n\n${error.message}\n\nVerifique o console do navegador para mais detalhes.`);
     } finally {
       setCarregando(false);
     }
@@ -754,7 +766,8 @@ export default function VendasPage() {
                             <Edit className="w-4 h-4 text-green-600" />
                           </button>
                           
-                          {venda.estado !== 'FECHADA' && venda.estado !== 'CANCELADA' && (
+                          {/* Botão "Fechar Venda e Criar Fatura" - APENAS para vendas ABERTAS */}
+                          {venda.estado === 'ABERTA' && (
                             <button 
                               onClick={() => fecharVendaECriarFatura(venda.id)}
                               className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
@@ -764,7 +777,7 @@ export default function VendasPage() {
                             </button>
                           )}
                           
-                          {venda.estado !== 'CANCELADA' && (
+                          {venda.estado !== 'CANCELADA' && venda.estado !== 'FECHADA' && (
                             <button 
                               onClick={() => mudarEstadoVenda(venda.id, 'CANCELADA')}
                               className="p-2 hover:bg-yellow-100 rounded-lg transition-colors" 

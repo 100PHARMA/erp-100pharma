@@ -14,15 +14,24 @@ export interface FinalizarVendaResult {
  */
 export async function finalizarVendaECriarFatura(vendaId: string): Promise<FinalizarVendaResult> {
   try {
-    console.log('🚀 Iniciando finalização da venda:', vendaId);
+    console.log('🚀 [SERVER ACTION] Iniciando finalização da venda:', vendaId);
+    console.log('📋 [SERVER ACTION] Parâmetros da RPC:', { p_venda_id: vendaId });
 
-    // Chamar a função RPC do Supabase
+    // Chamar a função RPC do Supabase EXATAMENTE como funciona no SQL Editor
     const { data, error } = await supabase.rpc('finalizar_venda_e_criar_fatura', {
       p_venda_id: vendaId
     });
 
+    console.log('📦 [SERVER ACTION] Resposta da RPC:', { data, error });
+
     if (error) {
-      console.error('❌ Erro ao chamar RPC:', error);
+      console.error('❌ [SERVER ACTION] Erro ao chamar RPC:', error);
+      console.error('❌ [SERVER ACTION] Detalhes do erro:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
       return {
         success: false,
         error: error.message || 'Erro ao finalizar venda e criar fatura'
@@ -30,14 +39,16 @@ export async function finalizarVendaECriarFatura(vendaId: string): Promise<Final
     }
 
     if (!data) {
-      console.error('❌ RPC não retornou dados');
+      console.error('❌ [SERVER ACTION] RPC não retornou dados');
       return {
         success: false,
-        error: 'Nenhuma fatura foi criada'
+        error: 'Nenhuma fatura foi criada. A RPC não retornou dados.'
       };
     }
 
-    console.log('✅ Fatura criada com sucesso:', data);
+    console.log('✅ [SERVER ACTION] Fatura criada com sucesso!');
+    console.log('📄 [SERVER ACTION] Dados da fatura:', data);
+    console.log('🆔 [SERVER ACTION] ID da fatura:', data.id);
 
     return {
       success: true,
@@ -45,7 +56,8 @@ export async function finalizarVendaECriarFatura(vendaId: string): Promise<Final
     };
 
   } catch (error: any) {
-    console.error('❌ Erro inesperado ao finalizar venda:', error);
+    console.error('❌ [SERVER ACTION] Erro inesperado ao finalizar venda:', error);
+    console.error('❌ [SERVER ACTION] Stack trace:', error.stack);
     return {
       success: false,
       error: error.message || 'Erro inesperado ao processar a venda'
