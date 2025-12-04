@@ -398,26 +398,76 @@ export default function VendasPage() {
     setModalAberto(true);
   };
 
-  const abrirModalEditar = (venda: Venda) => {
-    setVendaEditando(venda);
-    setClienteSelecionado(venda.cliente_id);
-    setVendedorSelecionado(venda.vendedor_id);
-    setDataVenda(venda.data);
-    setEstadoVenda(venda.estado);
-    setObservacoesVenda(venda.observacoes || '');
-    
-    // Carregar itens
-    const itens = (venda.venda_itens || []).map(item => ({
-      produto_id: item.produto_id,
-      produto: item.produtos,
-      quantidade: item.quantidade,
-      preco_unitario: item.preco_unitario,
-      total_linha: item.total_linha
-    }));
-    setItensVenda(itens);
-    
-    setEtapaAtual(1);
-    setModalAberto(true);
+  const abrirModalEditar = async (venda: Venda) => {
+    try {
+      console.log('🔍 Abrindo modal de edição para venda:', venda.id);
+      
+      setVendaEditando(venda);
+      setClienteSelecionado(venda.cliente_id);
+      setVendedorSelecionado(venda.vendedor_id);
+      setDataVenda(venda.data);
+      setEstadoVenda(venda.estado);
+      setObservacoesVenda(venda.observacoes || '');
+      
+      // Carregar itens da venda com produtos
+      console.log('📦 Buscando itens da venda no Supabase...');
+      const { data: itensData, error: itensError } = await supabase
+        .from('venda_itens')
+        .select(`
+          id,
+          produto_id,
+          quantidade,
+          preco_unitario,
+          total_linha,
+          produtos (id, nome, preco, estoque)
+        `)
+        .eq('venda_id', venda.id);
+
+      if (itensError) {
+        console.error('❌ Erro ao carregar itens:', itensError);
+        throw itensError;
+      }
+
+      console.log('✅ Itens carregados do Supabase:', itensData);
+      console.log('📊 Quantidade de itens:', itensData?.length || 0);
+
+      // Mapear itens para o formato correto
+      const itens: ItemVenda[] = (itensData || []).map((item: any) => {
+        console.log('🔄 Mapeando item:', item);
+        
+        // O Supabase retorna o relacionamento como um objeto ou array
+        // Precisamos garantir que pegamos o primeiro elemento se for array
+        const produtoData = Array.isArray(item.produtos) ? item.produtos[0] : item.produtos;
+        
+        return {
+          id: item.id,
+          venda_id: venda.id,
+          produto_id: item.produto_id,
+          produto: produtoData ? {
+            id: produtoData.id,
+            nome: produtoData.nome,
+            preco: produtoData.preco,
+            estoque: produtoData.estoque
+          } : undefined,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha
+        };
+      });
+
+      console.log('✅ Itens mapeados para o estado:', itens);
+      console.log('📊 Total de itens mapeados:', itens.length);
+      
+      setItensVenda(itens);
+      
+      setEtapaAtual(1);
+      setModalAberto(true);
+      
+      console.log('✅ Modal aberto com sucesso!');
+    } catch (error: any) {
+      console.error('❌ Erro ao abrir modal de edição:', error);
+      alert('Erro ao carregar dados da venda: ' + error.message);
+    }
   };
 
   const fecharModal = () => {
@@ -438,6 +488,10 @@ export default function VendasPage() {
       alert('Adicione pelo menos um produto');
       return;
     }
+    
+    console.log(`📍 Avançando da etapa ${etapaAtual} para ${etapaAtual + 1}`);
+    console.log(`📦 Itens no estado ao avançar:`, itensVenda);
+    
     setEtapaAtual(etapaAtual + 1);
   };
 
@@ -823,6 +877,16 @@ export default function VendasPage() {
                     Produtos da Venda
                   </h3>
 
+                  {/* Debug Info */}
+                  {vendaEditando && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                      <p className="text-sm text-blue-800">
+                        <strong>Debug:</strong> Editando venda {vendaEditando.numero} | 
+                        Itens carregados: {itensVenda.length}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Adicionar Produto */}
                   <div className="bg-gray-50 rounded-xl p-4 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -869,7 +933,7 @@ export default function VendasPage() {
                   </div>
 
                   {/* Lista de Itens */}
-                  {itensVenda.length > 0 && (
+                  {itensVenda.length > 0 ? (
                     <div className="border border-gray-200 rounded-xl overflow-hidden">
                       <table className="w-full">
                         <thead className="bg-gray-100">
@@ -908,6 +972,11 @@ export default function VendasPage() {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      <Package className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                      <p className="text-sm">Nenhum item adicionado ainda</p>
                     </div>
                   )}
                 </div>
