@@ -179,7 +179,7 @@ export interface ItemCompra {
   produtoNome: string;
   quantidade: number;
   custoUnitario: number;
-  subtotal: number;
+  total_linha: number;
 }
 
 export interface Compra {
@@ -350,7 +350,7 @@ export interface ItemVenda {
   quantidade: number;
   precoUnitario: number;
   taxaIVA: number;
-  subtotal: number;
+  total_linha: number;
   valorIVA: number;
   total: number;
 }
