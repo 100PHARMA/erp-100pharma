@@ -7,6 +7,8 @@ import {
   AlertCircle, TrendingUp, Package, Calendar, Save, XCircle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { finalizarVendaECriarFatura } from './actions';
+import { useRouter } from 'next/navigation';
 
 // ======================================================================
 // CONSTANTES
@@ -79,6 +81,7 @@ interface Venda {
 // ======================================================================
 
 export default function VendasPage() {
+  const router = useRouter();
   const [carregando, setCarregando] = useState(true);
   const [vendas, setVendas] = useState<Venda[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -347,6 +350,47 @@ export default function VendasPage() {
     } catch (error: any) {
       console.error('Erro ao mudar estado:', error);
       alert('Erro ao mudar estado: ' + error.message);
+    }
+  };
+
+  // ======================================================================
+  // FECHAR VENDA E CRIAR FATURA
+  // ======================================================================
+
+  const fecharVendaECriarFatura = async (vendaId: string) => {
+    if (!confirm('Deseja fechar esta venda e criar a fatura automaticamente?')) {
+      return;
+    }
+
+    try {
+      setCarregando(true);
+      
+      console.log('🔄 Finalizando venda e criando fatura...');
+      const resultado = await finalizarVendaECriarFatura(vendaId);
+
+      if (!resultado.success) {
+        alert(`Erro ao finalizar venda: ${resultado.error}`);
+        return;
+      }
+
+      alert('✅ Venda fechada e fatura criada com sucesso!');
+      
+      // Recarregar dados
+      await carregarDados();
+
+      // Redirecionar para a página de detalhes da fatura
+      if (resultado.faturaId) {
+        router.push(`/faturas/${resultado.faturaId}`);
+      } else {
+        // Se não tiver ID, redirecionar para listagem de faturas
+        router.push('/faturas');
+      }
+
+    } catch (error: any) {
+      console.error('❌ Erro ao processar venda:', error);
+      alert('Erro ao processar venda: ' + error.message);
+    } finally {
+      setCarregando(false);
     }
   };
 
@@ -712,9 +756,9 @@ export default function VendasPage() {
                           
                           {venda.estado !== 'FECHADA' && venda.estado !== 'CANCELADA' && (
                             <button 
-                              onClick={() => mudarEstadoVenda(venda.id, 'FECHADA')}
+                              onClick={() => fecharVendaECriarFatura(venda.id)}
                               className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
-                              title="Fechar Venda"
+                              title="Fechar Venda e Criar Fatura"
                             >
                               <CheckCircle className="w-4 h-4 text-blue-600" />
                             </button>
