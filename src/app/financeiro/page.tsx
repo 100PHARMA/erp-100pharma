@@ -28,11 +28,12 @@ import { RelatorioFinanceiroPdfButton } from './RelatorioFinanceiroPdfButton';
 // TIPOS E INTERFACES
 // ======================================================================
 
-interface Venda {
+interface Fatura {
   id: string;
-  vendedor_id: string;
-  cliente_id: string;
-  data: string;
+  venda_id: string;
+  estado: string;
+  data_pagamento: string | null;
+  valor_pago: number | null;
   total_com_iva: number;
 }
 
@@ -187,18 +188,18 @@ export default function FinanceiroPage() {
       const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
       const dataFim = ultimoDiaMes.toISOString().split('T')[0];
 
-      // 4. Buscar vendas do mês (APENAS FECHADAS)
-      const { data: vendasData, error: vendasError } = await supabase
-        .from('vendas')
-        .select('*')
-        .eq('estado', 'FECHADA')
-        .gte('data', dataInicio)
-        .lte('data', dataFim);
+      // 4. Buscar faturas PAGAS do mês (pela data_pagamento)
+      const { data: faturasData, error: faturasError } = await supabase
+        .from('faturas')
+        .select('id, venda_id, estado, data_pagamento, valor_pago, total_com_iva')
+        .eq('estado', 'PAGA')
+        .gte('data_pagamento', dataInicio)
+        .lte('data_pagamento', dataFim);
 
-      if (vendasError) throw vendasError;
+      if (faturasError) throw faturasError;
 
-      // 5. Buscar itens de vendas
-      const vendasIds = (vendasData || []).map((v) => v.id);
+      // 5. Buscar itens de vendas das faturas pagas
+      const vendasIds = (faturasData || []).map((f) => f.venda_id);
       let vendaItensData: VendaItem[] = [];
 
       if (vendasIds.length > 0) {
@@ -222,13 +223,13 @@ export default function FinanceiroPage() {
 
       // 7. CALCULAR MÉTRICAS
 
-      // Faturação bruta do mês
-      const faturacaoBruta = (vendasData || []).reduce(
-        (total, venda) => total + (venda.total_com_iva || 0),
+      // Faturação bruta do mês (COALESCE: valor_pago se existir, senão total_com_iva)
+      const faturacaoBruta = (faturasData || []).reduce(
+        (total, fatura) => total + (fatura.valor_pago ?? fatura.total_com_iva),
         0
       );
 
-      // Frascos vendidos no mês
+      // Frascos vendidos no mês (das vendas associadas às faturas pagas)
       const frascosVendidos = vendaItensData.reduce(
         (total, item) => total + (item.quantidade || 0),
         0
@@ -248,20 +249,36 @@ export default function FinanceiroPage() {
       const fundoFarmaceutico =
         frascosVendidos * config.fundo_farmaceutico_por_frasco;
 
-      // Comissão total (calcular por vendedor e somar)
+      // Comissão total (calcular por vendedor usando faturas pagas)
+      // Buscar vendas associadas às faturas pagas para obter vendedor_id
+      const { data: vendasData, error: vendasError } = await supabase
+        .from('vendas')
+        .select('id, vendedor_id, total_com_iva')
+        .in('id', vendasIds);
+
+      if (vendasError) throw vendasError;
+
       const vendedoresUnicos = Array.from(
         new Set((vendasData || []).map((v) => v.vendedor_id))
       );
 
       let comissaoTotal = 0;
       for (const vendedorId of vendedoresUnicos) {
+        // Para cada vendedor, somar o valor das faturas pagas das suas vendas
         const vendasDoVendedor = (vendasData || []).filter(
           (v) => v.vendedor_id === vendedorId
         );
-        const totalVendasVendedor = vendasDoVendedor.reduce(
-          (sum, v) => sum + (v.total_com_iva || 0),
+        const vendasIdsDoVendedor = vendasDoVendedor.map((v) => v.id);
+        
+        const faturasDoVendedor = (faturasData || []).filter((f) =>
+          vendasIdsDoVendedor.includes(f.venda_id)
+        );
+        
+        const totalVendasVendedor = faturasDoVendedor.reduce(
+          (sum, f) => sum + (f.valor_pago ?? f.total_com_iva),
           0
         );
+        
         const comissaoVendedor = calcularComissaoProgressiva(
           totalVendasVendedor,
           config
@@ -578,10 +595,10 @@ export default function FinanceiroPage() {
             <AlertCircle className="w-6 h-6 text-yellow-600" />
             <div>
               <h3 className="text-lg font-semibold text-yellow-900">
-                Nenhuma venda registada para este mês
+                Nenhuma fatura paga registada para este mês
               </h3>
               <p className="text-yellow-700 text-sm">
-                Selecione outro período ou aguarde novas vendas.
+                Selecione outro período ou aguarde pagamentos de faturas.
               </p>
             </div>
           </div>
@@ -601,7 +618,7 @@ export default function FinanceiroPage() {
           <p className="text-3xl font-bold text-blue-900">
             {formatarMoeda(dados.faturacaoBruta)}€
           </p>
-          <p className="text-xs text-blue-600 mt-2">Total com IVA</p>
+          <p className="text-xs text-blue-600 mt-2">Faturas pagas no mês</p>
         </div>
 
         {/* Frascos Vendidos */}
@@ -830,6 +847,10 @@ export default function FinanceiroPage() {
           a podologistas e fundo farmacêutico. Este valor{' '}
           <strong>não inclui custos fixos</strong> como salários base, aluguel,
           utilidades e outros custos operacionais mensais.
+        </p>
+        <p className="text-gray-700 text-sm leading-relaxed mt-2">
+          <strong>Nota:</strong> Os valores de faturação são calculados com base em{' '}
+          <strong>faturas pagas</strong>, usando a data de pagamento como referência.
         </p>
       </div>
 

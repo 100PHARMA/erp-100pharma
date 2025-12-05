@@ -222,7 +222,7 @@ export default function VendasPage() {
   };
 
   // ======================================================================
-  // SALVAR VENDA
+  // SALVAR VENDA (AJUSTADO PARA USAR RPC QUANDO FECHADA)
   // ======================================================================
 
   const salvarVenda = async () => {
@@ -237,17 +237,24 @@ export default function VendasPage() {
         return;
       }
 
+      setCarregando(true);
+
       const totais = calcularTotais(itensVenda);
+      let vendaId: string;
 
       if (vendaEditando) {
-        // Atualizar venda existente
+        // ============================================================
+        // ATUALIZAR VENDA EXISTENTE
+        // ============================================================
+        
+        // Atualizar venda (SEM mudar estado para FECHADA diretamente)
         const { error: vendaError } = await supabase
           .from('vendas')
           .update({
             cliente_id: clienteSelecionado,
             vendedor_id: vendedorSelecionado,
             data: dataVenda,
-            estado: estadoVenda,
+            estado: estadoVenda === 'FECHADA' ? 'ABERTA' : estadoVenda, // Se for FECHADA, salva como ABERTA primeiro
             subtotal: totais.subtotal,
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
@@ -281,11 +288,16 @@ export default function VendasPage() {
 
         if (itensError) throw itensError;
 
-        alert('Venda atualizada com sucesso!');
+        vendaId = vendaEditando.id;
+
       } else {
-        // Criar nova venda
+        // ============================================================
+        // CRIAR NOVA VENDA
+        // ============================================================
+        
         const numeroVenda = `VD${Date.now()}`;
 
+        // Criar venda (SEM estado FECHADA diretamente)
         const { data: vendaData, error: vendaError } = await supabase
           .from('vendas')
           .insert({
@@ -293,7 +305,7 @@ export default function VendasPage() {
             cliente_id: clienteSelecionado,
             vendedor_id: vendedorSelecionado,
             data: dataVenda,
-            estado: estadoVenda,
+            estado: estadoVenda === 'FECHADA' ? 'ABERTA' : estadoVenda, // Se for FECHADA, cria como ABERTA primeiro
             subtotal: totais.subtotal,
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
@@ -319,14 +331,48 @@ export default function VendasPage() {
 
         if (itensError) throw itensError;
 
-        alert('Venda criada com sucesso!');
+        vendaId = vendaData.id;
       }
 
-      fecharModal();
-      carregarDados();
+      // ============================================================
+      // VERIFICAR SE DEVE FECHAR A VENDA E CRIAR FATURA
+      // ============================================================
+      
+      if (estadoVenda === 'FECHADA') {
+        console.log('🎯 Estado selecionado é FECHADA. Chamando RPC para finalizar venda...');
+        
+        const resultado = await finalizarVendaECriarFatura(vendaId);
+
+        if (!resultado.success) {
+          // Erro ao finalizar - mostrar mensagem mas NÃO reverter a venda
+          alert(`⚠️ Venda salva, mas erro ao criar fatura:\n\n${resultado.error}\n\nA venda foi salva como ABERTA.`);
+          fecharModal();
+          await carregarDados();
+          return;
+        }
+
+        // Sucesso - venda fechada e fatura criada
+        alert('✅ Venda fechada e fatura criada com sucesso!');
+        fecharModal();
+        await carregarDados();
+
+        // Redirecionar para a fatura criada
+        if (resultado.faturaId) {
+          router.push(`/faturas/${resultado.faturaId}`);
+        }
+        
+      } else {
+        // Estado não é FECHADA - apenas salvar normalmente
+        alert(vendaEditando ? 'Venda atualizada com sucesso!' : 'Venda criada com sucesso!');
+        fecharModal();
+        await carregarDados();
+      }
+
     } catch (error: any) {
       console.error('Erro ao salvar venda:', error);
       alert('Erro ao salvar venda: ' + error.message);
+    } finally {
+      setCarregando(false);
     }
   };
 
@@ -1140,6 +1186,24 @@ export default function VendasPage() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Aviso se estado for FECHADA */}
+                  {estadoVenda === 'FECHADA' && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <div className="flex items-start gap-3">
+                        <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                        <div>
+                          <p className="text-sm font-semibold text-green-800">
+                            Venda será fechada automaticamente
+                          </p>
+                          <p className="text-xs text-green-700 mt-1">
+                            Ao salvar, a venda será fechada, uma fatura será criada automaticamente 
+                            e o estoque dos produtos será atualizado.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Botão Salvar */}
                   <button

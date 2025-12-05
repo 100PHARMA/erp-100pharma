@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { FileText, Search, Calendar, DollarSign, CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
+import { FileText, Search, Calendar, DollarSign, CheckCircle, Clock, AlertCircle, XCircle, Eye, CreditCard } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/formatCurrency';
+import Link from 'next/link';
+import ModalPagamento from './components/ModalPagamento';
 
 interface Fatura {
   id: string;
@@ -14,6 +16,7 @@ interface Fatura {
   data_vencimento: string;
   total: number;
   total_com_iva?: number;
+  valor_pago?: number;
   estado: string;
   metodo_pagamento?: string;
 }
@@ -23,100 +26,165 @@ export default function FaturasPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
+  const [modalPagamento, setModalPagamento] = useState<{
+    isOpen: boolean;
+    fatura: Fatura | null;
+  }>({ isOpen: false, fatura: null });
 
   // Carregar faturas do Supabase
-  useEffect(() => {
-    async function carregarFaturas() {
-      try {
-        setLoading(true);
-        const { data, error } = await supabase
-          .from('faturas')
-          .select(`
-            id,
-            numero,
-            cliente_id,
-            data_emissao,
-            data_vencimento,
-            total,
-            total_com_iva,
-            estado,
-            metodo_pagamento,
-            clientes:cliente_id (
-              nome
-            )
-          `)
-          .order('data_emissao', { ascending: false });
+  const carregarFaturas = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('faturas')
+        .select(`
+          id,
+          numero,
+          cliente_id,
+          data_emissao,
+          data_vencimento,
+          total,
+          total_com_iva,
+          valor_pago,
+          estado,
+          metodo_pagamento,
+          clientes:cliente_id (
+            nome
+          )
+        `)
+        .order('data_emissao', { ascending: false });
 
-        if (error) {
-          console.error('Erro ao carregar faturas:', error);
-          setFaturas([]);
-        } else {
-          // Mapear dados para incluir cliente_nome
-          const faturasComCliente = (data || []).map((fatura: any) => ({
-            ...fatura,
-            cliente_nome: fatura.clientes?.nome || 'Cliente não informado'
-          }));
-          setFaturas(faturasComCliente);
-        }
-      } catch (err) {
-        console.error('Erro ao buscar faturas:', err);
+      if (error) {
+        console.error('Erro ao carregar faturas:', error);
         setFaturas([]);
-      } finally {
-        setLoading(false);
+      } else {
+        // Mapear dados para incluir cliente_nome
+        const faturasComCliente = (data || []).map((fatura: any) => ({
+          ...fatura,
+          cliente_nome: fatura.clientes?.nome || 'Cliente não informado',
+          valor_pago: fatura.valor_pago || 0,
+        }));
+        setFaturas(faturasComCliente);
       }
+    } catch (err) {
+      console.error('Erro ao buscar faturas:', err);
+      setFaturas([]);
+    } finally {
+      setLoading(false);
     }
+  };
 
+  useEffect(() => {
     carregarFaturas();
   }, []);
+
+  // Determinar estado real baseado em valor_pago
+  const getEstadoReal = (fatura: Fatura) => {
+    const total = fatura.total_com_iva || fatura.total || 0;
+    const pago = fatura.valor_pago || 0;
+    
+    if (pago >= total && pago > 0) {
+      return 'PAGA';
+    } else if (pago > 0 && pago < total) {
+      return 'PARCIAL';
+    } else {
+      return fatura.estado.toUpperCase();
+    }
+  };
 
   // Filtrar faturas
   const faturasFiltradas = useMemo(() => {
     return faturas.filter(fatura => {
       const matchSearch = fatura.cliente_nome?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          fatura.numero?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchStatus = filtroStatus === 'todos' || fatura.estado.toLowerCase() === filtroStatus.toLowerCase();
-      return matchSearch && matchStatus;
+      
+      const estadoReal = getEstadoReal(fatura);
+      let matchStatus = true;
+      
+      if (filtroStatus === 'pago' || filtroStatus === 'paga') {
+        matchStatus = estadoReal === 'PAGA';
+      } else if (filtroStatus === 'pendente') {
+        matchStatus = estadoReal === 'PENDENTE';
+      } else if (filtroStatus === 'parcial') {
+        matchStatus = estadoReal === 'PARCIAL';
+      } else if (filtroStatus === 'vencido' || filtroStatus === 'vencida') {
+        matchStatus = estadoReal === 'VENCIDO' || estadoReal === 'VENCIDA';
+      } else if (filtroStatus === 'cancelado') {
+        matchStatus = estadoReal === 'CANCELADO';
+      }
+      
+      return matchSearch && (filtroStatus === 'todos' || matchStatus);
     });
   }, [faturas, searchTerm, filtroStatus]);
 
   // Estatísticas calculadas a partir dos dados reais
   const stats = useMemo(() => {
     const totalFaturas = faturas.length;
-    const faturasPagas = faturas.filter(f => f.estado.toUpperCase() === 'PAGO').length;
-    const faturasPendentes = faturas.filter(f => f.estado.toUpperCase() === 'PENDENTE').length;
-    const faturasVencidas = faturas.filter(f => f.estado.toUpperCase() === 'VENCIDO').length;
+    const faturasPagas = faturas.filter(f => getEstadoReal(f) === 'PAGA').length;
+    const faturasPendentes = faturas.filter(f => getEstadoReal(f) === 'PENDENTE').length;
+    const faturasParciais = faturas.filter(f => getEstadoReal(f) === 'PARCIAL').length;
+    const faturasVencidas = faturas.filter(f => {
+      const estado = getEstadoReal(f);
+      return estado === 'VENCIDO' || estado === 'VENCIDA';
+    }).length;
     
     const valorTotal = faturas.reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
     const valorRecebido = faturas
-      .filter(f => f.estado.toUpperCase() === 'PAGO')
-      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
+      .filter(f => getEstadoReal(f) === 'PAGA')
+      .reduce((acc, f) => acc + (f.valor_pago || f.total_com_iva || f.total || 0), 0);
     const valorPendente = faturas
-      .filter(f => f.estado.toUpperCase() === 'PENDENTE')
-      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
+      .filter(f => getEstadoReal(f) === 'PENDENTE')
+      .reduce((acc, f) => {
+        const total = f.total_com_iva || f.total || 0;
+        const pago = f.valor_pago || 0;
+        return acc + Math.max(total - pago, 0);
+      }, 0);
+    const valorParcial = faturas
+      .filter(f => getEstadoReal(f) === 'PARCIAL')
+      .reduce((acc, f) => {
+        const total = f.total_com_iva || f.total || 0;
+        const pago = f.valor_pago || 0;
+        return acc + Math.max(total - pago, 0);
+      }, 0);
     const valorVencido = faturas
-      .filter(f => f.estado.toUpperCase() === 'VENCIDO')
-      .reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
+      .filter(f => {
+        const estado = getEstadoReal(f);
+        return estado === 'VENCIDO' || estado === 'VENCIDA';
+      })
+      .reduce((acc, f) => {
+        const total = f.total_com_iva || f.total || 0;
+        const pago = f.valor_pago || 0;
+        return acc + Math.max(total - pago, 0);
+      }, 0);
 
     return {
       totalFaturas,
       faturasPagas,
       faturasPendentes,
+      faturasParciais,
       faturasVencidas,
       valorTotal,
       valorRecebido,
-      valorPendente,
+      valorPendente: valorPendente + valorParcial,
       valorVencido,
     };
   }, [faturas]);
 
-  const getStatusConfig = (status: string) => {
-    const statusUpper = status.toUpperCase();
+  const getStatusConfig = (fatura: Fatura) => {
+    const estadoReal = getEstadoReal(fatura);
+    
     const configs = {
-      PAGO: {
+      PAGA: {
         badge: 'bg-green-100 text-green-800',
         icon: CheckCircle,
-        label: 'Pago',
+        label: 'Paga',
         color: 'text-green-600',
+      },
+      PARCIAL: {
+        badge: 'bg-orange-100 text-orange-800',
+        icon: Clock,
+        label: 'Parcial',
+        color: 'text-orange-600',
       },
       PENDENTE: {
         badge: 'bg-yellow-100 text-yellow-800',
@@ -130,6 +198,12 @@ export default function FaturasPage() {
         label: 'Vencido',
         color: 'text-red-600',
       },
+      VENCIDA: {
+        badge: 'bg-red-100 text-red-800',
+        icon: AlertCircle,
+        label: 'Vencida',
+        color: 'text-red-600',
+      },
       CANCELADO: {
         badge: 'bg-gray-100 text-gray-800',
         icon: XCircle,
@@ -137,7 +211,7 @@ export default function FaturasPage() {
         color: 'text-gray-600',
       },
     };
-    return configs[statusUpper as keyof typeof configs] || configs.PENDENTE;
+    return configs[estadoReal as keyof typeof configs] || configs.PENDENTE;
   };
 
   const formatDate = (dateString: string) => {
@@ -146,6 +220,24 @@ export default function FaturasPage() {
       month: '2-digit',
       year: 'numeric',
     });
+  };
+
+  const handleAbrirModalPagamento = (fatura: Fatura) => {
+    setModalPagamento({ isOpen: true, fatura });
+  };
+
+  const handleFecharModal = () => {
+    setModalPagamento({ isOpen: false, fatura: null });
+  };
+
+  const handlePagamentoSucesso = () => {
+    // Recarregar faturas após pagamento bem-sucedido
+    carregarFaturas();
+  };
+
+  const podeRegistrarPagamento = (fatura: Fatura) => {
+    const estadoReal = getEstadoReal(fatura);
+    return estadoReal !== 'PAGA' && estadoReal !== 'CANCELADO';
   };
 
   if (loading) {
@@ -212,8 +304,10 @@ export default function FaturasPage() {
               <Clock className="w-6 h-6 text-yellow-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Pendentes</p>
-              <p className="text-2xl font-bold text-yellow-600">{stats.faturasPendentes}</p>
+              <p className="text-sm text-gray-600">Pendentes/Parciais</p>
+              <p className="text-2xl font-bold text-yellow-600">
+                {stats.faturasPendentes + stats.faturasParciais}
+              </p>
             </div>
           </div>
           <p className="text-sm text-yellow-600 font-semibold">
@@ -260,6 +354,7 @@ export default function FaturasPage() {
           >
             <option value="todos">Todos os Status</option>
             <option value="pago">Pagas</option>
+            <option value="parcial">Parciais</option>
             <option value="pendente">Pendentes</option>
             <option value="vencido">Vencidas</option>
             <option value="cancelado">Canceladas</option>
@@ -287,12 +382,14 @@ export default function FaturasPage() {
                     <th className="text-center py-4 px-4 text-sm font-semibold hidden lg:table-cell">Vencimento</th>
                     <th className="text-right py-4 px-4 text-sm font-semibold">Valor</th>
                     <th className="text-center py-4 px-4 text-sm font-semibold">Status</th>
+                    <th className="text-center py-4 px-4 text-sm font-semibold">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {faturasFiltradas.map((fatura, index) => {
-                    const statusConfig = getStatusConfig(fatura.estado);
+                    const statusConfig = getStatusConfig(fatura);
                     const StatusIcon = statusConfig.icon;
+                    const podePagar = podeRegistrarPagamento(fatura);
                     
                     return (
                       <tr 
@@ -344,6 +441,26 @@ export default function FaturasPage() {
                             {statusConfig.label}
                           </span>
                         </td>
+                        <td className="py-4 px-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <Link
+                              href={`/faturas/${fatura.id}`}
+                              className="inline-flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
+                            >
+                              <Eye className="w-4 h-4" />
+                              <span className="hidden sm:inline">Ver</span>
+                            </Link>
+                            {podePagar && (
+                              <button
+                                onClick={() => handleAbrirModalPagamento(fatura)}
+                                className="inline-flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+                              >
+                                <CreditCard className="w-4 h-4" />
+                                <span className="hidden sm:inline">Pagar</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -361,6 +478,21 @@ export default function FaturasPage() {
           </>
         )}
       </div>
+
+      {/* Modal de Pagamento */}
+      {modalPagamento.fatura && (
+        <ModalPagamento
+          fatura={{
+            id: modalPagamento.fatura.id,
+            numero: modalPagamento.fatura.numero,
+            total_com_iva: modalPagamento.fatura.total_com_iva || modalPagamento.fatura.total || 0,
+            valor_pago: modalPagamento.fatura.valor_pago || 0,
+          }}
+          isOpen={modalPagamento.isOpen}
+          onClose={handleFecharModal}
+          onSuccess={handlePagamentoSucesso}
+        />
+      )}
     </div>
   );
 }

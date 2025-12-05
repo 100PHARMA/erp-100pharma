@@ -63,7 +63,7 @@ export async function finalizarVendaECriarFatura(vendaId: string): Promise<Final
       estado: vendaExiste.estado
     });
 
-    // Chamar a função RPC do Supabase EXATAMENTE como funciona no SQL Editor
+    // Chamar a função RPC do Supabase EXATAMENTE como especificado
     console.log('🔄 [SERVER ACTION] ========================================');
     console.log('🔄 [SERVER ACTION] CHAMANDO RPC');
     console.log('🔄 [SERVER ACTION] ========================================');
@@ -72,9 +72,9 @@ export async function finalizarVendaECriarFatura(vendaId: string): Promise<Final
     console.log('🔄 [SERVER ACTION] Comando SQL equivalente:');
     console.log(`🔄 [SERVER ACTION] SELECT finalizar_venda_e_criar_fatura('${vendaId}');`);
     
-    const { data, error } = await supabase.rpc('finalizar_venda_e_criar_fatura', {
-      p_venda_id: vendaId
-    });
+    // CHAMADA RPC EXATAMENTE COMO ESPECIFICADO
+    const { data, error } = await supabase
+      .rpc('finalizar_venda_e_criar_fatura', { p_venda_id: vendaId });
 
     console.log('📦 [SERVER ACTION] ========================================');
     console.log('📦 [SERVER ACTION] RESPOSTA DA RPC');

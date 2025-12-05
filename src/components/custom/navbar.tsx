@@ -44,7 +44,7 @@ const menuItems = [
   { href: '/quilometragem', label: 'Quilometragem', icon: Car },
   { href: '/podologistas', label: 'Podologistas', icon: User },
   { href: '/metas', label: 'Metas', icon: Target },
-  { href: '/contas-receber', label: 'Contas a Receber', icon: DollarSign },
+  { href: '/contas-a-receber', label: 'Contas a Receber', icon: DollarSign },
   { href: '/concursos', label: 'Concursos', icon: Trophy },
   { href: '/configuracoes', label: 'Configurações', icon: Settings },
 ];
