@@ -19,6 +19,8 @@ interface Fatura {
   valor_pago?: number;
   estado: string;
   metodo_pagamento?: string;
+  tipo: 'FATURA' | 'NOTA_CREDITO';
+  fatura_referenciada_id?: string;
 }
 
 export default function FaturasPage() {
@@ -26,6 +28,7 @@ export default function FaturasPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
+  const [filtroTipo, setFiltroTipo] = useState('todos');
   const [modalPagamento, setModalPagamento] = useState<{
     isOpen: boolean;
     fatura: Fatura | null;
@@ -35,7 +38,8 @@ export default function FaturasPage() {
   const carregarFaturas = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      
+      let query = supabase
         .from('faturas')
         .select(`
           id,
@@ -48,11 +52,39 @@ export default function FaturasPage() {
           valor_pago,
           estado,
           metodo_pagamento,
+          tipo,
+          fatura_referenciada_id,
           clientes:cliente_id (
             nome
           )
-        `)
-        .order('data_emissao', { ascending: false });
+        `);
+
+      // Aplicar filtro de status diretamente na query
+      if (filtroStatus === 'paga') {
+        query = query.eq('estado', 'PAGA');
+      } else if (filtroStatus === 'parcial') {
+        query = query.eq('estado', 'PARCIAL');
+      } else if (filtroStatus === 'pendente') {
+        query = query.eq('estado', 'PENDENTE');
+      } else if (filtroStatus === 'vencida') {
+        const hoje = new Date().toISOString().slice(0, 10);
+        query = query
+          .lt('data_vencimento', hoje)
+          .in('estado', ['PENDENTE', 'PARCIAL']);
+      } else if (filtroStatus === 'cancelada') {
+        query = query.eq('estado', 'CANCELADA');
+      }
+
+      // Aplicar filtro de tipo
+      if (filtroTipo === 'faturas') {
+        query = query.eq('tipo', 'FATURA');
+      } else if (filtroTipo === 'notas_credito') {
+        query = query.eq('tipo', 'NOTA_CREDITO');
+      }
+
+      query = query.order('data_emissao', { ascending: false });
+
+      const { data, error } = await query;
 
       if (error) {
         console.error('Erro ao carregar faturas:', error);
@@ -63,6 +95,7 @@ export default function FaturasPage() {
           ...fatura,
           cliente_nome: fatura.clientes?.nome || 'Cliente não informado',
           valor_pago: fatura.valor_pago || 0,
+          tipo: fatura.tipo || 'FATURA',
         }));
         setFaturas(faturasComCliente);
       }
@@ -76,81 +109,67 @@ export default function FaturasPage() {
 
   useEffect(() => {
     carregarFaturas();
-  }, []);
+  }, [filtroStatus, filtroTipo]);
 
-  // Determinar estado real baseado em valor_pago
-  const getEstadoReal = (fatura: Fatura) => {
-    const total = fatura.total_com_iva || fatura.total || 0;
-    const pago = fatura.valor_pago || 0;
-    
-    if (pago >= total && pago > 0) {
-      return 'PAGA';
-    } else if (pago > 0 && pago < total) {
-      return 'PARCIAL';
-    } else {
-      return fatura.estado.toUpperCase();
-    }
-  };
-
-  // Filtrar faturas
+  // Filtrar faturas apenas por busca (status já filtrado na query)
   const faturasFiltradas = useMemo(() => {
     return faturas.filter(fatura => {
       const matchSearch = fatura.cliente_nome?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          fatura.numero?.toLowerCase().includes(searchTerm.toLowerCase());
       
-      const estadoReal = getEstadoReal(fatura);
-      let matchStatus = true;
-      
-      if (filtroStatus === 'pago' || filtroStatus === 'paga') {
-        matchStatus = estadoReal === 'PAGA';
-      } else if (filtroStatus === 'pendente') {
-        matchStatus = estadoReal === 'PENDENTE';
-      } else if (filtroStatus === 'parcial') {
-        matchStatus = estadoReal === 'PARCIAL';
-      } else if (filtroStatus === 'vencido' || filtroStatus === 'vencida') {
-        matchStatus = estadoReal === 'VENCIDO' || estadoReal === 'VENCIDA';
-      } else if (filtroStatus === 'cancelado') {
-        matchStatus = estadoReal === 'CANCELADO';
-      }
-      
-      return matchSearch && (filtroStatus === 'todos' || matchStatus);
+      return matchSearch;
     });
-  }, [faturas, searchTerm, filtroStatus]);
+  }, [faturas, searchTerm]);
+
+  // Função para obter label do status baseado no estado do banco
+  const getStatusLabel = (estado: string) => {
+    switch (estado) {
+      case 'PAGA':
+        return 'Paga';
+      case 'PENDENTE':
+        return 'Pendente';
+      case 'PARCIAL':
+        return 'Parcial';
+      case 'CANCELADA':
+        return 'Cancelada';
+      default:
+        return estado;
+    }
+  };
 
   // Estatísticas calculadas a partir dos dados reais
   const stats = useMemo(() => {
     const totalFaturas = faturas.length;
-    const faturasPagas = faturas.filter(f => getEstadoReal(f) === 'PAGA').length;
-    const faturasPendentes = faturas.filter(f => getEstadoReal(f) === 'PENDENTE').length;
-    const faturasParciais = faturas.filter(f => getEstadoReal(f) === 'PARCIAL').length;
+    const faturasPagas = faturas.filter(f => f.estado === 'PAGA').length;
+    const faturasPendentes = faturas.filter(f => f.estado === 'PENDENTE').length;
+    const faturasParciais = faturas.filter(f => f.estado === 'PARCIAL').length;
+    
+    // Vencidas: PENDENTE ou PARCIAL com data_vencimento < hoje
+    const hoje = new Date().toISOString().slice(0, 10);
     const faturasVencidas = faturas.filter(f => {
-      const estado = getEstadoReal(f);
-      return estado === 'VENCIDO' || estado === 'VENCIDA';
+      return (f.estado === 'PENDENTE' || f.estado === 'PARCIAL') && f.data_vencimento < hoje;
     }).length;
     
     const valorTotal = faturas.reduce((acc, f) => acc + (f.total_com_iva || f.total || 0), 0);
     const valorRecebido = faturas
-      .filter(f => getEstadoReal(f) === 'PAGA')
+      .filter(f => f.estado === 'PAGA')
       .reduce((acc, f) => acc + (f.valor_pago || f.total_com_iva || f.total || 0), 0);
     const valorPendente = faturas
-      .filter(f => getEstadoReal(f) === 'PENDENTE')
+      .filter(f => f.estado === 'PENDENTE')
       .reduce((acc, f) => {
         const total = f.total_com_iva || f.total || 0;
         const pago = f.valor_pago || 0;
         return acc + Math.max(total - pago, 0);
       }, 0);
     const valorParcial = faturas
-      .filter(f => getEstadoReal(f) === 'PARCIAL')
+      .filter(f => f.estado === 'PARCIAL')
       .reduce((acc, f) => {
         const total = f.total_com_iva || f.total || 0;
         const pago = f.valor_pago || 0;
         return acc + Math.max(total - pago, 0);
       }, 0);
     const valorVencido = faturas
-      .filter(f => {
-        const estado = getEstadoReal(f);
-        return estado === 'VENCIDO' || estado === 'VENCIDA';
-      })
+      .filter(f => (f.estado === 'PENDENTE' || f.estado === 'PARCIAL') && f.data_vencimento < hoje)
       .reduce((acc, f) => {
         const total = f.total_com_iva || f.total || 0;
         const pago = f.valor_pago || 0;
@@ -171,7 +190,20 @@ export default function FaturasPage() {
   }, [faturas]);
 
   const getStatusConfig = (fatura: Fatura) => {
-    const estadoReal = getEstadoReal(fatura);
+    const estado = fatura.estado;
+    
+    // Verificar se está vencida (PENDENTE ou PARCIAL com data_vencimento < hoje)
+    const hoje = new Date().toISOString().slice(0, 10);
+    const estaVencida = (estado === 'PENDENTE' || estado === 'PARCIAL') && fatura.data_vencimento < hoje;
+    
+    if (estaVencida) {
+      return {
+        badge: 'bg-red-100 text-red-800',
+        icon: AlertCircle,
+        label: 'Vencida',
+        color: 'text-red-600',
+      };
+    }
     
     const configs = {
       PAGA: {
@@ -192,26 +224,29 @@ export default function FaturasPage() {
         label: 'Pendente',
         color: 'text-yellow-600',
       },
-      VENCIDO: {
-        badge: 'bg-red-100 text-red-800',
-        icon: AlertCircle,
-        label: 'Vencido',
-        color: 'text-red-600',
-      },
-      VENCIDA: {
-        badge: 'bg-red-100 text-red-800',
-        icon: AlertCircle,
-        label: 'Vencida',
-        color: 'text-red-600',
-      },
-      CANCELADO: {
+      CANCELADA: {
         badge: 'bg-gray-100 text-gray-800',
         icon: XCircle,
-        label: 'Cancelado',
+        label: 'Cancelada',
         color: 'text-gray-600',
       },
     };
-    return configs[estadoReal as keyof typeof configs] || configs.PENDENTE;
+    
+    return configs[estado as keyof typeof configs] || configs.PENDENTE;
+  };
+
+  const getTipoBadge = (tipo: 'FATURA' | 'NOTA_CREDITO') => {
+    if (tipo === 'NOTA_CREDITO') {
+      return 'bg-purple-100 text-purple-800';
+    }
+    return 'bg-blue-100 text-blue-800';
+  };
+
+  const getTipoLabel = (tipo: 'FATURA' | 'NOTA_CREDITO') => {
+    if (tipo === 'NOTA_CREDITO') {
+      return 'Nota de Crédito';
+    }
+    return 'Fatura';
   };
 
   const formatDate = (dateString: string) => {
@@ -236,8 +271,12 @@ export default function FaturasPage() {
   };
 
   const podeRegistrarPagamento = (fatura: Fatura) => {
-    const estadoReal = getEstadoReal(fatura);
-    return estadoReal !== 'PAGA' && estadoReal !== 'CANCELADO';
+    // Não permitir pagamento em notas de crédito
+    if (fatura.tipo === 'NOTA_CREDITO') {
+      return false;
+    }
+    const estado = fatura.estado;
+    return estado !== 'PAGA' && estado !== 'CANCELADA';
   };
 
   if (loading) {
@@ -333,7 +372,7 @@ export default function FaturasPage() {
 
       {/* Filtros */}
       <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Busca */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
@@ -353,11 +392,22 @@ export default function FaturasPage() {
             className="px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all"
           >
             <option value="todos">Todos os Status</option>
-            <option value="pago">Pagas</option>
+            <option value="paga">Pagas</option>
             <option value="parcial">Parciais</option>
             <option value="pendente">Pendentes</option>
-            <option value="vencido">Vencidas</option>
-            <option value="cancelado">Canceladas</option>
+            <option value="vencida">Vencidas</option>
+            <option value="cancelada">Canceladas</option>
+          </select>
+
+          {/* Filtro Tipo de Documento */}
+          <select
+            value={filtroTipo}
+            onChange={(e) => setFiltroTipo(e.target.value)}
+            className="px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all"
+          >
+            <option value="todos">Tipo de Documento</option>
+            <option value="faturas">Faturas</option>
+            <option value="notas_credito">Notas de Crédito</option>
           </select>
         </div>
       </div>
@@ -400,9 +450,14 @@ export default function FaturasPage() {
                       >
                         <td className="py-4 px-4 sm:px-6">
                           <div>
-                            <p className="font-semibold text-gray-900 text-sm sm:text-base">
-                              {fatura.numero || 'N/A'}
-                            </p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-semibold text-gray-900 text-sm sm:text-base">
+                                {fatura.numero || 'N/A'}
+                              </p>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${getTipoBadge(fatura.tipo)}`}>
+                                {getTipoLabel(fatura.tipo)}
+                              </span>
+                            </div>
                             <p className="text-xs text-gray-500 mt-1 md:hidden">
                               {fatura.cliente_nome || 'Cliente não informado'}
                             </p>
@@ -430,7 +485,9 @@ export default function FaturasPage() {
                         </td>
                         <td className="py-4 px-4 text-right">
                           <div className="flex flex-col items-end">
-                            <span className="font-bold text-gray-900 text-sm sm:text-base">
+                            <span className={`font-bold text-sm sm:text-base ${
+                              fatura.tipo === 'NOTA_CREDITO' ? 'text-red-600' : 'text-gray-900'
+                            }`}>
                               {formatCurrency(fatura.total_com_iva || fatura.total || 0)}
                             </span>
                           </div>

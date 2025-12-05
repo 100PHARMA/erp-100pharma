@@ -7,7 +7,6 @@ import {
   AlertCircle, TrendingUp, Package, Calendar, Save, XCircle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { finalizarVendaECriarFatura } from './actions';
 import { useRouter } from 'next/navigation';
 import { formatCurrency } from '@/utils/formatCurrency';
 
@@ -98,7 +97,6 @@ export default function VendasPage() {
   const [clienteSelecionado, setClienteSelecionado] = useState('');
   const [vendedorSelecionado, setVendedorSelecionado] = useState('');
   const [dataVenda, setDataVenda] = useState(new Date().toISOString().split('T')[0]);
-  const [estadoVenda, setEstadoVenda] = useState<EstadoVenda>('ORCAMENTO');
   const [observacoes, setObservacoesVenda] = useState('');
   const [itensVenda, setItensVenda] = useState<ItemVenda[]>([]);
   
@@ -143,7 +141,7 @@ export default function VendasPage() {
       if (vendasError) throw vendasError;
       setVendas(vendasData || []);
 
-      // Carregar clientes REAIS do Supabase
+      // Carregar clientes
       const { data: clientesData, error: clientesError } = await supabase
         .from('clientes')
         .select('*')
@@ -222,7 +220,7 @@ export default function VendasPage() {
   };
 
   // ======================================================================
-  // SALVAR VENDA (AJUSTADO PARA USAR RPC QUANDO FECHADA)
+  // SALVAR VENDA (SEMPRE COMO ABERTA)
   // ======================================================================
 
   const salvarVenda = async () => {
@@ -240,21 +238,19 @@ export default function VendasPage() {
       setCarregando(true);
 
       const totais = calcularTotais(itensVenda);
-      let vendaId: string;
 
       if (vendaEditando) {
         // ============================================================
-        // ATUALIZAR VENDA EXISTENTE
+        // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
         // ============================================================
         
-        // Atualizar venda (SEM mudar estado para FECHADA diretamente)
         const { error: vendaError } = await supabase
           .from('vendas')
           .update({
             cliente_id: clienteSelecionado,
             vendedor_id: vendedorSelecionado,
             data: dataVenda,
-            estado: estadoVenda === 'FECHADA' ? 'ABERTA' : estadoVenda, // Se for FECHADA, salva como ABERTA primeiro
+            estado: 'ABERTA', // ✅ SEMPRE ABERTA
             subtotal: totais.subtotal,
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
@@ -288,16 +284,15 @@ export default function VendasPage() {
 
         if (itensError) throw itensError;
 
-        vendaId = vendaEditando.id;
+        alert('Venda atualizada com sucesso!');
 
       } else {
         // ============================================================
-        // CRIAR NOVA VENDA
+        // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
         // ============================================================
         
         const numeroVenda = `VD${Date.now()}`;
 
-        // Criar venda (SEM estado FECHADA diretamente)
         const { data: vendaData, error: vendaError } = await supabase
           .from('vendas')
           .insert({
@@ -305,7 +300,7 @@ export default function VendasPage() {
             cliente_id: clienteSelecionado,
             vendedor_id: vendedorSelecionado,
             data: dataVenda,
-            estado: estadoVenda === 'FECHADA' ? 'ABERTA' : estadoVenda, // Se for FECHADA, cria como ABERTA primeiro
+            estado: 'ABERTA', // ✅ SEMPRE ABERTA
             subtotal: totais.subtotal,
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
@@ -331,150 +326,17 @@ export default function VendasPage() {
 
         if (itensError) throw itensError;
 
-        vendaId = vendaData.id;
+        alert('Venda criada com sucesso!');
       }
 
-      // ============================================================
-      // VERIFICAR SE DEVE FECHAR A VENDA E CRIAR FATURA
-      // ============================================================
-      
-      if (estadoVenda === 'FECHADA') {
-        console.log('🎯 Estado selecionado é FECHADA. Chamando RPC para finalizar venda...');
-        
-        const resultado = await finalizarVendaECriarFatura(vendaId);
-
-        if (!resultado.success) {
-          // Erro ao finalizar - mostrar mensagem mas NÃO reverter a venda
-          alert(`⚠️ Venda salva, mas erro ao criar fatura:\n\n${resultado.error}\n\nA venda foi salva como ABERTA.`);
-          fecharModal();
-          await carregarDados();
-          return;
-        }
-
-        // Sucesso - venda fechada e fatura criada
-        alert('✅ Venda fechada e fatura criada com sucesso!');
-        fecharModal();
-        await carregarDados();
-
-        // Redirecionar para a fatura criada
-        if (resultado.faturaId) {
-          router.push(`/faturas/${resultado.faturaId}`);
-        }
-        
-      } else {
-        // Estado não é FECHADA - apenas salvar normalmente
-        alert(vendaEditando ? 'Venda atualizada com sucesso!' : 'Venda criada com sucesso!');
-        fecharModal();
-        await carregarDados();
-      }
+      fecharModal();
+      await carregarDados();
 
     } catch (error: any) {
       console.error('Erro ao salvar venda:', error);
       alert('Erro ao salvar venda: ' + error.message);
     } finally {
       setCarregando(false);
-    }
-  };
-
-  // ======================================================================
-  // MUDAR ESTADO DA VENDA
-  // ======================================================================
-
-  const mudarEstadoVenda = async (vendaId: string, novoEstado: EstadoVenda) => {
-    try {
-      const { error } = await supabase
-        .from('vendas')
-        .update({ 
-          estado: novoEstado,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', vendaId);
-
-      if (error) throw error;
-
-      alert(`Venda alterada para ${novoEstado}`);
-      carregarDados();
-    } catch (error: any) {
-      console.error('Erro ao mudar estado:', error);
-      alert('Erro ao mudar estado: ' + error.message);
-    }
-  };
-
-  // ======================================================================
-  // FECHAR VENDA E CRIAR FATURA
-  // ======================================================================
-
-  const fecharVendaECriarFatura = async (vendaId: string) => {
-    console.log('🎯 [FRONTEND] ========================================');
-    console.log('🎯 [FRONTEND] INICIANDO PROCESSO DE FECHAMENTO DE VENDA');
-    console.log('🎯 [FRONTEND] ========================================');
-    console.log('🎯 [FRONTEND] Botão clicado para venda:', vendaId);
-    console.log('🎯 [FRONTEND] Tipo do vendaId:', typeof vendaId);
-    console.log('🎯 [FRONTEND] Timestamp:', new Date().toISOString());
-    
-    if (!confirm('Deseja fechar esta venda e criar a fatura automaticamente?')) {
-      console.log('⚠️ [FRONTEND] Usuário cancelou a operação');
-      return;
-    }
-
-    try {
-      setCarregando(true);
-      
-      console.log('🔄 [FRONTEND] Chamando server action finalizarVendaECriarFatura...');
-      console.log('📋 [FRONTEND] Parâmetro vendaId:', vendaId);
-      console.log('📋 [FRONTEND] Tipo do parâmetro:', typeof vendaId);
-      console.log('📋 [FRONTEND] Valor exato:', JSON.stringify(vendaId));
-      
-      const resultado = await finalizarVendaECriarFatura(vendaId);
-
-      console.log('📦 [FRONTEND] ========================================');
-      console.log('📦 [FRONTEND] RESULTADO RECEBIDO DA SERVER ACTION');
-      console.log('📦 [FRONTEND] ========================================');
-      console.log('📦 [FRONTEND] Resultado completo:', JSON.stringify(resultado, null, 2));
-      console.log('📦 [FRONTEND] Success:', resultado.success);
-      console.log('📦 [FRONTEND] FaturaId:', resultado.faturaId);
-      console.log('📦 [FRONTEND] Error:', resultado.error);
-
-      if (!resultado.success) {
-        console.error('❌ [FRONTEND] ========================================');
-        console.error('❌ [FRONTEND] ERRO AO FINALIZAR VENDA');
-        console.error('❌ [FRONTEND] ========================================');
-        console.error('❌ [FRONTEND] Erro retornado:', resultado.error);
-        alert(`❌ Erro ao finalizar venda:\n\n${resultado.error}\n\nVerifique o console do navegador para mais detalhes.`);
-        return;
-      }
-
-      console.log('✅ [FRONTEND] ========================================');
-      console.log('✅ [FRONTEND] SUCESSO! FATURA CRIADA');
-      console.log('✅ [FRONTEND] ========================================');
-      console.log('✅ [FRONTEND] Fatura criada com ID:', resultado.faturaId);
-      alert('✅ Venda fechada e fatura criada com sucesso!');
-      
-      // Recarregar dados
-      console.log('🔄 [FRONTEND] Recarregando lista de vendas...');
-      await carregarDados();
-
-      // Redirecionar para a página de detalhes da fatura
-      if (resultado.faturaId) {
-        console.log('🔀 [FRONTEND] Redirecionando para /faturas/' + resultado.faturaId);
-        router.push(`/faturas/${resultado.faturaId}`);
-      } else {
-        console.log('🔀 [FRONTEND] Redirecionando para /faturas (sem ID específico)');
-        router.push('/faturas');
-      }
-
-    } catch (error: any) {
-      console.error('❌ [FRONTEND] ========================================');
-      console.error('❌ [FRONTEND] ERRO INESPERADO');
-      console.error('❌ [FRONTEND] ========================================');
-      console.error('❌ [FRONTEND] Erro:', error);
-      console.error('❌ [FRONTEND] Nome:', error.name);
-      console.error('❌ [FRONTEND] Mensagem:', error.message);
-      console.error('❌ [FRONTEND] Stack trace:', error.stack);
-      alert(`❌ Erro inesperado ao processar venda:\n\n${error.message}\n\nVerifique o console do navegador para mais detalhes.`);
-    } finally {
-      setCarregando(false);
-      console.log('🏁 [FRONTEND] Processo finalizado');
     }
   };
 
@@ -519,7 +381,6 @@ export default function VendasPage() {
     setClienteSelecionado('');
     setVendedorSelecionado('');
     setDataVenda(new Date().toISOString().split('T')[0]);
-    setEstadoVenda('ORCAMENTO');
     setObservacoesVenda('');
     setItensVenda([]);
     setEtapaAtual(1);
@@ -528,17 +389,13 @@ export default function VendasPage() {
 
   const abrirModalEditar = async (venda: Venda) => {
     try {
-      console.log('🔍 Abrindo modal de edição para venda:', venda.id);
-      
       setVendaEditando(venda);
       setClienteSelecionado(venda.cliente_id);
       setVendedorSelecionado(venda.vendedor_id);
       setDataVenda(venda.data);
-      setEstadoVenda(venda.estado);
       setObservacoesVenda(venda.observacoes || '');
       
-      // Carregar itens da venda com produtos
-      console.log('📦 Buscando itens da venda no Supabase...');
+      // Carregar itens da venda
       const { data: itensData, error: itensError } = await supabase
         .from('venda_itens')
         .select(`
@@ -551,20 +408,9 @@ export default function VendasPage() {
         `)
         .eq('venda_id', venda.id);
 
-      if (itensError) {
-        console.error('❌ Erro ao carregar itens:', itensError);
-        throw itensError;
-      }
+      if (itensError) throw itensError;
 
-      console.log('✅ Itens carregados do Supabase:', itensData);
-      console.log('📊 Quantidade de itens:', itensData?.length || 0);
-
-      // Mapear itens para o formato correto
       const itens: ItemVenda[] = (itensData || []).map((item: any) => {
-        console.log('🔄 Mapeando item:', item);
-        
-        // O Supabase retorna o relacionamento como um objeto ou array
-        // Precisamos garantir que pegamos o primeiro elemento se for array
         const produtoData = Array.isArray(item.produtos) ? item.produtos[0] : item.produtos;
         
         return {
@@ -582,18 +428,13 @@ export default function VendasPage() {
           total_linha: item.total_linha
         };
       });
-
-      console.log('✅ Itens mapeados para o estado:', itens);
-      console.log('📊 Total de itens mapeados:', itens.length);
       
       setItensVenda(itens);
-      
       setEtapaAtual(1);
       setModalAberto(true);
       
-      console.log('✅ Modal aberto com sucesso!');
     } catch (error: any) {
-      console.error('❌ Erro ao abrir modal de edição:', error);
+      console.error('Erro ao abrir modal de edição:', error);
       alert('Erro ao carregar dados da venda: ' + error.message);
     }
   };
@@ -616,9 +457,6 @@ export default function VendasPage() {
       alert('Adicione pelo menos um produto');
       return;
     }
-    
-    console.log(`📍 Avançando da etapa ${etapaAtual} para ${etapaAtual + 1}`);
-    console.log(`📦 Itens no estado ao avançar:`, itensVenda);
     
     setEtapaAtual(etapaAtual + 1);
   };
@@ -778,8 +616,6 @@ export default function VendasPage() {
                   <th className="px-6 py-4 text-left text-sm font-semibold">Cliente</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold">Vendedor</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold">Data</th>
-                  <th className="px-6 py-4 text-right text-sm font-semibold">Subtotal</th>
-                  <th className="px-6 py-4 text-right text-sm font-semibold">IVA</th>
                   <th className="px-6 py-4 text-right text-sm font-semibold">Total</th>
                   <th className="px-6 py-4 text-center text-sm font-semibold">Estado</th>
                   <th className="px-6 py-4 text-center text-sm font-semibold">Ações</th>
@@ -788,7 +624,7 @@ export default function VendasPage() {
               <tbody className="divide-y divide-gray-200">
                 {vendasFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                       <Package className="w-16 h-16 mx-auto mb-4 text-gray-300" />
                       <p className="text-lg font-semibold mb-2">Nenhuma venda encontrada</p>
                       <p className="text-sm">Clique em "Nova Venda" para começar</p>
@@ -809,12 +645,6 @@ export default function VendasPage() {
                       <td className="px-6 py-4 text-sm text-gray-600">
                         {new Date(venda.data).toLocaleDateString('pt-PT')}
                       </td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-900">
-                        €{venda.subtotal.toFixed(2)}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-600">
-                        €{venda.iva.toFixed(2)}
-                      </td>
                       <td className="px-6 py-4 text-sm text-right font-semibold text-gray-900">
                         €{venda.total_com_iva.toFixed(2)}
                       </td>
@@ -831,42 +661,31 @@ export default function VendasPage() {
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2">
                           <button 
-                            onClick={() => abrirModalEditar(venda)}
-                            className="p-2 hover:bg-green-100 rounded-lg transition-colors" 
-                            title="Editar"
+                            onClick={() => router.push(`/vendas/${venda.id}`)}
+                            className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
+                            title="Ver Detalhes"
                           >
-                            <Edit className="w-4 h-4 text-green-600" />
+                            <Eye className="w-4 h-4 text-blue-600" />
                           </button>
                           
-                          {/* Botão "Fechar Venda e Criar Fatura" - APENAS para vendas ABERTAS */}
-                          {venda.estado === 'ABERTA' && (
-                            <button 
-                              onClick={() => fecharVendaECriarFatura(venda.id)}
-                              className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
-                              title="Fechar Venda e Criar Fatura"
-                            >
-                              <CheckCircle className="w-4 h-4 text-blue-600" />
-                            </button>
-                          )}
-                          
-                          {venda.estado !== 'CANCELADA' && venda.estado !== 'FECHADA' && (
-                            <button 
-                              onClick={() => mudarEstadoVenda(venda.id, 'CANCELADA')}
-                              className="p-2 hover:bg-yellow-100 rounded-lg transition-colors" 
-                              title="Cancelar"
-                            >
-                              <XCircle className="w-4 h-4 text-yellow-600" />
-                            </button>
-                          )}
-                          
                           {venda.estado !== 'FECHADA' && (
-                            <button 
-                              onClick={() => deletarVenda(venda.id)}
-                              className="p-2 hover:bg-red-100 rounded-lg transition-colors" 
-                              title="Eliminar"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </button>
+                            <>
+                              <button 
+                                onClick={() => abrirModalEditar(venda)}
+                                className="p-2 hover:bg-green-100 rounded-lg transition-colors" 
+                                title="Editar"
+                              >
+                                <Edit className="w-4 h-4 text-green-600" />
+                              </button>
+                              
+                              <button 
+                                onClick={() => deletarVenda(venda.id)}
+                                className="p-2 hover:bg-red-100 rounded-lg transition-colors" 
+                                title="Eliminar"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-600" />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -954,34 +773,16 @@ export default function VendasPage() {
                     </select>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">
-                        Data da Venda *
-                      </label>
-                      <input
-                        type="date"
-                        value={dataVenda}
-                        onChange={(e) => setDataVenda(e.target.value)}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">
-                        Estado *
-                      </label>
-                      <select
-                        value={estadoVenda}
-                        onChange={(e) => setEstadoVenda(e.target.value as EstadoVenda)}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      >
-                        <option value="ORCAMENTO">Orçamento</option>
-                        <option value="ABERTA">Aberta</option>
-                        <option value="FECHADA">Fechada</option>
-                        <option value="CANCELADA">Cancelada</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Data da Venda *
+                    </label>
+                    <input
+                      type="date"
+                      value={dataVenda}
+                      onChange={(e) => setDataVenda(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
                   </div>
 
                   <div>
@@ -1005,16 +806,6 @@ export default function VendasPage() {
                   <h3 className="text-xl font-bold text-gray-900 mb-4">
                     Produtos da Venda
                   </h3>
-
-                  {/* Debug Info */}
-                  {vendaEditando && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                      <p className="text-sm text-blue-800">
-                        <strong>Debug:</strong> Editando venda {vendaEditando.numero} | 
-                        Itens carregados: {itensVenda.length}
-                      </p>
-                    </div>
-                  )}
 
                   {/* Adicionar Produto */}
                   <div className="bg-gray-50 rounded-xl p-4 space-y-4">
@@ -1151,12 +942,6 @@ export default function VendasPage() {
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Tipo de Cliente:</span>
-                      <span className="text-sm font-semibold text-gray-900">
-                        {clientes.find(c => c.id === clienteSelecionado)?.tipo}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
                       <span className="text-sm text-gray-600">Vendedor:</span>
                       <span className="text-sm font-semibold text-gray-900">
                         {vendedores.find(v => v.id === vendedorSelecionado)?.nome}
@@ -1169,17 +954,6 @@ export default function VendasPage() {
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Estado:</span>
-                      <span className={`text-sm font-semibold ${
-                        estadoVenda === 'FECHADA' ? 'text-green-600' :
-                        estadoVenda === 'ABERTA' ? 'text-orange-600' :
-                        estadoVenda === 'ORCAMENTO' ? 'text-blue-600' :
-                        'text-gray-600'
-                      }`}>
-                        {estadoVenda}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
                       <span className="text-sm text-gray-600">Total de Itens:</span>
                       <span className="text-sm font-semibold text-gray-900">
                         {itensVenda.length}
@@ -1187,23 +961,20 @@ export default function VendasPage() {
                     </div>
                   </div>
 
-                  {/* Aviso se estado for FECHADA */}
-                  {estadoVenda === 'FECHADA' && (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <div className="flex items-start gap-3">
-                        <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
-                        <div>
-                          <p className="text-sm font-semibold text-green-800">
-                            Venda será fechada automaticamente
-                          </p>
-                          <p className="text-xs text-green-700 mt-1">
-                            Ao salvar, a venda será fechada, uma fatura será criada automaticamente 
-                            e o estoque dos produtos será atualizado.
-                          </p>
-                        </div>
+                  {/* Aviso */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-blue-800">
+                          Venda será salva como ABERTA
+                        </p>
+                        <p className="text-xs text-blue-700 mt-1">
+                          Para fechar a venda e emitir fatura, acesse a página de detalhes após salvar.
+                        </p>
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   {/* Botão Salvar */}
                   <button

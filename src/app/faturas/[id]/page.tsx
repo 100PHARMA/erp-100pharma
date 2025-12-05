@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Calendar, User, FileText, Package, CreditCard, CheckCircle, Clock, AlertCircle, Save, DollarSign } from 'lucide-react';
+import { ArrowLeft, Calendar, User, FileText, Package, CreditCard, CheckCircle, Clock, AlertCircle, Save, DollarSign, ExternalLink } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/formatCurrency';
 import Link from 'next/link';
 import ModalPagamento from '../components/ModalPagamento';
+import EmitirNotaCreditoButton from './EmitirNotaCreditoButton';
 import { atualizarDataVencimento } from './actions';
 import { toast } from 'sonner';
 
@@ -41,6 +42,13 @@ interface Fatura {
   venda_id: string;
   data_pagamento?: string;
   valor_pago?: number;
+  tipo: 'FATURA' | 'NOTA_CREDITO';
+  fatura_referenciada_id?: string;
+}
+
+interface FaturaReferenciada {
+  numero: string;
+  data_emissao: string;
 }
 
 interface Pagamento {
@@ -57,6 +65,7 @@ export default function InvoiceDetailPage() {
   const id = params.id as string;
 
   const [fatura, setFatura] = useState<Fatura | null>(null);
+  const [faturaReferenciada, setFaturaReferenciada] = useState<FaturaReferenciada | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [itens, setItens] = useState<VendaItem[]>([]);
   const [pagamentos, setPagamentos] = useState<Pagamento[]>([]);
@@ -72,7 +81,7 @@ export default function InvoiceDetailPage() {
     try {
       setLoading(true);
 
-      // Carregar fatura com campos de pagamento
+      // Carregar fatura com campos de pagamento, tipo e fatura_referenciada_id
       const { data: faturaData, error: faturaError } = await supabase
         .from('faturas')
         .select(`
@@ -85,7 +94,9 @@ export default function InvoiceDetailPage() {
           cliente_id,
           venda_id,
           data_pagamento,
-          valor_pago
+          valor_pago,
+          tipo,
+          fatura_referenciada_id
         `)
         .eq('id', id)
         .single();
@@ -99,6 +110,19 @@ export default function InvoiceDetailPage() {
 
       setFatura(faturaData);
       setNovaDataVencimento(faturaData.data_vencimento);
+
+      // Se for nota de crédito e tiver fatura referenciada, carregar dados da fatura original
+      if (faturaData.tipo === 'NOTA_CREDITO' && faturaData.fatura_referenciada_id) {
+        const { data: faturaRefData } = await supabase
+          .from('faturas')
+          .select('numero, data_emissao')
+          .eq('id', faturaData.fatura_referenciada_id)
+          .single();
+
+        if (faturaRefData) {
+          setFaturaReferenciada(faturaRefData);
+        }
+      }
 
       // Carregar cliente
       const { data: clienteData } = await supabase
@@ -174,32 +198,79 @@ export default function InvoiceDetailPage() {
     return dateString.split('T')[0];
   };
 
-  const getStatusConfig = (status: string, valorPago: number, totalComIva: number) => {
-    const statusUpper = status.toUpperCase();
-    
-    // Determinar estado real baseado em valor_pago
-    const jaPago = valorPago || 0;
-    const total = totalComIva || 0;
-    
-    if (jaPago >= total && jaPago > 0) {
-      return { badge: 'bg-green-100 text-green-800', icon: CheckCircle, label: 'Paga' };
-    } else if (jaPago > 0 && jaPago < total) {
-      return { badge: 'bg-orange-100 text-orange-800', icon: Clock, label: 'Parcial' };
-    } else {
-      return { badge: 'bg-yellow-100 text-yellow-800', icon: Clock, label: 'Pendente' };
+  // Função para obter label do status baseado no estado do banco
+  const getStatusLabel = (estado: string) => {
+    switch (estado) {
+      case 'PAGA':
+        return 'Paga';
+      case 'PENDENTE':
+        return 'Pendente';
+      case 'PARCIAL':
+        return 'Parcial';
+      case 'CANCELADA':
+        return 'Cancelada';
+      default:
+        return estado;
     }
   };
 
-  const podeRegistrarPagamento = (valorPago: number, totalComIva: number) => {
-    const jaPago = valorPago || 0;
-    const total = totalComIva || 0;
-    return jaPago < total;
+  const getStatusConfig = (estado: string) => {
+    const configs = {
+      PAGA: {
+        badge: 'bg-green-100 text-green-800',
+        icon: CheckCircle,
+        label: 'Paga',
+      },
+      PARCIAL: {
+        badge: 'bg-orange-100 text-orange-800',
+        icon: Clock,
+        label: 'Parcial',
+      },
+      PENDENTE: {
+        badge: 'bg-yellow-100 text-yellow-800',
+        icon: Clock,
+        label: 'Pendente',
+      },
+      CANCELADA: {
+        badge: 'bg-gray-100 text-gray-800',
+        icon: AlertCircle,
+        label: 'Cancelada',
+      },
+    };
+    
+    return configs[estado as keyof typeof configs] || configs.PENDENTE;
   };
 
-  const podeEditarVencimento = (valorPago: number, totalComIva: number) => {
-    const jaPago = valorPago || 0;
-    const total = totalComIva || 0;
-    return jaPago < total;
+  const getTipoBadge = (tipo: 'FATURA' | 'NOTA_CREDITO') => {
+    if (tipo === 'NOTA_CREDITO') {
+      return 'bg-purple-100 text-purple-800';
+    }
+    return 'bg-blue-100 text-blue-800';
+  };
+
+  const getTipoLabel = (tipo: 'FATURA' | 'NOTA_CREDITO') => {
+    if (tipo === 'NOTA_CREDITO') {
+      return 'Nota de Crédito';
+    }
+    return 'Fatura';
+  };
+
+  const podeRegistrarPagamento = (tipo: string, estado: string) => {
+    // Não permitir pagamento em notas de crédito
+    if (tipo === 'NOTA_CREDITO') {
+      return false;
+    }
+    // Não permitir pagamento em faturas canceladas ou pagas
+    return estado !== 'PAGA' && estado !== 'CANCELADA';
+  };
+
+  const podeEditarVencimento = (tipo: string, estado: string) => {
+    // Não permitir edição em notas de crédito
+    if (tipo === 'NOTA_CREDITO') {
+      return false;
+    }
+    // Não permitir edição em faturas canceladas ou pagas
+    return estado !== 'PAGA' && estado !== 'CANCELADA';
   };
 
   const handleSalvarVencimento = async () => {
@@ -261,7 +332,7 @@ export default function InvoiceDetailPage() {
     );
   }
 
-  const statusConfig = getStatusConfig(fatura.estado, fatura.valor_pago || 0, fatura.total_com_iva);
+  const statusConfig = getStatusConfig(fatura.estado);
   const StatusIcon = statusConfig.icon;
   
   // Cálculo correto de Subtotal, IVA e Total
@@ -272,6 +343,9 @@ export default function InvoiceDetailPage() {
   // Cálculo de valores de pagamento
   const totalPago = fatura.valor_pago || 0;
   const saldoEmAberto = Math.max(total - totalPago, 0);
+
+  // Determinar título baseado no tipo
+  const titulo = fatura.tipo === 'NOTA_CREDITO' ? `Nota de Crédito ${fatura.numero}` : `Fatura ${fatura.numero}`;
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -287,22 +361,52 @@ export default function InvoiceDetailPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">
-              Fatura {fatura.numero}
+              {titulo}
             </h1>
-            <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${statusConfig.badge}`}>
-              <StatusIcon className="w-4 h-4" />
-              {statusConfig.label}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${statusConfig.badge}`}>
+                <StatusIcon className="w-4 h-4" />
+                {statusConfig.label}
+              </span>
+              <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${getTipoBadge(fatura.tipo)}`}>
+                {getTipoLabel(fatura.tipo)}
+              </span>
+            </div>
+            
+            {/* Se for nota de crédito e tiver fatura referenciada */}
+            {fatura.tipo === 'NOTA_CREDITO' && faturaReferenciada && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-gray-600">
+                <span>Referente à fatura:</span>
+                <Link
+                  href={`/faturas/${fatura.fatura_referenciada_id}`}
+                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700 font-semibold"
+                >
+                  {faturaReferenciada.numero}
+                  <ExternalLink className="w-4 h-4" />
+                </Link>
+                <span className="text-gray-400">({formatDate(faturaReferenciada.data_emissao)})</span>
+              </div>
+            )}
           </div>
-          {podeRegistrarPagamento(fatura.valor_pago || 0, fatura.total_com_iva) && (
-            <button
-              onClick={() => setModalPagamento(true)}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors"
-            >
-              <CreditCard className="w-5 h-5" />
-              Registrar Pagamento
-            </button>
-          )}
+          <div className="flex gap-3">
+            {podeRegistrarPagamento(fatura.tipo, fatura.estado) && (
+              <button
+                onClick={() => setModalPagamento(true)}
+                className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors"
+              >
+                <CreditCard className="w-5 h-5" />
+                Registrar Pagamento
+              </button>
+            )}
+            
+            {/* Botão Emitir Nota de Crédito */}
+            <EmitirNotaCreditoButton
+              faturaId={fatura.id}
+              faturaNumero={fatura.numero}
+              faturaEstado={fatura.estado}
+              faturaTipo={fatura.tipo}
+            />
+          </div>
         </div>
       </div>
 
@@ -328,7 +432,7 @@ export default function InvoiceDetailPage() {
             <div className="flex-1">
               <p className="text-sm text-gray-600 mb-1">Data de Vencimento</p>
               
-              {podeEditarVencimento(fatura.valor_pago || 0, fatura.total_com_iva) ? (
+              {podeEditarVencimento(fatura.tipo, fatura.estado) ? (
                 <div className="flex items-center gap-2">
                   {editandoVencimento ? (
                     <>
@@ -387,22 +491,28 @@ export default function InvoiceDetailPage() {
       </div>
 
       {/* Resumo Financeiro */}
-      <div className="bg-gradient-to-br from-green-600 to-emerald-600 rounded-2xl shadow-lg p-6 mb-6 text-white">
+      <div className={`rounded-2xl shadow-lg p-6 mb-6 text-white ${
+        fatura.tipo === 'NOTA_CREDITO' 
+          ? 'bg-gradient-to-br from-purple-600 to-pink-600' 
+          : 'bg-gradient-to-br from-green-600 to-emerald-600'
+      }`}>
         <h2 className="text-xl font-bold mb-4">Resumo Financeiro</h2>
         <div className="space-y-3">
           <div className="flex justify-between items-center">
-            <span className="text-green-100">Subtotal</span>
+            <span className={fatura.tipo === 'NOTA_CREDITO' ? 'text-purple-100' : 'text-green-100'}>Subtotal</span>
             <span className="text-2xl font-bold">{formatCurrency(subtotal)}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-green-100">IVA (23%)</span>
+            <span className={fatura.tipo === 'NOTA_CREDITO' ? 'text-purple-100' : 'text-green-100'}>IVA (23%)</span>
             <span className="text-xl font-semibold">{formatCurrency(iva)}</span>
           </div>
-          <div className="border-t border-green-400 pt-3 flex justify-between items-center">
+          <div className={`border-t pt-3 flex justify-between items-center ${
+            fatura.tipo === 'NOTA_CREDITO' ? 'border-purple-400' : 'border-green-400'
+          }`}>
             <span className="text-lg font-semibold">Total</span>
             <span className="text-3xl font-bold">{formatCurrency(total)}</span>
           </div>
-          {totalPago > 0 && (
+          {totalPago > 0 && fatura.tipo !== 'NOTA_CREDITO' && (
             <>
               <div className="flex justify-between items-center">
                 <span className="text-green-100">Total Pago</span>
@@ -417,8 +527,8 @@ export default function InvoiceDetailPage() {
         </div>
       </div>
 
-      {/* Histórico de Pagamentos */}
-      {pagamentos.length > 0 && (
+      {/* Histórico de Pagamentos - não mostrar para notas de crédito */}
+      {pagamentos.length > 0 && fatura.tipo !== 'NOTA_CREDITO' && (
         <div className="bg-white rounded-2xl shadow-lg overflow-hidden mb-6">
           <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6">
             <div className="flex items-center gap-3">
@@ -519,7 +629,11 @@ export default function InvoiceDetailPage() {
 
       {/* Itens da Venda */}
       <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-        <div className="bg-gradient-to-r from-green-600 to-emerald-600 p-6">
+        <div className={`p-6 ${
+          fatura.tipo === 'NOTA_CREDITO'
+            ? 'bg-gradient-to-r from-purple-600 to-pink-600'
+            : 'bg-gradient-to-r from-green-600 to-emerald-600'
+        }`}>
           <div className="flex items-center gap-3">
             <div className="bg-white/20 p-3 rounded-xl">
               <Package className="w-6 h-6 text-white" />
