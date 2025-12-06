@@ -1,3 +1,4 @@
+// src/lib/relatorio-vendedor-pdf.ts
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -5,190 +6,187 @@ import autoTable from 'jspdf-autotable';
 // TIPOS
 // ======================================================================
 
-export interface VendedorRelatorioRow {
-  cliente_nome: string;
-  frascos: number;
-  faturacao: number; // já com IVA
-  comissao: number;
+export interface VendedorInfo {
+  nome: string;
+  email: string;
+  telefone?: string | null;
+  ativo: boolean;
 }
 
-export interface VendedorRelatorioPayload {
-  vendedorNome: string;
-  rows: VendedorRelatorioRow[];
-  totalFrascos: number;
-  totalFaturacao: number; // já com IVA
-  totalComissao: number;
-  metaMensal?: number | null;
-  percentMeta?: number | null; // 0–100 (ex: 85.3 = 85,3%)
-  dataInicio: string | null;
-  dataFim: string | null;
+export interface ResumoVendedorMensal {
+  faturacaoMes: number;
+  frascosMes: number;
+  comissaoMes: number;
+  percentualMeta: number;
+  clientesAtivos: number;
+  kmRodadosMes: number;
+  custoKmMes: number;
+}
+
+export interface VendaResumo {
+  data: string; // ISO: 'YYYY-MM-DD'
+  cliente_nome: string;
+  total_com_iva: number;
+  frascos: number;
+}
+
+export interface QuilometragemResumo {
+  data: string; // ISO
+  km: number;
+  valor: number;
+}
+
+export interface VisitaResumo {
+  data: string; // ISO
+  cliente_nome: string;
+  estado: string;
+  notas?: string | null;
+}
+
+export interface RelatorioVendedorPayload {
+  vendedor: VendedorInfo;
+  resumo: ResumoVendedorMensal;
+
+  // estes arrays serão usados nas próximas etapas
+  vendas: VendaResumo[];
+  quilometragens: QuilometragemResumo[];
+  visitas: VisitaResumo[];
+
+  dataInicio?: string | null; // 'YYYY-MM-DD'
+  dataFim?: string | null;    // 'YYYY-MM-DD'
 }
 
 // ======================================================================
 // FUNÇÃO PRINCIPAL
 // ======================================================================
 
-export function gerarRelatorioVendedorPdf(payload: VendedorRelatorioPayload) {
+export function gerarRelatorioVendedorPdf(payload: RelatorioVendedorPayload) {
   const {
-    vendedorNome,
-    rows,
-    totalFrascos,
-    totalFaturacao,
-    totalComissao,
-    metaMensal,
-    percentMeta,
+    vendedor,
+    resumo,
+    vendas,
+    quilometragens,
+    visitas,
     dataInicio,
     dataFim,
   } = payload;
 
-  const doc = new jsPDF();
+  try {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    let y = margin;
 
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 15;
-  let y = margin;
+    // ==================================================================
+    // CABEÇALHO 100PHARMA + VENDEDOR + PERÍODO
+    // ==================================================================
 
-  // -------------------- Cabeçalho --------------------
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.setTextColor(37, 99, 235); // azul
-  doc.text('100PHARMA', margin, y);
+    // Logo / Nome da empresa
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(37, 99, 235); // azul
+    doc.text('100PHARMA', margin, y);
 
-  y += 8;
-  doc.setFontSize(16);
-  doc.setTextColor(0, 0, 0);
-  doc.text('Relatório de Comissões do Vendedor', margin, y);
+    // Título do relatório
+    y += 8;
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Relatório de Vendas do Vendedor', margin, y);
 
-  y += 8;
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(60, 60, 60);
-  doc.text(vendedorNome, margin, y);
+    // Nome do vendedor
+    y += 7;
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(40, 40, 40);
+    doc.text(vendedor.nome, margin, y);
 
-  y += 6;
-  const periodoLabel = buildPeriodoLabel(dataInicio, dataFim);
-  doc.setFontSize(10);
-  doc.setTextColor(120, 120, 120);
-  doc.text(periodoLabel, margin, y);
+    // Email + telefone (se existir)
+    y += 5;
+    const linhaContato = vendedor.telefone
+      ? `${vendedor.email} • ${vendedor.telefone}`
+      : vendedor.email;
+    doc.setFontSize(10);
+    doc.setTextColor(90, 90, 90);
+    doc.text(linhaContato, margin, y);
 
-  y += 5;
-  doc.setDrawColor(200, 200, 200);
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
+    // Período
+    y += 5;
+    const periodoLabel = construirPeriodoLabel(dataInicio, dataFim);
+    doc.setFontSize(10);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`Período: ${periodoLabel}`, margin, y);
 
-  // -------------------- Resumo Geral --------------------
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 0, 0);
-  doc.text('Resumo Geral', margin, y);
-  y += 8;
+    // Linha separadora
+    y += 6;
+    doc.setDrawColor(210, 210, 210);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 10;
 
-  const resumoBody: (string | number)[][] = [
-    ['Total de frascos', totalFrascos.toString()],
-    ['Faturação total (IVA incluído)', formatarMoeda(totalFaturacao) + ' €'],
-    ['Comissão total (€)', formatarMoeda(totalComissao) + ' €'],
-  ];
+    // ==================================================================
+    // RESUMO GERAL
+    // ==================================================================
 
-  if (metaMensal != null) {
-    resumoBody.push(['Meta mensal (€)', formatarMoeda(metaMensal) + ' €']);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('Resumo Geral', margin, y);
+
+    y += 6;
+
+    const corpoResumo = [
+      ['Faturação do mês (com IVA)', formatarMoeda(resumo.faturacaoMes) + ' €'],
+      ['Frascos vendidos no mês', resumo.frascosMes.toString()],
+      ['Comissão estimada', formatarMoeda(resumo.comissaoMes) + ' €'],
+      ['Percentual de meta', resumo.percentualMeta.toFixed(0) + ' %'],
+      ['Clientes ativos na carteira', resumo.clientesAtivos.toString()],
+      ['Km rodados no mês', resumo.kmRodadosMes.toFixed(0) + ' km'],
+      ['Custo de km no mês', formatarMoeda(resumo.custoKmMes) + ' €'],
+    ];
+
+    autoTable(doc, {
+      startY: y,
+      head: [],
+      body: corpoResumo,
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 4,
+      },
+      columnStyles: {
+        0: { cellWidth: 90, fontStyle: 'bold' },
+        1: { cellWidth: 70, halign: 'right' },
+      },
+      margin: { left: margin, right: margin },
+    });
+
+    // posição final da tabela
+    // @ts-ignore - lastAutoTable é adicionado pelo jspdf-autotable
+    y = (doc as any).lastAutoTable.finalY + 12;
+
+    // ==================================================================
+    // (ETAPA 1 PARA AQUI)
+    //
+    // Nas PRÓXIMAS ETAPAS vamos acrescentar:
+    //  - Detalhe de Vendas
+    //  - Quilometragem
+    //  - Visitas
+    //  - Rodapé com data + nº de página
+    // ==================================================================
+
+    // Por enquanto já salvamos um PDF simples com cabeçalho + resumo
+    const nomeArquivoBase = vendedor.nome || 'vendedor';
+    const nomeArquivo = `Relatorio_Vendedor_${nomeArquivoBase.replace(
+      /\s+/g,
+      '_'
+    )}.pdf`;
+
+    doc.save(nomeArquivo);
+  } catch (err) {
+    console.error('Erro ao gerar PDF do vendedor:', err);
+    // Deixo estourar a exceção para o componente tratar se quiser
+    throw err;
   }
-
-  if (percentMeta != null) {
-    resumoBody.push([
-      '% da meta atingida',
-      `${percentMeta.toFixed(1).replace('.', ',')} %`,
-    ]);
-  }
-
-  autoTable(doc, {
-    startY: y,
-    head: [],
-    body: resumoBody,
-    theme: 'grid',
-    styles: {
-      fontSize: 10,
-      cellPadding: 4,
-    },
-    columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 90 },
-      1: { halign: 'right', cellWidth: 80 },
-    },
-    margin: { left: margin, right: margin },
-  });
-
-  // @ts-ignore - propriedade injectada pelo autotable
-  y = (doc as any).lastAutoTable.finalY + 12;
-
-  // -------------------- Detalhe por Cliente --------------------
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 0, 0);
-  doc.text('Detalhe por Cliente / Farmácia', margin, y);
-  y += 6;
-
-  const tabelaHead = [['Cliente / Farmácia', 'Frascos', 'Faturação (€)', 'Comissão (€)']];
-
-  const tabelaBody = rows.map((row) => [
-    row.cliente_nome,
-    row.frascos.toString(),
-    formatarMoeda(row.faturacao) + ' €',
-    formatarMoeda(row.comissao) + ' €',
-  ]);
-
-  autoTable(doc, {
-    startY: y,
-    head: tabelaHead,
-    body: tabelaBody,
-    theme: 'striped',
-    headStyles: {
-      fillColor: [37, 99, 235],
-      textColor: 255,
-      fontStyle: 'bold',
-    },
-    styles: {
-      fontSize: 9,
-      cellPadding: 3,
-    },
-    columnStyles: {
-      0: { cellWidth: 80 },
-      1: { halign: 'center', cellWidth: 20 },
-      2: { halign: 'right', cellWidth: 35 },
-      3: { halign: 'right', cellWidth: 35 },
-    },
-    margin: { left: margin, right: margin },
-  });
-
-  // -------------------- Rodapé --------------------
-  const totalPages = doc.getNumberOfPages();
-  const dataGeracao = new Date().toLocaleString('pt-PT', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  for (let i = 1; i <= totalPages; i++) {
-    doc.setPage(i);
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(150, 150, 150);
-
-    doc.text(
-      `Relatório gerado em: ${dataGeracao}`,
-      margin,
-      doc.internal.pageSize.getHeight() - 12
-    );
-
-    doc.text(
-      `Página ${i} de ${totalPages}`,
-      pageWidth - margin - 25,
-      doc.internal.pageSize.getHeight() - 12
-    );
-  }
-
-  // Nome do ficheiro
-  const fileSafeName = vendedorNome.replace(/\s+/g, '_');
-  doc.save(`relatorio_vendedor_${fileSafeName}.pdf`);
 }
 
 // ======================================================================
@@ -202,22 +200,22 @@ function formatarMoeda(valor: number): string {
   });
 }
 
-function buildPeriodoLabel(
-  dataInicio: string | null,
-  dataFim: string | null
-): string {
-  const ini = formatDate(dataInicio);
-  const fim = formatDate(dataFim);
-
-  if (ini && fim) return `Período: ${ini} a ${fim}`;
-  if (ini && !fim) return `Período: a partir de ${ini}`;
-  if (!ini && fim) return `Período: até ${fim}`;
-  return 'Período: todo o histórico válido';
+function formatarDataCurta(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const [ano, mes, dia] = iso.split('-').map(Number);
+  if (!ano || !mes || !dia) return iso;
+  return `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`;
 }
 
-function formatDate(dateStr: string | null): string | null {
-  if (!dateStr) return null;
-  const [year, month, day] = dateStr.split('-').map(Number);
-  if (!year || !month || !day) return dateStr;
-  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+function construirPeriodoLabel(
+  dataInicio?: string | null,
+  dataFim?: string | null
+): string {
+  const ini = formatarDataCurta(dataInicio || null);
+  const fim = formatarDataCurta(dataFim || null);
+
+  if (ini && fim) return `${ini} a ${fim}`;
+  if (ini && !fim) return `a partir de ${ini}`;
+  if (!ini && fim) return `até ${fim}`;
+  return 'todo o histórico válido';
 }
