@@ -1,9 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
-import { Trophy, Award, TrendingUp, Search } from 'lucide-react';
+import { Trophy, Award, TrendingUp, Search, Download } from 'lucide-react';
+import {
+  gerarRankingFarmaciasPdf,
+  RankingFarmaciaRow,
+} from '@/lib/ranking-farmacias-pdf';
 
 interface IncentivoFarmacia {
   cliente_id: string;
@@ -51,7 +55,10 @@ export default function RankingFarmaciasPage() {
 
       const totalFarms = lista.length;
       const totalFras = lista.reduce((sum, f) => sum + f.total_frascos, 0);
-      const totalFund = lista.reduce((sum, f) => sum + f.total_fundo_farmaceutico, 0);
+      const totalFund = lista.reduce(
+        (sum, f) => sum + f.total_fundo_farmaceutico,
+        0
+      );
 
       setTotalFarmacias(totalFarms);
       setTotalFrascos(totalFras);
@@ -67,6 +74,31 @@ export default function RankingFarmaciasPage() {
   const farmaciasFiltradas = farmacias.filter((f) =>
     f.cliente_nome.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const handleExportPdf = useCallback(() => {
+    if (!farmacias || farmacias.length === 0) {
+      alert('Não há dados no ranking para exportar.');
+      return;
+    }
+
+    const rows: RankingFarmaciaRow[] = farmacias
+      .slice()
+      .sort((a, b) => b.total_frascos - a.total_frascos)
+      .map((f) => ({
+        farmacia_id: f.cliente_id,
+        farmacia_nome: f.cliente_nome,
+        frascos_validos: f.total_frascos,
+        fundo_acumulado: f.total_fundo_farmaceutico,
+      }));
+
+    gerarRankingFarmaciasPdf({
+      rows,
+      totalFarmacias,
+      totalFrascosValidos: totalFrascos,
+      fundoTotal: totalFundo,
+      tituloCampanha: 'Ranking Geral de Farmácias 100PHARMA',
+    });
+  }, [farmacias, totalFarmacias, totalFrascos, totalFundo]);
 
   if (loading) {
     return (
@@ -92,6 +124,17 @@ export default function RankingFarmaciasPage() {
             <p className="text-gray-600 mt-1">
               Desempenho das farmácias com base em frascos vendidos e fundo farmacêutico acumulado.
             </p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={handleExportPdf}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded bg-blue-600 text-white hover:bg-blue-700"
+            >
+              <Download className="w-4 h-4" />
+              Exportar PDF
+            </button>
           </div>
         </div>
 
@@ -175,36 +218,42 @@ export default function RankingFarmaciasPage() {
                     </td>
                   </tr>
                 ) : (
-                  farmaciasFiltradas.map((farmacia, index) => (
-                    <tr
-                      key={farmacia.cliente_id}
-                      className="hover:bg-blue-50/50 transition-colors"
-                    >
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold">
-                          {index + 1}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-900">
-                          {farmacia.cliente_nome}
-                        </p>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-sm font-semibold text-gray-900">
-                          {farmacia.total_frascos}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <span className="text-sm font-semibold text-purple-700">
-                          €{' '}
-                          {farmacia.total_fundo_farmaceutico.toLocaleString('pt-PT', {
-                            minimumFractionDigits: 2,
-                          })}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                  farmaciasFiltradas
+                    .slice()
+                    .sort((a, b) => b.total_frascos - a.total_frascos)
+                    .map((farmacia, index) => (
+                      <tr
+                        key={farmacia.cliente_id}
+                        className="hover:bg-blue-50/50 transition-colors"
+                      >
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold">
+                            {index + 1}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="font-semibold text-gray-900">
+                            {farmacia.cliente_nome}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-sm font-semibold text-gray-900">
+                            {farmacia.total_frascos}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <span className="text-sm font-semibold text-purple-700">
+                            €{' '}
+                            {farmacia.total_fundo_farmaceutico.toLocaleString(
+                              'pt-PT',
+                              {
+                                minimumFractionDigits: 2,
+                              }
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
                 )}
               </tbody>
             </table>
@@ -217,7 +266,7 @@ export default function RankingFarmaciasPage() {
             O ranking considera todas as faturas do tipo <strong>FATURA</strong> com estado{' '}
             <strong>PAGA</strong>. O valor do fundo farmacêutico por frasco respeita o histórico
             definido nas Configurações Financeiras, ou seja, cada fatura usa o valor que estava em
-            vigor na data de emissão/pagamento.
+            vigor na data da venda/pagamento.
           </p>
         </div>
       </div>
