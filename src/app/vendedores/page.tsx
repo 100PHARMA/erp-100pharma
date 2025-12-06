@@ -13,6 +13,8 @@ import {
   calcularPercentualMeta,
   type ConfiguracaoFinanceira,
 } from '@/lib/configuracoes-financeiras';
+import { gerarRelatorioVendedorPdf } from '@/lib/relatorio-vendedor-pdf';
+
 
 // ======================================================================
 // TIPOS E INTERFACES
@@ -574,10 +576,103 @@ export default function VendedoresPage() {
     }
   };
 
-  const gerarRelatorioMensal = () => {
-    if (!vendedorSelecionado) return;
-    alert('Funcionalidade de geração de PDF será implementada em breve!');
-  };
+  const gerarRelatorioMensal = async () => {
+  if (!vendedorSelecionado) return;
+
+  try {
+    // Intervalo padrão: mês atual
+    const hoje = new Date();
+    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+
+    const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
+    const dataFim = ultimoDiaMes.toISOString().split('T')[0];
+
+    // Dados básicos do vendedor
+    const vendedorInfo = {
+      nome: vendedorSelecionado.nome,
+      email: vendedorSelecionado.email,
+      telefone: vendedorSelecionado.telefone,
+      ativo: vendedorSelecionado.ativo,
+    };
+
+    // Resumo mensal (já calculado no estado do vendedor)
+    const resumo = {
+      vendasMes: vendedorSelecionado.vendasMes,
+      frascosMes: vendedorSelecionado.frascosMes,
+      comissaoMes: vendedorSelecionado.comissaoMes,
+      percentualMeta: vendedorSelecionado.percentualMeta,
+      clientesAtivos: vendedorSelecionado.clientesAtivos,
+      kmRodadosMes: vendedorSelecionado.kmRodadosMes,
+      custoKmMes: vendedorSelecionado.custoKmMes,
+    };
+
+    // VENDAS do período
+    const vendasPeriodo = vendas
+      .filter(
+        (v) =>
+          v.vendedor_id === vendedorSelecionado.id &&
+          v.data >= dataInicio &&
+          v.data <= dataFim
+      )
+      .map((venda) => {
+        const cliente = clientes.find((c) => c.id === venda.cliente_id);
+        const itens = vendaItens.filter((item) => item.venda_id === venda.id);
+        const totalFrascos = itens.reduce(
+          (sum, item) => sum + (item.quantidade || 0),
+          0
+        );
+
+        return {
+          id: venda.id,
+          data: venda.data,
+          cliente_nome: cliente?.nome || 'N/A',
+          total_com_iva: venda.total_com_iva,
+          frascos: totalFrascos,
+        };
+      });
+
+    // KM do período
+    const quilometragensPeriodo = quilometragens.filter(
+      (km) =>
+        km.vendedor_id === vendedorSelecionado.id &&
+        km.data >= dataInicio &&
+        km.data <= dataFim
+    );
+
+    // VISITAS do período
+    const visitasPeriodo = visitas
+      .filter(
+        (visita) =>
+          visita.vendedor_id === vendedorSelecionado.id &&
+          visita.data_visita >= dataInicio &&
+          visita.data_visita <= dataFim
+      )
+      .map((visita) => {
+        const cliente = clientes.find((c) => c.id === visita.cliente_id);
+        return {
+          id: visita.id,
+          data_visita: visita.data_visita,
+          estado: visita.estado,
+          notas: visita.notas,
+          cliente_nome: cliente?.nome || 'N/A',
+        };
+      });
+
+    // Chamar gerador de PDF
+    await gerarRelatorioVendedorPdf({
+      vendedor: vendedorInfo,
+      intervalo: { dataInicio, dataFim },
+      resumo,
+      vendas: vendasPeriodo,
+      quilometragens: quilometragensPeriodo,
+      visitas: visitasPeriodo,
+    });
+  } catch (error: any) {
+    console.error('Erro ao gerar relatório do vendedor:', error);
+    alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
+  }
+};
 
   const abrirModalAdicionarCliente = () => {
     setBuscaCliente('');
