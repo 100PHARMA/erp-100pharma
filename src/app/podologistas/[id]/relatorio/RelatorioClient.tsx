@@ -2,15 +2,10 @@
 
 import Link from 'next/link';
 import { useCallback } from 'react';
-
-type RelatorioRow = {
-  podologista_id: string;
-  podologista_nome: string;
-  cliente_id: string;
-  cliente_nome: string;
-  frascos_validos: number;
-  incentivo_total: string | number;
-};
+import {
+  gerarRelatorioPodologistaPdf,
+  RelatorioRow,
+} from '@/lib/relatorio-podologista-pdf';
 
 type RelatorioClientProps = {
   podologistaNome: string;
@@ -24,7 +19,6 @@ type RelatorioClientProps = {
 
 function formatDate(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null;
-  // data no formato YYYY-MM-DD
   const [year, month, day] = dateStr.split('-').map(Number);
   if (!year || !month || !day) return dateStr;
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
@@ -51,154 +45,17 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     return 'Período: todo o histórico válido';
   })();
 
-  const handleExportPdf = useCallback(async () => {
+  const handleExportPdf = useCallback(() => {
     try {
-      // import dinâmico para garantir que só corre no browser
-      const pdfMakeModule: any = await import('pdfmake/build/pdfmake');
-      const pdfFonts: any = await import('pdfmake/build/vfs_fonts');
-      const pdfMake = pdfMakeModule.default || pdfMakeModule;
-
-      pdfMake.vfs = pdfFonts.pdfMake.vfs;
-
-      const body: any[] = [];
-      // cabeçalho da tabela
-      body.push([
-        { text: 'Farmácia', style: 'tableHeader' },
-        { text: 'Frascos válidos', style: 'tableHeader', alignment: 'right' },
-        { text: 'Incentivo (€)', style: 'tableHeader', alignment: 'right' },
-      ]);
-
-      rows.forEach((row) => {
-        body.push([
-          { text: row.cliente_nome, alignment: 'left' },
-          {
-            text: String(row.frascos_validos),
-            alignment: 'right',
-          },
-          {
-            text: Number(row.incentivo_total)
-              .toFixed(2)
-              .replace('.', ','),
-            alignment: 'right',
-          },
-        ]);
+      gerarRelatorioPodologistaPdf({
+        podologistaNome,
+        rows,
+        totalFarmacias,
+        totalFrascosValidos,
+        totalIncentivos,
+        dataInicio,
+        dataFim,
       });
-
-      const docDefinition: any = {
-        info: {
-          title: `Relatório - ${podologistaNome}`,
-          subject: 'Relatório de incentivos por farmácia',
-        },
-        content: [
-          {
-            text: 'Relatório de Incentivos por Farmácia',
-            style: 'title',
-          },
-          {
-            text: podologistaNome,
-            style: 'podologistName',
-            margin: [0, 2, 0, 0],
-          },
-          {
-            text: periodoLabel,
-            style: 'period',
-            margin: [0, 8, 0, 16],
-          },
-          {
-            columns: [
-              {
-                width: '*',
-                stack: [
-                  { text: 'Total de farmácias', style: 'cardLabel' },
-                  { text: String(totalFarmacias), style: 'cardValue' },
-                ],
-              },
-              {
-                width: '*',
-                stack: [
-                  { text: 'Total de frascos válidos', style: 'cardLabel' },
-                  { text: String(totalFrascosValidos), style: 'cardValue' },
-                ],
-              },
-              {
-                width: '*',
-                stack: [
-                  { text: 'Total de incentivos (€)', style: 'cardLabel' },
-                  {
-                    text: totalIncentivos.toFixed(2).replace('.', ',') + ' €',
-                    style: 'cardValue',
-                  },
-                ],
-              },
-            ],
-            columnGap: 10,
-            margin: [0, 0, 0, 20],
-          },
-          {
-            style: 'tableBlock',
-            table: {
-              headerRows: 1,
-              widths: ['*', 'auto', 'auto'],
-              body,
-            },
-            layout: 'lightHorizontalLines',
-          },
-          {
-            text: `Gerado em ${new Date().toLocaleString('pt-PT')}`,
-            style: 'footer',
-            margin: [0, 16, 0, 0],
-          },
-        ],
-        styles: {
-          title: {
-            fontSize: 16,
-            bold: true,
-          },
-          podologistName: {
-            fontSize: 12,
-            bold: true,
-            color: '#2563eb',
-          },
-          period: {
-            fontSize: 10,
-            color: '#4b5563',
-          },
-          cardLabel: {
-            fontSize: 9,
-            color: '#6b7280',
-          },
-          cardValue: {
-            fontSize: 12,
-            bold: true,
-            color: '#111827',
-            margin: [0, 4, 0, 0],
-          },
-          tableHeader: {
-            bold: true,
-            fontSize: 10,
-            color: '#111827',
-          },
-          tableBlock: {
-            fontSize: 9,
-          },
-          footer: {
-            fontSize: 8,
-            color: '#6b7280',
-          },
-        },
-        defaultStyle: {
-          fontSize: 9,
-        },
-        pageMargins: [40, 40, 40, 40],
-      };
-
-      const fileNameSafe = podologistaNome
-        .replace(/\s+/g, '_')
-        .replace(/[^\w_-]/g, '');
-
-      pdfMake.createPdf(docDefinition).download(
-        `relatorio_podologista_${fileNameSafe || 'podologista'}.pdf`
-      );
     } catch (err) {
       console.error('Erro ao gerar PDF do podologista:', err);
       alert('Erro ao gerar o PDF. Verifique a consola do navegador.');
@@ -209,7 +66,8 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     totalFarmacias,
     totalFrascosValidos,
     totalIncentivos,
-    periodoLabel,
+    dataInicio,
+    dataFim,
   ]);
 
   return (
@@ -370,3 +228,4 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     </div>
   );
 }
+
