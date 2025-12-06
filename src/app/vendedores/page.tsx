@@ -638,101 +638,116 @@ export default function VendedoresPage() {
   };
 
   const gerarRelatorioMensal = async () => {
-  if (!vendedorSelecionado) {
-    alert('Selecione um vendedor para gerar o relatório.');
-    return;
-  }
+  if (!vendedorSelecionado) return;
 
   try {
-    // 1) Descobrir intervalo de datas a partir da seleção do estado
-    const { dataInicio, dataFim } = calcularIntervaloRelatorio();
+    // 1) Intervalo: por enquanto continua MÊS ATUAL
+    const hoje = new Date();
+    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
 
-    const dataInicioDate = new Date(dataInicio);
-    // incluo final do dia para não perder vendas do próprio diaFim
-    const dataFimDate = new Date(dataFim + 'T23:59:59');
+    const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
+    const dataFim = ultimoDiaMes.toISOString().split('T')[0];
 
-    // 2) Filtrar vendas do vendedor NO PERÍODO
-    const vendasPeriodo = vendas.filter((venda) => {
-      if (venda.vendedor_id !== vendedorSelecionado.id) return false;
-      const dataVenda = new Date(venda.data);
-      return dataVenda >= dataInicioDate && dataVenda <= dataFimDate;
+    // 2) Filtrar VENDAS do período para este vendedor
+    const vendasPeriodoBrutas = vendas.filter(
+      (v) =>
+        v.vendedor_id === vendedorSelecionado.id &&
+        v.data >= dataInicio &&
+        v.data <= dataFim
+    );
+
+    // 3) Enriquecer vendas com nome do cliente e frascos
+    const vendasPeriodo = vendasPeriodoBrutas.map((venda) => {
+      const cliente = clientes.find((c) => c.id === venda.cliente_id);
+      const itens = vendaItens.filter((item) => item.venda_id === venda.id);
+      const totalFrascos = itens.reduce(
+        (sum, item) => sum + (item.quantidade || 0),
+        0
+      );
+
+      return {
+        id: venda.id,
+        data: venda.data,
+        cliente_nome: cliente?.nome ?? 'N/A',
+        frascos: totalFrascos,
+        total_com_iva: venda.total_com_iva ?? 0,
+      };
     });
 
-    // 3) Itens das vendas e frascos
-    const vendasIdsPeriodo = vendasPeriodo.map((v) => v.id);
-    const vendaItensPeriodo = vendaItens.filter((item) =>
-      vendasIdsPeriodo.includes(item.venda_id)
+    // 4) Quilometragens do período
+    const quilometragensPeriodo = quilometragens.filter(
+      (km) =>
+        km.vendedor_id === vendedorSelecionado.id &&
+        km.data >= dataInicio &&
+        km.data <= dataFim
     );
 
-    const frascosPeriodo = vendaItensPeriodo.reduce(
-      (total, item) => total + (item.quantidade || 0),
-      0
+    // 5) Visitas do período (já com nome do cliente)
+    const visitasFiltradas = visitas.filter(
+      (visita) =>
+        visita.vendedor_id === vendedorSelecionado.id &&
+        visita.data_visita >= dataInicio &&
+        visita.data_visita <= dataFim
     );
 
-    // 4) Faturação do período
+    const visitasPeriodo = visitasFiltradas.map((visita) => {
+      const cliente = clientes.find((c) => c.id === visita.cliente_id);
+      return {
+        id: visita.id,
+        data_visita: visita.data_visita,
+        estado: visita.estado,
+        notas: visita.notas,
+        cliente_nome: cliente?.nome ?? 'N/A',
+      };
+    });
+
+    // 6) Calcular RESUMO com base nos dados filtrados
     const faturacaoPeriodo = vendasPeriodo.reduce(
-      (total, venda) => total + (venda.total_com_iva || 0),
+      (sum, v) => sum + (v.total_com_iva || 0),
       0
     );
 
-    // 5) Quilometragem do período
-    const quilometragensPeriodo = quilometragens.filter((km) => {
-      if (km.vendedor_id !== vendedorSelecionado.id) return false;
-      const dataKm = new Date(km.data);
-      return dataKm >= dataInicioDate && dataKm <= dataFimDate;
-    });
+    const frascosPeriodo = vendasPeriodo.reduce(
+      (sum, v) => sum + (v.frascos || 0),
+      0
+    );
 
-    const kmPeriodo = quilometragensPeriodo.reduce(
-      (total, km) => total + (km.km || 0),
+    const kmRodadosPeriodo = quilometragensPeriodo.reduce(
+      (sum, km) => sum + (km.km || 0),
       0
     );
 
     const custoKmPeriodo = quilometragensPeriodo.reduce(
-      (total, km) => total + (km.valor || 0),
+      (sum, km) => sum + (km.valor || 0),
       0
     );
 
-    // 6) Visitas do período
-    const visitasPeriodo = visitas.filter((visita) => {
-      if (visita.vendedor_id !== vendedorSelecionado.id) return false;
-      const dataVisita = new Date(visita.data_visita);
-      return dataVisita >= dataInicioDate && dataVisita <= dataFimDate;
-    });
-
-    // 7) Buscar configuração financeira para calcular comissão/meta do PERÍODO
-    const configFinanceira = await buscarConfiguracaoFinanceira();
-
-    const comissaoPeriodo = calcularComissaoProgressiva(
-      faturacaoPeriodo,
-      configFinanceira
-    );
-
-    const percentualMetaPeriodo = calcularPercentualMeta(
-      faturacaoPeriodo,
-      configFinanceira
-    );
-
-    // 8) Clientes ativos (mantemos a contagem atual da carteira do vendedor)
-    const clientesAtivosPeriodo = vendedorSelecionado.clientesAtivos;
+    const clientesAtivosPeriodo =
+      vendedorSelecionado.clientesAtivos ??
+      vendedorClientes.filter(
+        (vc) => vc.vendedor_id === vendedorSelecionado.id && vc.ativo
+      ).length;
 
     const resumo = {
-      faturacaoPeriodo,
-      comissaoPeriodo,
-      frascosPeriodo,
-      clientesAtivosPeriodo,
-      kmPeriodo,
-      custoKmPeriodo,
-      percentualMetaPeriodo,
+      vendasMes: faturacaoPeriodo,
+      frascosMes: frascosPeriodo,
+      comissaoMes: vendedorSelecionado.comissaoMes ?? 0, // por enquanto usamos o valor do card
+      percentualMeta: vendedorSelecionado.percentualMeta ?? 0,
+      clientesAtivos: clientesAtivosPeriodo,
+      kmRodadosMes: kmRodadosPeriodo,
+      custoKmMes: custoKmPeriodo,
     };
 
-    // 9) Dados básicos do vendedor
+    // 7) Dados básicos do vendedor
     const vendedorInfo = {
       nome: vendedorSelecionado.nome,
       email: vendedorSelecionado.email,
       telefone: vendedorSelecionado.telefone,
+      ativo: vendedorSelecionado.ativo,
     };
 
-    // 10) Chamar gerador de PDF
+    // 8) Chamar gerador de PDF (NÃO mexe aqui se já está assim)
     await gerarRelatorioVendedorPdf({
       vendedor: vendedorInfo,
       intervalo: { dataInicio, dataFim },
@@ -745,11 +760,10 @@ export default function VendedoresPage() {
     console.error('Erro ao gerar relatório do vendedor:', error);
     alert(
       'Erro ao gerar relatório do vendedor: ' +
-        (error?.message || 'Erro desconhecido')
+        (error.message || 'Erro desconhecido')
     );
   }
 };
-
 
   const abrirModalAdicionarCliente = () => {
     setBuscaCliente('');
