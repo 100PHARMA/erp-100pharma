@@ -3,240 +3,325 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// -----------------------------------------------------------------------------
-// TIPOS SIMPLES (flexíveis) PARA O RELATÓRIO
-// -----------------------------------------------------------------------------
+// ======================================================================
+// TIPOS
+// ======================================================================
 
-interface IntervaloDatas {
-  dataInicio: string;
-  dataFim: string;
+interface DadosVendedor {
+  nome: string;
+  email: string;
+  telefone: string;
+  ativo: boolean;
 }
 
-interface RelatorioVendedorParams {
-  vendedor: any;
-  intervalo: IntervaloDatas;
-  resumo: any;
-  vendas: any[];
-  quilometragens: any[];
-  visitas: any[];
+interface IntervaloRelatorio {
+  dataInicio: string; // 'YYYY-MM-DD'
+  dataFim: string;    // 'YYYY-MM-DD'
 }
 
-// -----------------------------------------------------------------------------
-// HELPERS SEGUROS (EVITAM UNDEFINED.toLocaleString)
-// -----------------------------------------------------------------------------
+interface ResumoPeriodo {
+  vendasMes: number;         // faturação no período
+  frascosMes: number;        // frascos vendidos
+  comissaoMes: number;       // comissão no período
+  percentualMeta: number;    // %
+  clientesAtivos: number;
+  kmRodadosMes: number;
+  custoKmMes: number;
+}
 
-function formatCurrency(value: number | null | undefined): string {
-  const numero = Number(value || 0);
-  return numero.toLocaleString('pt-PT', {
+interface VendaRelatorio {
+  id: string;
+  data: string;          // 'YYYY-MM-DD'
+  cliente_nome: string;
+  frascos: number;
+  total_com_iva: number;
+}
+
+interface QuilometragemRelatorio {
+  id: string;
+  data: string;          // 'YYYY-MM-DD'
+  km: number;
+  valor: number;
+}
+
+interface VisitaRelatorio {
+  id: string;
+  data_visita: string;   // 'YYYY-MM-DD'
+  estado: string;
+  notas: string;
+  cliente_nome: string;
+}
+
+interface DadosRelatorioVendedor {
+  vendedor: DadosVendedor;
+  intervalo: IntervaloRelatorio;
+  resumo: ResumoPeriodo;
+  vendas: VendaRelatorio[];
+  quilometragens: QuilometragemRelatorio[];
+  visitas: VisitaRelatorio[];
+}
+
+// ======================================================================
+// FUNÇÕES AUXILIARES
+// ======================================================================
+
+function formatDate(iso: string): string {
+  if (!iso) return '-';
+  const [year, month, day] = iso.split('-');
+  if (!year || !month || !day) return iso;
+  return `${day}/${month}/${year}`;
+}
+
+function formatCurrency(value: number | undefined | null): string {
+  const numero = typeof value === 'number' ? value : 0;
+  return `${numero.toLocaleString('pt-PT', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }) + ' €';
+  })} €`;
 }
 
-function formatNumber(value: number | null | undefined): string {
-  const numero = Number(value || 0);
-  return numero.toLocaleString('pt-PT');
+function formatKm(value: number | undefined | null): string {
+  const numero = typeof value === 'number' ? value : 0;
+  return `${numero.toLocaleString('pt-PT', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })} km`;
 }
 
-function formatKm(value: number | null | undefined): string {
-  const numero = Number(value || 0);
-  return numero.toLocaleString('pt-PT', {
-    maximumFractionDigits: 2,
-  }) + ' km';
+function formatPercent(value: number | undefined | null): string {
+  const numero = typeof value === 'number' ? value : 0;
+  return `${numero.toLocaleString('pt-PT', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })} %`;
 }
 
-function formatDate(value: string | Date | null | undefined): string {
-  if (!value) return '-';
-  const d = typeof value === 'string' ? new Date(value) : value;
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('pt-PT');
-}
+// ======================================================================
+// GERADOR DE PDF
+// ======================================================================
 
-// -----------------------------------------------------------------------------
-// FUNÇÃO PRINCIPAL
-// -----------------------------------------------------------------------------
+export async function gerarRelatorioVendedorPdf(
+  dados: DadosRelatorioVendedor
+): Promise<void> {
+  const { vendedor, intervalo, resumo, vendas, quilometragens, visitas } = dados;
 
-export async function gerarRelatorioVendedorPdf({
-  vendedor,
-  intervalo,
-  resumo,
-  vendas,
-  quilometragens,
-  visitas,
-}: RelatorioVendedorParams): Promise<void> {
-  try {
-    const doc = new jsPDF();
+  const doc = new jsPDF('p', 'pt', 'a4');
+  const marginLeft = 40;
+  let cursorY = 40;
 
-    // -------------------------------------------------------------------------
-    // CABEÇALHO
-    // -------------------------------------------------------------------------
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.text('Relatório Mensal do Vendedor', 14, 18);
+  // --------------------------------------------------
+  // TÍTULO
+  // --------------------------------------------------
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('Relatório Mensal do Vendedor', marginLeft, cursorY);
 
-    doc.setFontSize(11);
+  cursorY += 24;
+
+  // --------------------------------------------------
+  // INFORMAÇÕES DO PERÍODO E VENDEDOR
+  // --------------------------------------------------
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'normal');
+
+  doc.text(
+    `Período: ${formatDate(intervalo.dataInicio)} a ${formatDate(
+      intervalo.dataFim
+    )}`,
+    marginLeft,
+    cursorY
+  );
+  cursorY += 16;
+
+  doc.text(`Vendedor: ${vendedor.nome}`, marginLeft, cursorY);
+  cursorY += 14;
+
+  doc.text(`Email: ${vendedor.email || '-'}`, marginLeft, cursorY);
+  cursorY += 14;
+
+  doc.text(`Telefone: ${vendedor.telefone || '-'}`, marginLeft, cursorY);
+  cursorY += 24;
+
+  // --------------------------------------------------
+  // RESUMO DO PERÍODO
+  // --------------------------------------------------
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Resumo do Período', marginLeft, cursorY);
+  cursorY += 12;
+
+  autoTable(doc, {
+    startY: cursorY + 4,
+    head: [['Indicador', 'Valor']],
+    body: [
+      ['Faturação no período', formatCurrency(resumo.vendasMes)],
+      ['Comissão no período', formatCurrency(resumo.comissaoMes)],
+      ['Frascos vendidos', `${resumo.frascosMes ?? 0}`],
+      ['Clientes ativos', `${resumo.clientesAtivos ?? 0}`],
+      ['Km rodados', formatKm(resumo.kmRodadosMes)],
+      ['Custo de km', formatCurrency(resumo.custoKmMes)],
+      ['Percentual da meta', formatPercent(resumo.percentualMeta)],
+    ],
+    styles: {
+      font: 'helvetica',
+      fontSize: 10,
+      cellPadding: 6,
+    },
+    headStyles: {
+      fillColor: [30, 90, 140],
+      textColor: 255,
+    },
+    alternateRowStyles: {
+      fillColor: [245, 245, 245],
+    },
+    margin: { left: marginLeft, right: marginLeft },
+  });
+
+  cursorY = (doc as any).lastAutoTable.finalY + 30;
+
+  // --------------------------------------------------
+  // VENDAS NO PERÍODO
+  // --------------------------------------------------
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Vendas no período', marginLeft, cursorY);
+  cursorY += 12;
+
+  if (!vendas || vendas.length === 0) {
     doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
     doc.text(
-      `Período: ${formatDate(intervalo.dataInicio)} a ${formatDate(intervalo.dataFim)}`,
-      14,
-      26
+      'Nenhuma venda registrada neste período.',
+      marginLeft,
+      cursorY + 10
     );
-
-    doc.text(`Vendedor: ${vendedor?.nome || '-'}`, 14, 32);
-    doc.text(`Email: ${vendedor?.email || '-'}`, 14, 38);
-    if (vendedor?.telefone) {
-      doc.text(`Telefone: ${vendedor.telefone}`, 14, 44);
-    }
-
-    let posY = vendedor?.telefone ? 52 : 48;
-
-    // -------------------------------------------------------------------------
-    // RESUMO GERAL
-    // -------------------------------------------------------------------------
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('Resumo do Período', 14, posY);
-    posY += 6;
+    cursorY += 30;
+  } else {
+    const corpoVendas = vendas.map((v) => [
+      formatDate(v.data),
+      v.cliente_nome || '-',
+      `${v.frascos ?? 0}`,
+      formatCurrency(v.total_com_iva),
+    ]);
 
     autoTable(doc, {
-      startY: posY,
-      styles: { fontSize: 10 },
-      head: [['Indicador', 'Valor']],
-      body: [
-        ['Faturação no período', formatCurrency(resumo?.vendasMes)],
-        ['Comissão no período', formatCurrency(resumo?.comissaoMes)],
-        ['Frascos vendidos', formatNumber(resumo?.frascosMes)],
-        ['Clientes ativos', formatNumber(resumo?.clientesAtivos)],
-        ['Km rodados', formatKm(resumo?.kmRodadosMes)],
-        ['Custo de km', formatCurrency(resumo?.custoKmMes)],
-        [
-          'Percentual da meta',
-          `${Number(resumo?.percentualMeta || 0).toFixed(0)} %`,
-        ],
-      ],
+      startY: cursorY + 4,
+      head: [['Data', 'Cliente', 'Frascos', 'Total (com IVA)']],
+      body: corpoVendas,
+      styles: {
+        font: 'helvetica',
+        fontSize: 10,
+        cellPadding: 6,
+      },
+      headStyles: {
+        fillColor: [30, 90, 140],
+        textColor: 255,
+      },
+      alternateRowStyles: {
+        fillColor: [245, 245, 245],
+      },
+      margin: { left: marginLeft, right: marginLeft },
     });
 
-    // Posição após a tabela de resumo
-    // @ts-ignore: autoTable adiciona lastAutoTable em runtime
-    posY = doc.lastAutoTable.finalY + 10;
-
-    // -------------------------------------------------------------------------
-    // VENDAS
-    // -------------------------------------------------------------------------
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('Vendas no período', 14, posY);
-    posY += 6;
-
-    if (!vendas || vendas.length === 0) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text('Nenhuma venda registrada neste período.', 14, posY);
-      posY += 10;
-    } else {
-      autoTable(doc, {
-        startY: posY,
-        styles: { fontSize: 9 },
-        head: [['Data', 'Cliente', 'Frascos', 'Total (com IVA)']],
-        body: vendas.map((venda: any) => {
-          const data = formatDate(venda.data);
-          const clienteNome =
-            venda.cliente?.nome ||
-            venda.cliente_nome ||
-            venda.cliente ||
-            '-';
-          const frascos = formatNumber(venda.frascos || venda.total_frascos);
-          const total = formatCurrency(
-            venda.total_com_iva ?? venda.total ?? venda.valor_total
-          );
-          return [data, clienteNome, frascos, total];
-        }),
-      });
-      // @ts-ignore
-      posY = doc.lastAutoTable.finalY + 10;
-    }
-
-    // -------------------------------------------------------------------------
-    // QUILOMETRAGEM
-    // -------------------------------------------------------------------------
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('Quilometragem no período', 14, posY);
-    posY += 6;
-
-    if (!quilometragens || quilometragens.length === 0) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text('Nenhum registo de quilometragem neste período.', 14, posY);
-      posY += 10;
-    } else {
-      autoTable(doc, {
-        startY: posY,
-        styles: { fontSize: 9 },
-        head: [['Data', 'Km', 'Valor (€)']],
-        body: quilometragens.map((km: any) => [
-          formatDate(km.data),
-          formatKm(km.km),
-          formatCurrency(km.valor),
-        ]),
-      });
-      // @ts-ignore
-      posY = doc.lastAutoTable.finalY + 10;
-    }
-
-    // -------------------------------------------------------------------------
-    // VISITAS
-    // -------------------------------------------------------------------------
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('Visitas no período', 14, posY);
-    posY += 6;
-
-    if (!visitas || visitas.length === 0) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text('Nenhuma visita registrada neste período.', 14, posY);
-      posY += 10;
-    } else {
-      autoTable(doc, {
-        startY: posY,
-        styles: { fontSize: 9 },
-        head: [['Data', 'Cliente', 'Estado', 'Notas']],
-        body: visitas.map((visita: any) => {
-          const clienteNome =
-            visita.cliente?.nome ||
-            visita.cliente_nome ||
-            visita.cliente ||
-            '-';
-          return [
-            formatDate(visita.data_visita),
-            clienteNome,
-            visita.estado || '-',
-            visita.notas || '',
-          ];
-        }),
-        bodyStyles: {
-          cellWidth: 'wrap',
-        },
-        columnStyles: {
-          3: { cellWidth: 80 }, // coluna de notas
-        },
-      });
-    }
-
-    // -------------------------------------------------------------------------
-    // FOOTER E DOWNLOAD
-    // -------------------------------------------------------------------------
-    const dataAgora = new Date();
-    const nomeArquivo = `Relatorio_${(vendedor?.nome || 'vendedor')
-      .replace(/\s+/g, '_')
-      .replace(/[^\w_]/g, '')}_${dataAgora
-      .toISOString()
-      .slice(0, 10)}.pdf`;
-
-    doc.save(nomeArquivo);
-  } catch (error) {
-    console.error('Erro dentro de gerarRelatorioVendedorPdf:', error);
-    throw error;
+    cursorY = (doc as any).lastAutoTable.finalY + 30;
   }
+
+  // --------------------------------------------------
+  // QUILOMETRAGEM NO PERÍODO
+  // --------------------------------------------------
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Quilometragem no período', marginLeft, cursorY);
+  cursorY += 12;
+
+  if (!quilometragens || quilometragens.length === 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(
+      'Nenhum registo de quilometragem neste período.',
+      marginLeft,
+      cursorY + 10
+    );
+    cursorY += 30;
+  } else {
+    const corpoKm = quilometragens.map((km) => [
+      formatDate(km.data),
+      `${km.km ?? 0}`,
+      formatCurrency(km.valor),
+    ]);
+
+    autoTable(doc, {
+      startY: cursorY + 4,
+      head: [['Data', 'Km', 'Valor']],
+      body: corpoKm,
+      styles: {
+        font: 'helvetica',
+        fontSize: 10,
+        cellPadding: 6,
+      },
+      headStyles: {
+        fillColor: [30, 90, 140],
+        textColor: 255,
+      },
+      alternateRowStyles: {
+        fillColor: [245, 245, 245],
+      },
+      margin: { left: marginLeft, right: marginLeft },
+    });
+
+    cursorY = (doc as any).lastAutoTable.finalY + 30;
+  }
+
+  // --------------------------------------------------
+  // VISITAS NO PERÍODO
+  // --------------------------------------------------
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Visitas no período', marginLeft, cursorY);
+  cursorY += 12;
+
+  if (!visitas || visitas.length === 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(
+      'Nenhuma visita registrada neste período.',
+      marginLeft,
+      cursorY + 10
+    );
+  } else {
+    const corpoVisitas = visitas.map((visita) => [
+      formatDate(visita.data_visita),
+      visita.cliente_nome || '-',
+      visita.estado || '-',
+      visita.notas || '',
+    ]);
+
+    autoTable(doc, {
+      startY: cursorY + 4,
+      head: [['Data', 'Cliente', 'Estado', 'Notas']],
+      body: corpoVisitas,
+      styles: {
+        font: 'helvetica',
+        fontSize: 10,
+        cellPadding: 6,
+      },
+      headStyles: {
+        fillColor: [30, 90, 140],
+        textColor: 255,
+      },
+      alternateRowStyles: {
+        fillColor: [245, 245, 245],
+      },
+      margin: { left: marginLeft, right: marginLeft },
+    });
+  }
+
+  // --------------------------------------------------
+  // DOWNLOAD
+  // --------------------------------------------------
+  const nomeFicheiro = `relatorio-vendedor-${vendedor.nome
+    .toLowerCase()
+    .replace(/\s+/g, '-')}-${intervalo.dataInicio}-${intervalo.dataFim}.pdf`;
+
+  doc.save(nomeFicheiro);
 }
