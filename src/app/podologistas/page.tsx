@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Search, User, TrendingUp, Award, DollarSign, X, Edit } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
+import Link from 'next/link';
 
 // Tipos baseados no schema real do Supabase
 interface Podologista {
