@@ -5,9 +5,6 @@ import { Settings, Building2, FileText, DollarSign, TrendingUp, Award, Save, Ale
 import {
   configuracaoEmpresa,
   configuracaoFiscal,
-  parametrosFinanceiros,
-  comissaoFase1,
-  comissaoFase2,
   bonusVolumeMensal,
   bonusMarcoAnual,
 } from '@/lib/data';
@@ -25,16 +22,29 @@ export default function ConfiguracoesPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState(false);
 
-  // Estados para o formulário de configuração financeira
+  // Estados para o formulário de configuração financeira (TODOS OS CAMPOS)
   const [formConfig, setFormConfig] = useState({
-    meta_mensal_vendedor: 7000,
-    faixa1_limite: 3000,
-    comissao_faixa1_percent: 5,
-    faixa2_limite: 7000,
-    comissao_faixa2_percent: 8,
-    comissao_faixa3_percent: 10,
-    incentivo_podologista_por_frasco: 1.0,
-    fundo_farmaceutico_por_frasco: 0.28,
+    // Meta e Faixas
+    meta_mensal: 0,
+    faixa1_limite: 0,
+    comissao_faixa1: 0,
+    faixa2_limite: 0,
+    comissao_faixa2: 0,
+    comissao_faixa3: 0,
+    // Incentivos e Fundos
+    incentivo_podologista: 0,
+    fundo_farmaceutico: 0,
+    // Parâmetros Financeiros
+    custo_aquisicao_padrao: 0,
+    custo_variavel_padrao: 0,
+    valor_km: 0,
+    custo_fixo_mensal: 0,
+    capital_giro_ideal: 0,
+    // Comissões Avançadas
+    comissao_farmacia_nova: 0,
+    comissao_farmacia_ativa: 0,
+    teto_mensal_farmacia_ativa: 0,
+    limite_farmacias_vendedor: 0,
   });
 
   const tabs = [
@@ -45,9 +55,9 @@ export default function ConfiguracoesPage() {
     { id: 'config-financeira' as const, label: 'Configurações Financeiras', icon: Settings },
   ];
 
-  // Carregar configuração financeira ao montar o componente
+  // Carregar configuração financeira ao montar o componente ou trocar para abas relevantes
   useEffect(() => {
-    if (activeTab === 'config-financeira') {
+    if (activeTab === 'config-financeira' || activeTab === 'financeiro' || activeTab === 'comissoes') {
       carregarConfiguracao();
     }
   }, [activeTab]);
@@ -58,15 +68,26 @@ export default function ConfiguracoesPage() {
       setErro(null);
       const config = await buscarConfiguracaoFinanceira();
       setConfigFinanceira(config);
+      
+      // Preencher formulário com valores do banco (ou padrão se vazio)
       setFormConfig({
-        meta_mensal_vendedor: config.meta_mensal_vendedor,
-        faixa1_limite: config.faixa1_limite,
-        comissao_faixa1_percent: config.comissao_faixa1_percent,
-        faixa2_limite: config.faixa2_limite,
-        comissao_faixa2_percent: config.comissao_faixa2_percent,
-        comissao_faixa3_percent: config.comissao_faixa3_percent,
-        incentivo_podologista_por_frasco: config.incentivo_podologista_por_frasco,
-        fundo_farmaceutico_por_frasco: config.fundo_farmaceutico_por_frasco,
+        meta_mensal: config.meta_mensal || 0,
+        faixa1_limite: config.faixa1_limite || 0,
+        comissao_faixa1: config.comissao_faixa1 || 0,
+        faixa2_limite: config.faixa2_limite || 0,
+        comissao_faixa2: config.comissao_faixa2 || 0,
+        comissao_faixa3: config.comissao_faixa3 || 0,
+        incentivo_podologista: config.incentivo_podologista || 0,
+        fundo_farmaceutico: config.fundo_farmaceutico || 0,
+        custo_aquisicao_padrao: config.custo_aquisicao_padrao || 0,
+        custo_variavel_padrao: config.custo_variavel_padrao || 0,
+        valor_km: config.valor_km || 0,
+        custo_fixo_mensal: config.custo_fixo_mensal || 0,
+        capital_giro_ideal: config.capital_giro_ideal || 0,
+        comissao_farmacia_nova: config.comissao_farmacia_nova || 0,
+        comissao_farmacia_ativa: config.comissao_farmacia_ativa || 0,
+        teto_mensal_farmacia_ativa: config.teto_mensal_farmacia_ativa || 0,
+        limite_farmacias_vendedor: config.limite_farmacias_vendedor || 0,
       });
     } catch (error: any) {
       console.error('Erro ao carregar configuração:', error);
@@ -82,25 +103,18 @@ export default function ConfiguracoesPage() {
       setErro(null);
       setSucesso(false);
 
-      // Validações
-      if (formConfig.meta_mensal_vendedor <= 0) {
-        throw new Error('Meta mensal deve ser maior que zero');
+      // Validações básicas
+      if (formConfig.meta_mensal < 0) {
+        throw new Error('Meta mensal não pode ser negativa');
       }
-      if (formConfig.faixa1_limite <= 0 || formConfig.faixa2_limite <= 0) {
-        throw new Error('Limites de faixas devem ser maiores que zero');
+      if (formConfig.faixa1_limite < 0 || formConfig.faixa2_limite < 0) {
+        throw new Error('Limites de faixas não podem ser negativos');
       }
-      if (formConfig.faixa2_limite <= formConfig.faixa1_limite) {
+      if (formConfig.faixa2_limite > 0 && formConfig.faixa1_limite > 0 && formConfig.faixa2_limite <= formConfig.faixa1_limite) {
         throw new Error('Limite da Faixa 2 deve ser maior que o limite da Faixa 1');
       }
-      if (
-        formConfig.comissao_faixa1_percent < 0 ||
-        formConfig.comissao_faixa2_percent < 0 ||
-        formConfig.comissao_faixa3_percent < 0
-      ) {
-        throw new Error('Percentagens de comissão não podem ser negativas');
-      }
 
-      // Criar novo registro (histórico)
+      // Criar novo registro (INSERT) - NUNCA UPDATE
       await criarConfiguracaoFinanceira(formConfig);
 
       setSucesso(true);
@@ -324,226 +338,278 @@ export default function ConfiguracoesPage() {
           </div>
         )}
 
+        {/* ABA FINANCEIRO - USA DADOS REAIS DO SUPABASE */}
         {activeTab === 'financeiro' && (
           <div>
             <h2 className="text-xl font-bold text-gray-900 mb-6">Parâmetros Financeiros</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Custo de Aquisição Padrão (€)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  defaultValue={parametrosFinanceiros.custoAquisicaoPadrao}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            
+            {carregando ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                  <p className="text-gray-600">Carregando configurações...</p>
+                </div>
               </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Custo de Aquisição Padrão (€)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formConfig.custo_aquisicao_padrao}
+                      onChange={(e) =>
+                        setFormConfig({ ...formConfig, custo_aquisicao_padrao: Number(e.target.value) })
+                      }
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Custo Variável Padrão (€)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  defaultValue={parametrosFinanceiros.custoVariavelPadrao}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Custo Variável Padrão (€)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formConfig.custo_variavel_padrao}
+                      onChange={(e) =>
+                        setFormConfig({ ...formConfig, custo_variavel_padrao: Number(e.target.value) })
+                      }
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Valor por KM (€)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  defaultValue={parametrosFinanceiros.valorKm}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Valor por KM (€)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formConfig.valor_km}
+                      onChange={(e) =>
+                        setFormConfig({ ...formConfig, valor_km: Number(e.target.value) })
+                      }
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Custo Fixo Mensal (€)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  defaultValue={parametrosFinanceiros.custoFixoMensal}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Custo Fixo Mensal (€)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formConfig.custo_fixo_mensal}
+                      onChange={(e) =>
+                        setFormConfig({ ...formConfig, custo_fixo_mensal: Number(e.target.value) })
+                      }
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Capital de Giro Ideal (€)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  defaultValue={parametrosFinanceiros.capitalGiroIdeal}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Capital de Giro Ideal (€)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formConfig.capital_giro_ideal}
+                      onChange={(e) =>
+                        setFormConfig({ ...formConfig, capital_giro_ideal: Number(e.target.value) })
+                      }
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                {/* Botão Salvar */}
+                <div className="mt-8 pt-6 border-t border-gray-200">
+                  <button
+                    onClick={salvarConfiguracao}
+                    disabled={salvando}
+                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                  >
+                    {salvando ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-5 h-5" />
+                        <span className="font-medium">Guardar Alterações</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
+        {/* ABA COMISSÕES - USA DADOS REAIS DO SUPABASE */}
         {activeTab === 'comissoes' && (
           <div className="space-y-8">
-            {/* Fase 1 */}
-            <div>
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Comissões Fase 1 (Faixas)</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-green-50 rounded-lg p-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Percentagem 1 (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase1.percentagem1}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <p className="text-xs text-gray-600 mt-2">
-                    Até {comissaoFase1.limite1.toLocaleString('pt-PT')}€
-                  </p>
-                </div>
-
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Percentagem 2 (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase1.percentagem2}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <p className="text-xs text-gray-600 mt-2">
-                    Até {comissaoFase1.limite2.toLocaleString('pt-PT')}€
-                  </p>
-                </div>
-
-                <div className="bg-purple-50 rounded-lg p-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Percentagem 3 (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase1.percentagem3}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <p className="text-xs text-gray-600 mt-2">
-                    Acima de {comissaoFase1.limite2.toLocaleString('pt-PT')}€
-                  </p>
+            {carregando ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                  <p className="text-gray-600">Carregando configurações...</p>
                 </div>
               </div>
-            </div>
-
-            {/* Fase 2 */}
-            <div>
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Comissões Fase 2 (Avançada)</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            ) : (
+              <>
+                {/* Comissões Avançadas */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Comissão Farmácia Nova (€)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase2.valorComissaoFarmaciaNova}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Comissão Farmácia Ativa (€)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase2.valorComissaoFarmaciaAtiva}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Teto Mensal Farmácia Ativa (€)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    defaultValue={comissaoFase2.tetoMensalComissaoFarmaciaAtiva}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Limite Farmácias por Vendedor
-                  </label>
-                  <input
-                    type="number"
-                    defaultValue={comissaoFase2.limiteFarmaciasPorVendedor}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Bónus Volume */}
-            <div>
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Bónus por Volume Mensal</h2>
-              <div className="space-y-3">
-                {bonusVolumeMensal.map((bonus) => (
-                  <div key={bonus.id} className="flex items-center gap-4 p-4 bg-orange-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">
-                        {bonus.quantidadeFrascos.toLocaleString('pt-PT')} frascos
-                      </p>
+                  <h2 className="text-xl font-bold text-gray-900 mb-6">Comissões Avançadas</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Comissão Farmácia Nova (€)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formConfig.comissao_farmacia_nova}
+                        onChange={(e) =>
+                          setFormConfig({ ...formConfig, comissao_farmacia_nova: Number(e.target.value) })
+                        }
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Award className="w-5 h-5 text-orange-600" />
-                      <span className="font-bold text-orange-600">
-                        {bonus.valorBonus.toLocaleString('pt-PT')}€
-                      </span>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Comissão Farmácia Ativa (€)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formConfig.comissao_farmacia_ativa}
+                        onChange={(e) =>
+                          setFormConfig({ ...formConfig, comissao_farmacia_ativa: Number(e.target.value) })
+                        }
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Teto Mensal Farmácia Ativa (€)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formConfig.teto_mensal_farmacia_ativa}
+                        onChange={(e) =>
+                          setFormConfig({ ...formConfig, teto_mensal_farmacia_ativa: Number(e.target.value) })
+                        }
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Limite Farmácias por Vendedor
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={formConfig.limite_farmacias_vendedor}
+                        onChange={(e) =>
+                          setFormConfig({ ...formConfig, limite_farmacias_vendedor: Number(e.target.value) })
+                        }
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
 
-            {/* Bónus Marcos */}
-            <div>
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Bónus por Marcos Anuais</h2>
-              <div className="space-y-3">
-                {bonusMarcoAnual.map((bonus) => (
-                  <div key={bonus.id} className="flex items-center gap-4 p-4 bg-purple-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">
-                        {bonus.quantidadeNovasFarmacias} novas farmácias
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Award className="w-5 h-5 text-purple-600" />
-                      <span className="font-bold text-purple-600">
-                        {bonus.valorBonus.toLocaleString('pt-PT')}€
-                      </span>
-                    </div>
+                {/* Bónus Volume (apenas visualização) */}
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 mb-6">Bónus por Volume Mensal</h2>
+                  <div className="space-y-3">
+                    {bonusVolumeMensal.map((bonus) => (
+                      <div key={bonus.id} className="flex items-center gap-4 p-4 bg-orange-50 rounded-lg">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">
+                            {bonus.quantidadeFrascos.toLocaleString('pt-PT')} frascos
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Award className="w-5 h-5 text-orange-600" />
+                          <span className="font-bold text-orange-600">
+                            {bonus.valorBonus.toLocaleString('pt-PT')}€
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+
+                {/* Bónus Marcos (apenas visualização) */}
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 mb-6">Bónus por Marcos Anuais</h2>
+                  <div className="space-y-3">
+                    {bonusMarcoAnual.map((bonus) => (
+                      <div key={bonus.id} className="flex items-center gap-4 p-4 bg-purple-50 rounded-lg">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">
+                            {bonus.quantidadeNovasFarmacias} novas farmácias
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Award className="w-5 h-5 text-purple-600" />
+                          <span className="font-bold text-purple-600">
+                            {bonus.valorBonus.toLocaleString('pt-PT')}€
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Botão Salvar */}
+                <div className="pt-6 border-t border-gray-200">
+                  <button
+                    onClick={salvarConfiguracao}
+                    disabled={salvando}
+                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                  >
+                    {salvando ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-5 h-5" />
+                        <span className="font-medium">Guardar Alterações</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {/* ABA: CONFIGURAÇÕES FINANCEIRAS */}
+        {/* ABA: CONFIGURAÇÕES FINANCEIRAS - USA DADOS REAIS DO SUPABASE */}
         {activeTab === 'config-financeira' && (
           <div>
             <div className="mb-6">
@@ -596,9 +662,9 @@ export default function ConfiguracoesPage() {
                       type="number"
                       step="100"
                       min="0"
-                      value={formConfig.meta_mensal_vendedor}
+                      value={formConfig.meta_mensal}
                       onChange={(e) =>
-                        setFormConfig({ ...formConfig, meta_mensal_vendedor: Number(e.target.value) })
+                        setFormConfig({ ...formConfig, meta_mensal: Number(e.target.value) })
                       }
                       className="w-full px-4 py-3 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg font-semibold"
                     />
@@ -640,11 +706,11 @@ export default function ConfiguracoesPage() {
                             step="0.1"
                             min="0"
                             max="100"
-                            value={formConfig.comissao_faixa1_percent}
+                            value={formConfig.comissao_faixa1}
                             onChange={(e) =>
                               setFormConfig({
                                 ...formConfig,
-                                comissao_faixa1_percent: Number(e.target.value),
+                                comissao_faixa1: Number(e.target.value),
                               })
                             }
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
@@ -684,11 +750,11 @@ export default function ConfiguracoesPage() {
                             step="0.1"
                             min="0"
                             max="100"
-                            value={formConfig.comissao_faixa2_percent}
+                            value={formConfig.comissao_faixa2}
                             onChange={(e) =>
                               setFormConfig({
                                 ...formConfig,
-                                comissao_faixa2_percent: Number(e.target.value),
+                                comissao_faixa2: Number(e.target.value),
                               })
                             }
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -725,11 +791,11 @@ export default function ConfiguracoesPage() {
                             step="0.1"
                             min="0"
                             max="100"
-                            value={formConfig.comissao_faixa3_percent}
+                            value={formConfig.comissao_faixa3}
                             onChange={(e) =>
                               setFormConfig({
                                 ...formConfig,
-                                comissao_faixa3_percent: Number(e.target.value),
+                                comissao_faixa3: Number(e.target.value),
                               })
                             }
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
@@ -755,11 +821,11 @@ export default function ConfiguracoesPage() {
                         type="number"
                         step="0.01"
                         min="0"
-                        value={formConfig.incentivo_podologista_por_frasco}
+                        value={formConfig.incentivo_podologista}
                         onChange={(e) =>
                           setFormConfig({
                             ...formConfig,
-                            incentivo_podologista_por_frasco: Number(e.target.value),
+                            incentivo_podologista: Number(e.target.value),
                           })
                         }
                         className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-lg font-semibold"
@@ -777,11 +843,11 @@ export default function ConfiguracoesPage() {
                         type="number"
                         step="0.01"
                         min="0"
-                        value={formConfig.fundo_farmaceutico_por_frasco}
+                        value={formConfig.fundo_farmaceutico}
                         onChange={(e) =>
                           setFormConfig({
                             ...formConfig,
-                            fundo_farmaceutico_por_frasco: Number(e.target.value),
+                            fundo_farmaceutico: Number(e.target.value),
                           })
                         }
                         className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-lg font-semibold"
@@ -834,8 +900,8 @@ export default function ConfiguracoesPage() {
           </div>
         )}
 
-        {/* Save Button (outras abas) */}
-        {activeTab !== 'config-financeira' && (
+        {/* Save Button (aba empresa e fiscal - não conectadas ao Supabase ainda) */}
+        {(activeTab === 'empresa' || activeTab === 'fiscal') && (
           <div className="mt-8 pt-6 border-t border-gray-200">
             <button className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105">
               <Save className="w-5 h-5" />

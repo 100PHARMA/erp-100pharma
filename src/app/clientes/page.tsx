@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Users, Plus, Search, Filter, Building2, UserCircle, Stethoscope, User, X, Eye, Trash2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import SupabaseSetupGuide from '@/components/SupabaseSetupGuide';
+import { buscarPodologistasAtivos, type Podologista } from '@/lib/clientes';
 
 type TipoCliente = 'Farmacia' | 'Podologista' | 'Clinica' | 'Consumidor';
 
@@ -16,8 +17,12 @@ interface Cliente {
   telefone: string | null;
   email: string | null;
   ativo: boolean;
+  podologista_id: string | null;
   created_at: string;
   updated_at: string;
+  podologistas?: {
+    nome: string;
+  };
 }
 
 const tipoIcons = {
@@ -32,6 +37,7 @@ export default function ClientesPage() {
   const [filterTipo, setFilterTipo] = useState<TipoCliente | 'TODOS'>('TODOS');
   const [filterAtivo, setFilterAtivo] = useState<'TODOS' | 'ATIVO' | 'INATIVO'>('TODOS');
   const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [podologistas, setPodologistas] = useState<Podologista[]>([]);
   const [loading, setLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [modalNovoCliente, setModalNovoCliente] = useState(false);
@@ -39,7 +45,7 @@ export default function ClientesPage() {
   const [clienteSelecionado, setClienteSelecionado] = useState<Cliente | null>(null);
   const [modoEdicao, setModoEdicao] = useState(false);
   const [clienteEditando, setClienteEditando] = useState<Cliente | null>(null);
-  const [novoCliente, setNovoCliente] = useState<Partial<Cliente>>({
+  const [novoCliente, setNovoCliente] = useState<Partial<Cliente>>(({
     nome: '',
     nif: '',
     tipo: 'Farmacia',
@@ -47,19 +53,34 @@ export default function ClientesPage() {
     telefone: '',
     email: '',
     ativo: true,
-  });
+    podologista_id: null,
+  }));
 
-  // Carregar clientes do Supabase
+  // Carregar clientes e podologistas do Supabase
   useEffect(() => {
-    carregarClientes();
+    carregarDados();
   }, []);
+
+  const carregarDados = async () => {
+    await Promise.all([carregarClientes(), carregarPodologistas()]);
+  };
+
+  const carregarPodologistas = async () => {
+    const podologistasAtivos = await buscarPodologistasAtivos();
+    setPodologistas(podologistasAtivos);
+  };
 
   const carregarClientes = async () => {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('clientes')
-        .select('*')
+        .select(`
+          *,
+          podologistas:podologista_id (
+            nome
+          )
+        `)
         .order('nome', { ascending: true });
 
       if (error) {
@@ -126,7 +147,8 @@ export default function ClientesPage() {
           morada: novoCliente.morada || null,
           telefone: novoCliente.telefone || null,
           email: novoCliente.email || null,
-          ativo: novoCliente.ativo !== false
+          ativo: novoCliente.ativo !== false,
+          podologista_id: novoCliente.podologista_id || null
         }]);
 
       if (error) throw error;
@@ -141,6 +163,7 @@ export default function ClientesPage() {
         telefone: '',
         email: '',
         ativo: true,
+        podologista_id: null,
       });
       alert('Cliente adicionado com sucesso!');
     } catch (error) {
@@ -183,7 +206,8 @@ export default function ClientesPage() {
           morada: clienteEditando.morada || null,
           telefone: clienteEditando.telefone || null,
           email: clienteEditando.email || null,
-          ativo: clienteEditando.ativo
+          ativo: clienteEditando.ativo,
+          podologista_id: clienteEditando.podologista_id || null
         })
         .eq('id', clienteEditando.id);
 
@@ -386,6 +410,9 @@ export default function ClientesPage() {
                   Tipo
                 </th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700 hidden lg:table-cell">
+                  Podologista
+                </th>
+                <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700 hidden lg:table-cell">
                   Telefone
                 </th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700 hidden xl:table-cell">
@@ -417,6 +444,11 @@ export default function ClientesPage() {
                     </td>
                     <td className="py-4 px-4 hidden md:table-cell">
                       <span className="text-sm text-gray-600">{cliente.tipo || 'N/A'}</span>
+                    </td>
+                    <td className="py-4 px-4 hidden lg:table-cell">
+                      <span className="text-sm text-gray-600">
+                        {cliente.podologistas?.nome || '-'}
+                      </span>
                     </td>
                     <td className="py-4 px-4 hidden lg:table-cell">
                       <span className="text-sm text-gray-600">{cliente.telefone || 'N/A'}</span>
@@ -523,6 +555,24 @@ export default function ClientesPage() {
                     <option value="Podologista">Podologista</option>
                     <option value="Clinica">Clínica</option>
                     <option value="Consumidor">Consumidor</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Podologista
+                  </label>
+                  <select
+                    value={novoCliente.podologista_id || ''}
+                    onChange={(e) => setNovoCliente({ ...novoCliente, podologista_id: e.target.value || null })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">Nenhum podologista</option>
+                    {podologistas.map((podo) => (
+                      <option key={podo.id} value={podo.id}>
+                        {podo.nome}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -660,6 +710,25 @@ export default function ClientesPage() {
                     <option value="Podologista">Podologista</option>
                     <option value="Clinica">Clínica</option>
                     <option value="Consumidor">Consumidor</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Podologista
+                  </label>
+                  <select
+                    value={clienteEditando.podologista_id || ''}
+                    onChange={(e) => setClienteEditando({ ...clienteEditando, podologista_id: e.target.value || null })}
+                    disabled={!modoEdicao}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50"
+                  >
+                    <option value="">Nenhum podologista</option>
+                    {podologistas.map((podo) => (
+                      <option key={podo.id} value={podo.id}>
+                        {podo.nome}
+                      </option>
+                    ))}
                   </select>
                 </div>
 

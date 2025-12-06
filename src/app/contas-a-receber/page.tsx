@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/formatCurrency';
 import Link from 'next/link';
 import ModalPagamento from '../faturas/components/ModalPagamento';
+import SupabaseSetupGuide from '@/components/SupabaseSetupGuide';
 
 interface Fatura {
   id: string;
@@ -22,6 +23,7 @@ interface Fatura {
 export default function ContasAReceberPage() {
   const [faturas, setFaturas] = useState<Fatura[]>([]);
   const [loading, setLoading] = useState(true);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [filtroVencimento, setFiltroVencimento] = useState('todas');
@@ -34,6 +36,29 @@ export default function ContasAReceberPage() {
   const carregarFaturas = async () => {
     try {
       setLoading(true);
+      
+      // Verificar se Supabase está configurado
+      const { data: testData, error: testError } = await supabase
+        .from('faturas')
+        .select('id')
+        .limit(1);
+
+      if (testError) {
+        console.error('Erro ao conectar com Supabase:', testError);
+        
+        // Verificar se é erro de configuração/permissão
+        if (
+          testError.message.includes('Failed to fetch') ||
+          testError.message.includes('JWT') ||
+          testError.message.includes('permission') ||
+          testError.message.includes('policy')
+        ) {
+          setNeedsSetup(true);
+          setLoading(false);
+          return;
+        }
+      }
+
       const { data, error } = await supabase
         .from('faturas')
         .select(`
@@ -63,8 +88,21 @@ export default function ContasAReceberPage() {
         }));
         setFaturas(faturasComCliente);
       }
-    } catch (err) {
-      console.error('Erro ao buscar faturas:', err);
+      
+      setNeedsSetup(false);
+    } catch (err: any) {
+      console.error('Erro ao carregar faturas:', {
+        message: err?.message || 'Erro desconhecido',
+        details: err?.toString() || '',
+        hint: 'Verifique se o Supabase está configurado corretamente',
+        code: err?.code || ''
+      });
+      
+      // Se for erro de fetch, mostrar guia de configuração
+      if (err?.message?.includes('Failed to fetch') || err?.message?.includes('fetch')) {
+        setNeedsSetup(true);
+      }
+      
       setFaturas([]);
     } finally {
       setLoading(false);
@@ -208,6 +246,10 @@ export default function ContasAReceberPage() {
         </div>
       </div>
     );
+  }
+
+  if (needsSetup) {
+    return <SupabaseSetupGuide />;
   }
 
   return (
