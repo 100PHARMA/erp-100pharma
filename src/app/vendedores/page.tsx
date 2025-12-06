@@ -638,89 +638,101 @@ export default function VendedoresPage() {
   };
 
   const gerarRelatorioMensal = async () => {
-  if (!vendedorSelecionado) return;
+  if (!vendedorSelecionado) {
+    alert('Selecione um vendedor para gerar o relatório.');
+    return;
+  }
 
   try {
-    // Intervalo padrão: mês atual
-    const hoje = new Date();
-    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    // 1) Descobrir intervalo de datas a partir da seleção do estado
+    const { dataInicio, dataFim } = calcularIntervaloRelatorio();
 
-    const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-    const dataFim = ultimoDiaMes.toISOString().split('T')[0];
+    const dataInicioDate = new Date(dataInicio);
+    // incluo final do dia para não perder vendas do próprio diaFim
+    const dataFimDate = new Date(dataFim + 'T23:59:59');
 
-    // Dados básicos do vendedor
+    // 2) Filtrar vendas do vendedor NO PERÍODO
+    const vendasPeriodo = vendas.filter((venda) => {
+      if (venda.vendedor_id !== vendedorSelecionado.id) return false;
+      const dataVenda = new Date(venda.data);
+      return dataVenda >= dataInicioDate && dataVenda <= dataFimDate;
+    });
+
+    // 3) Itens das vendas e frascos
+    const vendasIdsPeriodo = vendasPeriodo.map((v) => v.id);
+    const vendaItensPeriodo = vendaItens.filter((item) =>
+      vendasIdsPeriodo.includes(item.venda_id)
+    );
+
+    const frascosPeriodo = vendaItensPeriodo.reduce(
+      (total, item) => total + (item.quantidade || 0),
+      0
+    );
+
+    // 4) Faturação do período
+    const faturacaoPeriodo = vendasPeriodo.reduce(
+      (total, venda) => total + (venda.total_com_iva || 0),
+      0
+    );
+
+    // 5) Quilometragem do período
+    const quilometragensPeriodo = quilometragens.filter((km) => {
+      if (km.vendedor_id !== vendedorSelecionado.id) return false;
+      const dataKm = new Date(km.data);
+      return dataKm >= dataInicioDate && dataKm <= dataFimDate;
+    });
+
+    const kmPeriodo = quilometragensPeriodo.reduce(
+      (total, km) => total + (km.km || 0),
+      0
+    );
+
+    const custoKmPeriodo = quilometragensPeriodo.reduce(
+      (total, km) => total + (km.valor || 0),
+      0
+    );
+
+    // 6) Visitas do período
+    const visitasPeriodo = visitas.filter((visita) => {
+      if (visita.vendedor_id !== vendedorSelecionado.id) return false;
+      const dataVisita = new Date(visita.data_visita);
+      return dataVisita >= dataInicioDate && dataVisita <= dataFimDate;
+    });
+
+    // 7) Buscar configuração financeira para calcular comissão/meta do PERÍODO
+    const configFinanceira = await buscarConfiguracaoFinanceira();
+
+    const comissaoPeriodo = calcularComissaoProgressiva(
+      faturacaoPeriodo,
+      configFinanceira
+    );
+
+    const percentualMetaPeriodo = calcularPercentualMeta(
+      faturacaoPeriodo,
+      configFinanceira
+    );
+
+    // 8) Clientes ativos (mantemos a contagem atual da carteira do vendedor)
+    const clientesAtivosPeriodo = vendedorSelecionado.clientesAtivos;
+
+    const resumo = {
+      faturacaoPeriodo,
+      comissaoPeriodo,
+      frascosPeriodo,
+      clientesAtivosPeriodo,
+      kmPeriodo,
+      custoKmPeriodo,
+      percentualMetaPeriodo,
+    };
+
+    // 9) Dados básicos do vendedor
     const vendedorInfo = {
       nome: vendedorSelecionado.nome,
       email: vendedorSelecionado.email,
       telefone: vendedorSelecionado.telefone,
-      ativo: vendedorSelecionado.ativo,
     };
 
-    // Resumo mensal (já calculado no estado do vendedor)
-    const resumo = {
-      vendasMes: vendedorSelecionado.vendasMes,
-      frascosMes: vendedorSelecionado.frascosMes,
-      comissaoMes: vendedorSelecionado.comissaoMes,
-      percentualMeta: vendedorSelecionado.percentualMeta,
-      clientesAtivos: vendedorSelecionado.clientesAtivos,
-      kmRodadosMes: vendedorSelecionado.kmRodadosMes,
-      custoKmMes: vendedorSelecionado.custoKmMes,
-    };
-
-    // VENDAS do período
-    const vendasPeriodo = vendas
-      .filter(
-        (v) =>
-          v.vendedor_id === vendedorSelecionado.id &&
-          v.data >= dataInicio &&
-          v.data <= dataFim
-      )
-      .map((venda) => {
-        const cliente = clientes.find((c) => c.id === venda.cliente_id);
-        const itens = vendaItens.filter((item) => item.venda_id === venda.id);
-        const totalFrascos = itens.reduce(
-          (sum, item) => sum + (item.quantidade || 0),
-          0
-        );
-
-        return {
-          id: venda.id,
-          data: venda.data,
-          cliente_nome: cliente?.nome || 'N/A',
-          total_com_iva: venda.total_com_iva,
-          frascos: totalFrascos,
-        };
-      });
-
-    // KM do período
-    const quilometragensPeriodo = quilometragens.filter(
-      (km) =>
-        km.vendedor_id === vendedorSelecionado.id &&
-        km.data >= dataInicio &&
-        km.data <= dataFim
-    );
-
-    // VISITAS do período
-    const visitasPeriodo = visitas
-      .filter(
-        (visita) =>
-          visita.vendedor_id === vendedorSelecionado.id &&
-          visita.data_visita >= dataInicio &&
-          visita.data_visita <= dataFim
-      )
-      .map((visita) => {
-        const cliente = clientes.find((c) => c.id === visita.cliente_id);
-        return {
-          id: visita.id,
-          data_visita: visita.data_visita,
-          estado: visita.estado,
-          notas: visita.notas,
-          cliente_nome: cliente?.nome || 'N/A',
-        };
-      });
-
-    // Chamar gerador de PDF
+    // 10) Chamar gerador de PDF
     await gerarRelatorioVendedorPdf({
       vendedor: vendedorInfo,
       intervalo: { dataInicio, dataFim },
@@ -731,9 +743,13 @@ export default function VendedoresPage() {
     });
   } catch (error: any) {
     console.error('Erro ao gerar relatório do vendedor:', error);
-    alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
+    alert(
+      'Erro ao gerar relatório do vendedor: ' +
+        (error?.message || 'Erro desconhecido')
+    );
   }
 };
+
 
   const abrirModalAdicionarCliente = () => {
     setBuscaCliente('');
