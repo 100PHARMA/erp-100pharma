@@ -124,6 +124,15 @@ export default function VendedoresPage() {
   const [abaAtiva, setAbaAtiva] = useState<'resumo' | 'carteira' | 'vendas' | 'km'>('resumo');
   const [buscaCliente, setBuscaCliente] = useState('');
 
+  // Período do relatório do vendedor
+  const [tipoPeriodoRelatorio, setTipoPeriodoRelatorio] = useState<
+    'MES_ATUAL' | 'ULTIMOS_30' | 'MES_ANTERIOR' | 'PERSONALIZADO'
+  >('MES_ATUAL');
+
+  const [dataInicioRelatorio, setDataInicioRelatorio] = useState<string>('');
+  const [dataFimRelatorio, setDataFimRelatorio] = useState<string>('');
+
+
   // Estados para formulários
   const [novoVendedor, setNovoVendedor] = useState({
     nome: '',
@@ -145,6 +154,58 @@ export default function VendedoresPage() {
     notas: '',
   });
 
+  // ======================================================================
+  // CÁLCULO DO INTERVALO DO RELATÓRIO DO VENDEDOR
+  // ======================================================================
+
+  const calcularIntervaloRelatorio = () => {
+    const hoje = new Date();
+
+    // Se for personalizado e as duas datas estiverem preenchidas, usa-as diretamente
+    if (
+      tipoPeriodoRelatorio === 'PERSONALIZADO' &&
+      dataInicioRelatorio &&
+      dataFimRelatorio
+    ) {
+      return {
+        dataInicio: dataInicioRelatorio,
+        dataFim: dataFimRelatorio,
+      };
+    }
+
+    let inicio: Date;
+    let fim: Date;
+
+    switch (tipoPeriodoRelatorio) {
+      case 'ULTIMOS_30': {
+        fim = hoje;
+        inicio = new Date(hoje);
+        inicio.setDate(inicio.getDate() - 29); // últimos 30 dias incluindo hoje
+        break;
+      }
+      case 'MES_ANTERIOR': {
+        const ano = hoje.getFullYear();
+        const mesAnterior = hoje.getMonth() - 1; // 0–11
+        inicio = new Date(ano, mesAnterior, 1);
+        fim = new Date(ano, mesAnterior + 1, 0);
+        break;
+      }
+      case 'MES_ATUAL':
+      default: {
+        const ano = hoje.getFullYear();
+        const mes = hoje.getMonth();
+        inicio = new Date(ano, mes, 1);
+        fim = new Date(ano, mes + 1, 0);
+        break;
+      }
+    }
+
+    return {
+      dataInicio: inicio.toISOString().split('T')[0],
+      dataFim: fim.toISOString().split('T')[0],
+    };
+  };
+  
   // ======================================================================
   // CARREGAMENTO DE DADOS DO SUPABASE
   // ======================================================================
