@@ -451,7 +451,13 @@ export default function PodologistasPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex items-center justify-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <Link
+                            href={`/podologistas/${podologista.id}/relatorio`}
+                            className="px-3 py-1 text-xs font-medium rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 transition-colors"
+                          >
+                            Relatório
+                          </Link>
                           <button
                             onClick={() => handleEditar(podologista)}
                             className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
