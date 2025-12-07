@@ -642,73 +642,33 @@ export default function VendedoresPage() {
     }
   };
 
-  const gerarRelatorioMensal = async () => {
+  type IntervaloRelatorio = {
+  dataInicio?: string;
+  dataFim?: string;
+};
+
+const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
   if (!vendedorSelecionado) return;
 
+  if (!configFinanceira) {
+    alert('Configuração financeira não carregada. Tente recarregar a página.');
+    return;
+  }
+
   try {
+    // Se não vier intervalo, usa MÊS ATUAL como padrão
     const hoje = new Date();
+    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
 
-    let dataInicio: string;
-    let dataFim: string;
+    const dataInicio =
+      intervalo?.dataInicio ?? primeiroDiaMes.toISOString().split('T')[0];
+    const dataFim =
+      intervalo?.dataFim ?? ultimoDiaMes.toISOString().split('T')[0];
 
-    // Define o intervalo de datas de acordo com a escolha do modal
-    switch (tipoPeriodoRelatorio) {
-      case 'MES_ATUAL': {
-        const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-        const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-        dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-        dataFim = ultimoDiaMes.toISOString().split('T')[0];
-        break;
-      }
-
-      case 'ULTIMOS_30': {
-        const fim = new Date(hoje);
-        const inicio = new Date(hoje);
-        inicio.setDate(inicio.getDate() - 29); // 30 dias incluindo hoje
-        dataInicio = inicio.toISOString().split('T')[0];
-        dataFim = fim.toISOString().split('T')[0];
-        break;
-      }
-
-      case 'MES_ANTERIOR': {
-        const primeiroDiaMesAnterior = new Date(
-          hoje.getFullYear(),
-          hoje.getMonth() - 1,
-          1
-        );
-        const ultimoDiaMesAnterior = new Date(
-          hoje.getFullYear(),
-          hoje.getMonth(),
-          0
-        );
-        dataInicio = primeiroDiaMesAnterior.toISOString().split('T')[0];
-        dataFim = ultimoDiaMesAnterior.toISOString().split('T')[0];
-        break;
-      }
-
-      case 'PERSONALIZADO': {
-        // Aqui usamos as datas escolhidas no modal
-        if (!dataInicioRelatorio || !dataFimRelatorio) {
-          alert('Preencha as datas de início e fim para o período personalizado.');
-          return;
-        }
-        dataInicio = dataInicioRelatorio;
-        dataFim = dataFimRelatorio;
-        break;
-      }
-
-      default: {
-        // fallback: mês atual
-        const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-        const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-        dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-        dataFim = ultimoDiaMes.toISOString().split('T')[0];
-      }
-    }
-
-    // ==========================
-    // DADOS BÁSICOS DO VENDEDOR
-    // ==========================
+    // -------------------------------------------------------------------
+    // 1) DADOS BÁSICOS DO VENDEDOR
+    // -------------------------------------------------------------------
     const vendedorInfo = {
       nome: vendedorSelecionado.nome,
       email: vendedorSelecionado.email,
@@ -716,9 +676,9 @@ export default function VendedoresPage() {
       ativo: vendedorSelecionado.ativo,
     };
 
-    // ==========================
-    // VENDAS DO PERÍODO
-    // ==========================
+    // -------------------------------------------------------------------
+    // 2) VENDAS DO PERÍODO
+    // -------------------------------------------------------------------
     const vendasPeriodo = vendas
       .filter(
         (v) =>
@@ -743,9 +703,20 @@ export default function VendedoresPage() {
         };
       });
 
-    // ==========================
-    // QUILOMETRAGEM DO PERÍODO
-    // ==========================
+    // Faturação e frascos do PERÍODO (não mais do mês fixo)
+    const faturacaoPeriodo = vendasPeriodo.reduce(
+      (total, v) => total + (v.total_com_iva || 0),
+      0
+    );
+
+    const frascosPeriodo = vendasPeriodo.reduce(
+      (total, v) => total + (v.frascos || 0),
+      0
+    );
+
+    // -------------------------------------------------------------------
+    // 3) KM DO PERÍODO
+    // -------------------------------------------------------------------
     const quilometragensPeriodo = quilometragens.filter(
       (km) =>
         km.vendedor_id === vendedorSelecionado.id &&
@@ -753,9 +724,19 @@ export default function VendedoresPage() {
         km.data <= dataFim
     );
 
-    // ==========================
-    // VISITAS DO PERÍODO
-    // ==========================
+    const kmRodadosPeriodo = quilometragensPeriodo.reduce(
+      (total, km) => total + (km.km || 0),
+      0
+    );
+
+    const custoKmPeriodo = quilometragensPeriodo.reduce(
+      (total, km) => total + (km.valor || 0),
+      0
+    );
+
+    // -------------------------------------------------------------------
+    // 4) VISITAS DO PERÍODO
+    // -------------------------------------------------------------------
     const visitasPeriodo = visitas
       .filter(
         (visita) =>
@@ -774,45 +755,32 @@ export default function VendedoresPage() {
         };
       });
 
-    // ==========================
-    // RESUMO DO PERÍODO
-    // (recalculado com base no intervalo escolhido)
-    // ==========================
-    const faturacaoPeriodo = vendasPeriodo.reduce(
-      (sum, v) => sum + (v.total_com_iva || 0),
-      0
+    // -------------------------------------------------------------------
+    // 5) RE-CÁLCULO DE COMISSÃO E META PARA O PERÍODO
+    // -------------------------------------------------------------------
+    const comissaoPeriodo = calcularComissaoProgressiva(
+      faturacaoPeriodo,
+      configFinanceira
     );
 
-    const frascosPeriodo = vendasPeriodo.reduce(
-      (sum, v) => sum + (v.frascos || 0),
-      0
-    );
-
-    const kmRodadosPeriodo = quilometragensPeriodo.reduce(
-      (sum, km) => sum + (km.km || 0),
-      0
-    );
-
-    const custoKmPeriodo = quilometragensPeriodo.reduce(
-      (sum, km) => sum + (km.valor || 0),
-      0
+    const percentualMetaPeriodo = calcularPercentualMeta(
+      faturacaoPeriodo,
+      configFinanceira
     );
 
     const resumo = {
-      vendasMes: faturacaoPeriodo,
-      frascosMes: frascosPeriodo,
-      // por enquanto usa a comissão/meta do mês já calculadas,
-      // se quiser com precisão por período depois recalculamos via config financeira
-      comissaoMes: vendedorSelecionado.comissaoMes,
-      percentualMeta: vendedorSelecionado.percentualMeta,
-      clientesAtivos: vendedorSelecionado.clientesAtivos,
-      kmRodadosMes: kmRodadosPeriodo,
-      custoKmMes: custoKmPeriodo,
+      vendasPeriodo: faturacaoPeriodo,        // € do período
+      frascosPeriodo,                         // frascos do período
+      comissaoPeriodo,                        // comissão só deste intervalo
+      percentualMetaPeriodo,                  // meta sobre este intervalo
+      clientesAtivos: vendedorSelecionado.clientesAtivos, // pode manter
+      kmRodadosPeriodo,
+      custoKmPeriodo,
     };
 
-    // ==========================
-    // GERAR PDF
-    // ==========================
+    // -------------------------------------------------------------------
+    // 6) CHAMAR GERADOR DE PDF
+    // -------------------------------------------------------------------
     await gerarRelatorioVendedorPdf({
       vendedor: vendedorInfo,
       intervalo: { dataInicio, dataFim },
@@ -823,10 +791,7 @@ export default function VendedoresPage() {
     });
   } catch (error: any) {
     console.error('Erro ao gerar relatório do vendedor:', error);
-    alert(
-      'Erro ao gerar relatório do vendedor: ' +
-        (error.message || 'Erro desconhecido')
-    );
+    alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
   }
 };
 
