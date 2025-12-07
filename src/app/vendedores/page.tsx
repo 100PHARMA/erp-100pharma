@@ -131,6 +131,7 @@ export default function VendedoresPage() {
 
   const [dataInicioRelatorio, setDataInicioRelatorio] = useState<string>('');
   const [dataFimRelatorio, setDataFimRelatorio] = useState<string>('');
+  const [mostrarModalPeriodo, setMostrarModalPeriodo] = useState(false);
 
 
   // Estados para formulários
