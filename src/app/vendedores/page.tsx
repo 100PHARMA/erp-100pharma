@@ -224,7 +224,9 @@ export default function VendedoresPage() {
 
       // Carregar configuração financeira
       const configFinanceira = await buscarConfiguracaoFinanceira();
+      setConfigFinanceira(configFinanceira);
 
+      
       // Carregar vendedores
       const { data: vendedoresData, error: vendedoresError } = await supabase
         .from('vendedores')
