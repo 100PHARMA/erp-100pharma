@@ -642,41 +642,106 @@ export default function VendedoresPage() {
   if (!vendedorSelecionado) return;
 
   try {
-    // 1) Intervalo: por enquanto continua MÊS ATUAL
     const hoje = new Date();
-    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
 
-    const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-    const dataFim = ultimoDiaMes.toISOString().split('T')[0];
+    let dataInicio: string;
+    let dataFim: string;
 
-    // 2) Filtrar VENDAS do período para este vendedor
-    const vendasPeriodoBrutas = vendas.filter(
-      (v) =>
-        v.vendedor_id === vendedorSelecionado.id &&
-        v.data >= dataInicio &&
-        v.data <= dataFim
-    );
+    // Define o intervalo de datas de acordo com a escolha do modal
+    switch (tipoPeriodoRelatorio) {
+      case 'MES_ATUAL': {
+        const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+        const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+        dataInicio = primeiroDiaMes.toISOString().split('T')[0];
+        dataFim = ultimoDiaMes.toISOString().split('T')[0];
+        break;
+      }
 
-    // 3) Enriquecer vendas com nome do cliente e frascos
-    const vendasPeriodo = vendasPeriodoBrutas.map((venda) => {
-      const cliente = clientes.find((c) => c.id === venda.cliente_id);
-      const itens = vendaItens.filter((item) => item.venda_id === venda.id);
-      const totalFrascos = itens.reduce(
-        (sum, item) => sum + (item.quantidade || 0),
-        0
-      );
+      case 'ULTIMOS_30': {
+        const fim = new Date(hoje);
+        const inicio = new Date(hoje);
+        inicio.setDate(inicio.getDate() - 29); // 30 dias incluindo hoje
+        dataInicio = inicio.toISOString().split('T')[0];
+        dataFim = fim.toISOString().split('T')[0];
+        break;
+      }
 
-      return {
-        id: venda.id,
-        data: venda.data,
-        cliente_nome: cliente?.nome ?? 'N/A',
-        frascos: totalFrascos,
-        total_com_iva: venda.total_com_iva ?? 0,
-      };
-    });
+      case 'MES_ANTERIOR': {
+        const primeiroDiaMesAnterior = new Date(
+          hoje.getFullYear(),
+          hoje.getMonth() - 1,
+          1
+        );
+        const ultimoDiaMesAnterior = new Date(
+          hoje.getFullYear(),
+          hoje.getMonth(),
+          0
+        );
+        dataInicio = primeiroDiaMesAnterior.toISOString().split('T')[0];
+        dataFim = ultimoDiaMesAnterior.toISOString().split('T')[0];
+        break;
+      }
 
-    // 4) Quilometragens do período
+      case 'PERSONALIZADO': {
+        // Aqui usamos as datas escolhidas no modal
+        if (!dataInicioRelatorio || !dataFimRelatorio) {
+          alert('Preencha as datas de início e fim para o período personalizado.');
+          return;
+        }
+        dataInicio = dataInicioRelatorio;
+        dataFim = dataFimRelatorio;
+        break;
+      }
+
+      default: {
+        // fallback: mês atual
+        const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+        const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+        dataInicio = primeiroDiaMes.toISOString().split('T')[0];
+        dataFim = ultimoDiaMes.toISOString().split('T')[0];
+      }
+    }
+
+    // ==========================
+    // DADOS BÁSICOS DO VENDEDOR
+    // ==========================
+    const vendedorInfo = {
+      nome: vendedorSelecionado.nome,
+      email: vendedorSelecionado.email,
+      telefone: vendedorSelecionado.telefone,
+      ativo: vendedorSelecionado.ativo,
+    };
+
+    // ==========================
+    // VENDAS DO PERÍODO
+    // ==========================
+    const vendasPeriodo = vendas
+      .filter(
+        (v) =>
+          v.vendedor_id === vendedorSelecionado.id &&
+          v.data >= dataInicio &&
+          v.data <= dataFim
+      )
+      .map((venda) => {
+        const cliente = clientes.find((c) => c.id === venda.cliente_id);
+        const itens = vendaItens.filter((item) => item.venda_id === venda.id);
+        const totalFrascos = itens.reduce(
+          (sum, item) => sum + (item.quantidade || 0),
+          0
+        );
+
+        return {
+          id: venda.id,
+          data: venda.data,
+          cliente_nome: cliente?.nome || 'N/A',
+          total_com_iva: venda.total_com_iva,
+          frascos: totalFrascos,
+        };
+      });
+
+    // ==========================
+    // QUILOMETRAGEM DO PERÍODO
+    // ==========================
     const quilometragensPeriodo = quilometragens.filter(
       (km) =>
         km.vendedor_id === vendedorSelecionado.id &&
@@ -684,26 +749,31 @@ export default function VendedoresPage() {
         km.data <= dataFim
     );
 
-    // 5) Visitas do período (já com nome do cliente)
-    const visitasFiltradas = visitas.filter(
-      (visita) =>
-        visita.vendedor_id === vendedorSelecionado.id &&
-        visita.data_visita >= dataInicio &&
-        visita.data_visita <= dataFim
-    );
+    // ==========================
+    // VISITAS DO PERÍODO
+    // ==========================
+    const visitasPeriodo = visitas
+      .filter(
+        (visita) =>
+          visita.vendedor_id === vendedorSelecionado.id &&
+          visita.data_visita >= dataInicio &&
+          visita.data_visita <= dataFim
+      )
+      .map((visita) => {
+        const cliente = clientes.find((c) => c.id === visita.cliente_id);
+        return {
+          id: visita.id,
+          data_visita: visita.data_visita,
+          estado: visita.estado,
+          notas: visita.notas,
+          cliente_nome: cliente?.nome || 'N/A',
+        };
+      });
 
-    const visitasPeriodo = visitasFiltradas.map((visita) => {
-      const cliente = clientes.find((c) => c.id === visita.cliente_id);
-      return {
-        id: visita.id,
-        data_visita: visita.data_visita,
-        estado: visita.estado,
-        notas: visita.notas,
-        cliente_nome: cliente?.nome ?? 'N/A',
-      };
-    });
-
-    // 6) Calcular RESUMO com base nos dados filtrados
+    // ==========================
+    // RESUMO DO PERÍODO
+    // (recalculado com base no intervalo escolhido)
+    // ==========================
     const faturacaoPeriodo = vendasPeriodo.reduce(
       (sum, v) => sum + (v.total_com_iva || 0),
       0
@@ -724,31 +794,21 @@ export default function VendedoresPage() {
       0
     );
 
-    const clientesAtivosPeriodo =
-      vendedorSelecionado.clientesAtivos ??
-      vendedorClientes.filter(
-        (vc) => vc.vendedor_id === vendedorSelecionado.id && vc.ativo
-      ).length;
-
     const resumo = {
       vendasMes: faturacaoPeriodo,
       frascosMes: frascosPeriodo,
-      comissaoMes: vendedorSelecionado.comissaoMes ?? 0, // por enquanto usamos o valor do card
-      percentualMeta: vendedorSelecionado.percentualMeta ?? 0,
-      clientesAtivos: clientesAtivosPeriodo,
+      // por enquanto usa a comissão/meta do mês já calculadas,
+      // se quiser com precisão por período depois recalculamos via config financeira
+      comissaoMes: vendedorSelecionado.comissaoMes,
+      percentualMeta: vendedorSelecionado.percentualMeta,
+      clientesAtivos: vendedorSelecionado.clientesAtivos,
       kmRodadosMes: kmRodadosPeriodo,
       custoKmMes: custoKmPeriodo,
     };
 
-    // 7) Dados básicos do vendedor
-    const vendedorInfo = {
-      nome: vendedorSelecionado.nome,
-      email: vendedorSelecionado.email,
-      telefone: vendedorSelecionado.telefone,
-      ativo: vendedorSelecionado.ativo,
-    };
-
-    // 8) Chamar gerador de PDF (NÃO mexe aqui se já está assim)
+    // ==========================
+    // GERAR PDF
+    // ==========================
     await gerarRelatorioVendedorPdf({
       vendedor: vendedorInfo,
       intervalo: { dataInicio, dataFim },
