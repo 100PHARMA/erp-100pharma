@@ -107,6 +107,8 @@ export default function VendedoresPage() {
   const [quilometragens, setQuilometragens] = useState<Quilometragem[]>([]);
   const [visitas, setVisitas] = useState<Visita[]>([]);
 
+  const [configFinanceira, setConfigFinanceira] = useState<ConfiguracaoFinanceira | null>(null);
+
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
