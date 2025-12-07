@@ -1673,6 +1673,129 @@ export default function VendedoresPage() {
         </div>
       )}
 
+{/* Modal Período do Relatório do Vendedor */}
+{mostrarModalPeriodo && (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+      <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold">Período do Relatório</h2>
+          <button
+            onClick={() => setMostrarModalPeriodo(false)}
+            className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6 space-y-4">
+        {/* Opções de período */}
+        <div className="space-y-3">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="radio"
+              className="text-purple-600"
+              checked={tipoPeriodoRelatorio === 'MES_ATUAL'}
+              onChange={() => setTipoPeriodoRelatorio('MES_ATUAL')}
+            />
+            <span>Mês atual</span>
+          </label>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="radio"
+              className="text-purple-600"
+              checked={tipoPeriodoRelatorio === 'ULTIMOS_30'}
+              onChange={() => setTipoPeriodoRelatorio('ULTIMOS_30')}
+            />
+            <span>Últimos 30 dias</span>
+          </label>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="radio"
+              className="text-purple-600"
+              checked={tipoPeriodoRelatorio === 'MES_ANTERIOR'}
+              onChange={() => setTipoPeriodoRelatorio('MES_ANTERIOR')}
+            />
+            <span>Mês anterior</span>
+          </label>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="radio"
+              className="text-purple-600"
+              checked={tipoPeriodoRelatorio === 'PERSONALIZADO'}
+              onChange={() => setTipoPeriodoRelatorio('PERSONALIZADO')}
+            />
+            <span>Período personalizado</span>
+          </label>
+        </div>
+
+        {/* Campos de datas – só aparecem no modo PERSONALIZADO */}
+        {tipoPeriodoRelatorio === 'PERSONALIZADO' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data início
+              </label>
+              <input
+                type="date"
+                value={dataInicioRelatorio}
+                onChange={(e) => setDataInicioRelatorio(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data fim
+              </label>
+              <input
+                type="date"
+                value={dataFimRelatorio}
+                onChange={(e) => setDataFimRelatorio(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Botões */}
+        <div className="flex gap-3 pt-4">
+          <button
+            onClick={() => {
+              setMostrarModalPeriodo(false);
+            }}
+            className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={async () => {
+              // Validação simples para período personalizado
+              if (
+                tipoPeriodoRelatorio === 'PERSONALIZADO' &&
+                (!dataInicioRelatorio || !dataFimRelatorio)
+              ) {
+                alert('Preencha as datas de início e fim.');
+                return;
+              }
+
+              await gerarRelatorioMensal(); // usa o filtro escolhido
+              setMostrarModalPeriodo(false);
+            }}
+            className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
+          >
+            Gerar PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+      
       {/* Modal Adicionar Cliente */}
       {modalAdicionarCliente && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
