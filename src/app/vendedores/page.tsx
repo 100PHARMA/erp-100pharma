@@ -1364,7 +1364,7 @@ export default function VendedoresPage() {
                   </div>
 
                   <button
-                    onClick={gerarRelatorioMensal}
+                    onClick={() => setMostrarModalPeriodo(true)}
                     className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
                   >
                     <Download className="w-5 h-5" />
