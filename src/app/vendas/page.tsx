@@ -338,16 +338,17 @@ export default function VendasPage() {
         dataVenda
       );
 
-      // Buscar podologista associado ao cliente (farmácia) no momento da venda
-      const { data: clienteInfo, error: clienteErro } = await supabase
-        .from('clientes')
+      // Buscar podologista associado à farmácia (cliente) no momento da venda
+      const { data: relacao, error: relacaoErro } = await supabase
+        .from('podologista_farmacia')
         .select('podologista_id')
-        .eq('id', clienteSelecionado)
-        .maybeSingle();
+        .eq('cliente_id', clienteSelecionado)
+        .maybeSingle(); // assumindo 1 podologista ativo por farmácia
 
-      if (clienteErro) throw clienteErro;
+      if (relacaoErro) throw relacaoErro;
 
-      const podologistaId = clienteInfo?.podologista_id ?? null;
+      const podologistaId = relacao?.podologista_id ?? null;
+
 
       if (vendaEditando) {
         // ============================================================
