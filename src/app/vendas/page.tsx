@@ -295,7 +295,7 @@ export default function VendasPage() {
     }
   };
 
-  // ======================================================================
+   // ======================================================================
   // SALVAR VENDA (SEMPRE COMO ABERTA)
   // ======================================================================
 
@@ -313,13 +313,14 @@ export default function VendasPage() {
 
       setCarregando(true);
 
+      // Totais da venda
       const totais = calcularTotais(itensVenda);
 
       const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
-       // Comissão deve ser calculada sobre o valor SEM IVA
+      // Comissão deve ser calculada sobre o valor SEM IVA
       const valorComissao = totais.subtotal * (percentualComissao / 100);
 
-
+      // Total de unidades (frascos)
       const totalFrascos = itensVenda.reduce(
         (acc, item) => acc + item.quantidade,
         0
@@ -327,19 +328,32 @@ export default function VendasPage() {
 
       const incentivoFarmaciaTotal =
         totalFrascos * INCENTIVO_FARMACIA_PADRAO;
+
       const incentivoPodologistaTotal =
         totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
 
+      // Meta mensal do vendedor congelada no momento
       const metaMensalVendedor = await obterMetaMensalDoVendedor(
         vendedorSelecionado,
         dataVenda
       );
 
+      // Buscar podologista associado ao cliente (farmácia) no momento da venda
+      const { data: clienteInfo, error: clienteErro } = await supabase
+        .from('clientes')
+        .select('podologista_id')
+        .eq('id', clienteSelecionado)
+        .maybeSingle();
+
+      if (clienteErro) throw clienteErro;
+
+      const podologistaId = clienteInfo?.podologista_id ?? null;
+
       if (vendaEditando) {
         // ============================================================
         // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
         // ============================================================
-        
+
         const { error: vendaError } = await supabase
           .from('vendas')
           .update({
@@ -375,14 +389,16 @@ export default function VendasPage() {
 
         if (deleteError) throw deleteError;
 
-        // Inserir novos itens (com IVA congelado por linha, se quiser usar no futuro)
+        // Inserir novos itens (IVA + podologista congelados por linha)
         const itensParaInserir = itensVenda.map(item => ({
           venda_id: vendaEditando.id,
           produto_id: item.produto_id,
           quantidade: item.quantidade,
           preco_unitario: item.preco_unitario,
           total_linha: item.total_linha,
-          taxa_iva: TAXA_IVA
+          taxa_iva: TAXA_IVA,
+          incentivo_podologista: INCENTIVO_PODOLOGISTA_PADRAO,
+          podologista_id: podologistaId
         }));
 
         const { error: itensError } = await supabase
@@ -392,12 +408,11 @@ export default function VendasPage() {
         if (itensError) throw itensError;
 
         alert('Venda atualizada com sucesso!');
-
       } else {
         // ============================================================
         // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
         // ============================================================
-        
+
         const numeroVenda = `VD${Date.now()}`;
 
         const { data: vendaData, error: vendaError } = await supabase
@@ -427,14 +442,16 @@ export default function VendasPage() {
 
         if (vendaError) throw vendaError;
 
-        // Inserir itens
+        // Inserir itens (IVA + podologista congelados por linha)
         const itensParaInserir = itensVenda.map(item => ({
           venda_id: vendaData.id,
           produto_id: item.produto_id,
           quantidade: item.quantidade,
           preco_unitario: item.preco_unitario,
           total_linha: item.total_linha,
-          taxa_iva: TAXA_IVA
+          taxa_iva: TAXA_IVA,
+          incentivo_podologista: INCENTIVO_PODOLOGISTA_PADRAO,
+          podologista_id: podologistaId
         }));
 
         const { error: itensError } = await supabase
@@ -448,7 +465,6 @@ export default function VendasPage() {
 
       fecharModal();
       await carregarDados();
-
     } catch (error: any) {
       console.error('Erro ao salvar venda:', error);
       alert('Erro ao salvar venda: ' + error.message);
