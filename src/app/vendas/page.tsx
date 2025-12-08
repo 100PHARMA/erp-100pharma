@@ -262,6 +262,9 @@ export default function VendasPage() {
       setCarregando(true);
 
       const totais = calcularTotais(itensVenda);
+      const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO; // 5%
+      const valorComissao = totais.total_com_iva * (percentualComissao / 100);
+
 
       if (vendaEditando) {
         // ============================================================
@@ -269,20 +272,30 @@ export default function VendasPage() {
         // ============================================================
         
         const { error: vendaError } = await supabase
-          .from('vendas')
-          .update({
-            cliente_id: clienteSelecionado,
-            vendedor_id: vendedorSelecionado,
-            data: dataVenda,
-            estado: 'ABERTA', // ✅ SEMPRE ABERTA
-            subtotal: totais.subtotal,
-            iva: totais.iva,
-            total_com_iva: totais.total_com_iva,
-            observacoes,
-            taxa_iva: TAXA_IVA, // 👈
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', vendaEditando.id);
+  .from('vendas')
+  .update({
+    cliente_id: clienteSelecionado,
+    vendedor_id: vendedorSelecionado,
+    data: dataVenda,
+    estado: 'ABERTA',
+    subtotal: totais.subtotal,
+    iva: totais.iva,
+    total_com_iva: totais.total_com_iva,
+    observacoes,
+
+    // campos congelados
+    taxa_iva: TAXA_IVA,
+    percentual_comissao_vendedor: percentualComissao,
+    valor_total_comissao: valorComissao,
+    incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
+    incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
+    // meta_mensal_vendedor_no_momento: 0,       // vamos ligar à tabela de metas depois
+    // custo_km_no_momento: CUSTO_KM_PADRAO,     // vamos usar quando o módulo de km estiver amarrado
+
+    updated_at: new Date().toISOString()
+  })
+  .eq('id', vendaEditando.id);
+
 
         if (vendaError) throw vendaError;
 
@@ -321,21 +334,30 @@ export default function VendasPage() {
         const numeroVenda = `VD${Date.now()}`;
 
         const { data: vendaData, error: vendaError } = await supabase
-          .from('vendas')
-          .insert({
-            numero: numeroVenda,
-            cliente_id: clienteSelecionado,
-            vendedor_id: vendedorSelecionado,
-            data: dataVenda,
-            estado: 'ABERTA', // ✅ SEMPRE ABERTA
-            subtotal: totais.subtotal,
-            iva: totais.iva,
-            total_com_iva: totais.total_com_iva,
-            observacoes,
-            taxa_iva: TAXA_IVA // 👈 IVA congelado na venda
-          })
-          .select()
-          .single();
+  .from('vendas')
+  .insert({
+    numero: numeroVenda,
+    cliente_id: clienteSelecionado,
+    vendedor_id: vendedorSelecionado,
+    data: dataVenda,
+    estado: 'ABERTA',
+    subtotal: totais.subtotal,
+    iva: totais.iva,
+    total_com_iva: totais.total_com_iva,
+    observacoes,
+
+    // campos congelados
+    taxa_iva: TAXA_IVA,
+    percentual_comissao_vendedor: percentualComissao,
+    valor_total_comissao: valorComissao,
+    incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
+    incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
+    // meta_mensal_vendedor_no_momento: 0,
+    // custo_km_no_momento: CUSTO_KM_PADRAO
+  })
+  .select()
+  .single();
+
 
         if (vendaError) throw vendaError;
 
