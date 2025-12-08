@@ -17,11 +17,10 @@ import { formatCurrency } from '@/utils/formatCurrency';
 const TAXA_IVA = 0.23;
 
 // por enquanto vamos usar valores padrão fixos
-const PERCENTUAL_COMISSAO_VENDEDOR_PADRAO = 5;      // 5% (igual ao que aparece no teu relatório atual)
+const PERCENTUAL_COMISSAO_VENDEDOR_PADRAO = 5;      // 5%
 const INCENTIVO_FARMACIA_PADRAO = 0.28;             // € por frasco
 const INCENTIVO_PODOLOGISTA_PADRAO = 1.0;           // € por frasco
-const CUSTO_KM_PADRAO = 0.20;                       // € por km (vamos usar depois nos relatórios)
-
+const CUSTO_KM_PADRAO = 0.20;                       // € por km
 
 // ======================================================================
 // TIPOS
@@ -63,7 +62,7 @@ interface ItemVenda {
   preco_unitario: number;
   total_linha: number;
 
-  // Novos campos congelados por item
+  // Novos campos congelados por item (ainda não usados)
   percentual_comissao_vendedor?: number;
   valor_comissao_vendedor?: number;
   incentivo_farmacia?: number;
@@ -240,40 +239,40 @@ export default function VendasPage() {
   };
 
   const removerItem = (index: number) => {
-  setItensVenda(itensVenda.filter((_, i) => i !== index));
-};
+    setItensVenda(itensVenda.filter((_, i) => i !== index));
+  };
 
-// ======================================================================
-// NOVA FUNÇÃO — Meta Mensal do Vendedor (colocar AQUI, exatamente aqui)
-// ======================================================================
+  // ======================================================================
+  // NOVA FUNÇÃO — Meta Mensal do Vendedor
+  // ======================================================================
   
   const obterMetaMensalDoVendedor = async (
-  vendedorId: string,
-  dataVendaISO: string
-): Promise<number> => {
-  const data = new Date(dataVendaISO);
-  const ano = data.getFullYear();
-  const mes = data.getMonth() + 1;
+    vendedorId: string,
+    dataVendaISO: string
+  ): Promise<number> => {
+    const data = new Date(dataVendaISO);
+    const ano = data.getFullYear();
+    const mes = data.getMonth() + 1;
 
-  const { data: metaEspecifica } = await supabase
-    .from('vendedor_metas_mensais')
-    .select('meta_mensal')
-    .eq('vendedor_id', vendedorId)
-    .eq('ano', ano)
-    .eq('mes', mes)
-    .maybeSingle();
+    const { data: metaEspecifica } = await supabase
+      .from('vendedor_metas_mensais')
+      .select('meta_mensal')
+      .eq('vendedor_id', vendedorId)
+      .eq('ano', ano)
+      .eq('mes', mes)
+      .maybeSingle();
 
-  if (metaEspecifica?.meta_mensal) {
-    return Number(metaEspecifica.meta_mensal);
-  }
+    if (metaEspecifica?.meta_mensal) {
+      return Number(metaEspecifica.meta_mensal);
+    }
 
-  const { data: config } = await supabase
-    .from('configuracoes_financeiras')
-    .select('meta_mensal_vendedor')
-    .single();
+    const { data: config } = await supabase
+      .from('configuracoes_financeiras')
+      .select('meta_mensal_vendedor')
+      .single();
 
-  return Number(config?.meta_mensal_vendedor ?? 0);
-};
+    return Number(config?.meta_mensal_vendedor ?? 0);
+  };
 
   // ======================================================================
   // SALVAR VENDA (SEMPRE COMO ABERTA)
@@ -297,6 +296,11 @@ export default function VendasPage() {
       const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO; // 5%
       const valorComissao = totais.total_com_iva * (percentualComissao / 100);
 
+      // Se quisermos usar a meta já agora, bastava descomentar:
+      // const metaMensalVendedor = await obterMetaMensalDoVendedor(
+      //   vendedorSelecionado,
+      //   dataVenda
+      // );
 
       if (vendaEditando) {
         // ============================================================
@@ -304,30 +308,29 @@ export default function VendasPage() {
         // ============================================================
         
         const { error: vendaError } = await supabase
-  .from('vendas')
-  .update({
-    cliente_id: clienteSelecionado,
-    vendedor_id: vendedorSelecionado,
-    data: dataVenda,
-    estado: 'ABERTA',
-    subtotal: totais.subtotal,
-    iva: totais.iva,
-    total_com_iva: totais.total_com_iva,
-    observacoes,
+          .from('vendas')
+          .update({
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: 'ABERTA',
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes,
 
-    // campos congelados
-    taxa_iva: TAXA_IVA,
-    percentual_comissao_vendedor: percentualComissao,
-    valor_total_comissao: valorComissao,
-    incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
-    incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
-    // meta_mensal_vendedor_no_momento: 0,       // vamos ligar à tabela de metas depois
-    // custo_km_no_momento: CUSTO_KM_PADRAO,     // vamos usar quando o módulo de km estiver amarrado
+            // campos congelados
+            taxa_iva: TAXA_IVA,
+            percentual_comissao_vendedor: percentualComissao,
+            valor_total_comissao: valorComissao,
+            incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
+            incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
+            // meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            // custo_km_no_momento: CUSTO_KM_PADRAO,
 
-    updated_at: new Date().toISOString()
-  })
-  .eq('id', vendaEditando.id);
-
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', vendaEditando.id);
 
         if (vendaError) throw vendaError;
 
@@ -339,16 +342,15 @@ export default function VendasPage() {
 
         if (deleteError) throw deleteError;
 
-        // Inserir novos itens
-       const itensParaInserir = itensVenda.map(item => ({
-        venda_id: vendaData.id,
-        produto_id: item.produto_id,
-        quantidade: item.quantidade,
-        preco_unitario: item.preco_unitario,
-        total_linha: item.total_linha,
-        taxa_iva: TAXA_IVA   // 👈 IVA congelado por linha
-}));
-
+        // Inserir novos itens (usando o id da venda em edição)
+        const itensParaInserir = itensVenda.map(item => ({
+          venda_id: vendaEditando.id,
+          produto_id: item.produto_id,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha
+          // taxa_iva: TAXA_IVA // só adiciona se criarmos essa coluna em venda_itens
+        }));
 
         const { error: itensError } = await supabase
           .from('venda_itens')
@@ -366,30 +368,29 @@ export default function VendasPage() {
         const numeroVenda = `VD${Date.now()}`;
 
         const { data: vendaData, error: vendaError } = await supabase
-  .from('vendas')
-  .insert({
-    numero: numeroVenda,
-    cliente_id: clienteSelecionado,
-    vendedor_id: vendedorSelecionado,
-    data: dataVenda,
-    estado: 'ABERTA',
-    subtotal: totais.subtotal,
-    iva: totais.iva,
-    total_com_iva: totais.total_com_iva,
-    observacoes,
+          .from('vendas')
+          .insert({
+            numero: numeroVenda,
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: 'ABERTA',
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes,
 
-    // campos congelados
-    taxa_iva: TAXA_IVA,
-    percentual_comissao_vendedor: percentualComissao,
-    valor_total_comissao: valorComissao,
-    incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
-    incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
-    // meta_mensal_vendedor_no_momento: 0,
-    // custo_km_no_momento: CUSTO_KM_PADRAO
-  })
-  .select()
-  .single();
-
+            // campos congelados
+            taxa_iva: TAXA_IVA,
+            percentual_comissao_vendedor: percentualComissao,
+            valor_total_comissao: valorComissao,
+            incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
+            incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
+            // meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            // custo_km_no_momento: CUSTO_KM_PADRAO
+          })
+          .select()
+          .single();
 
         if (vendaError) throw vendaError;
 
@@ -400,6 +401,7 @@ export default function VendasPage() {
           quantidade: item.quantidade,
           preco_unitario: item.preco_unitario,
           total_linha: item.total_linha
+          // taxa_iva: TAXA_IVA // idem observação acima
         }));
 
         const { error: itensError } = await supabase
@@ -731,12 +733,17 @@ export default function VendasPage() {
                         €{venda.total_com_iva.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                          venda.estado === 'FECHADA' ? 'bg-green-100 text-green-800' :
-                          venda.estado === 'ABERTA' ? 'bg-orange-100 text-orange-800' :
-                          venda.estado === 'ORCAMENTO' ? 'bg-blue-100 text-blue-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
+                        <span
+                          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
+                            venda.estado === 'FECHADA'
+                              ? 'bg-green-100 text-green-800'
+                              : venda.estado === 'ABERTA'
+                              ? 'bg-orange-100 text-orange-800'
+                              : venda.estado === 'ORCAMENTO'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}
+                        >
                           {venda.estado}
                         </span>
                       </td>
