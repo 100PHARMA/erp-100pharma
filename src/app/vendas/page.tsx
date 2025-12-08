@@ -16,6 +16,13 @@ import { formatCurrency } from '@/utils/formatCurrency';
 
 const TAXA_IVA = 0.23;
 
+// por enquanto vamos usar valores padrão fixos
+const PERCENTUAL_COMISSAO_VENDEDOR_PADRAO = 5;      // 5% (igual ao que aparece no teu relatório atual)
+const INCENTIVO_FARMACIA_PADRAO = 0.28;             // € por frasco
+const INCENTIVO_PODOLOGISTA_PADRAO = 1.0;           // € por frasco
+const CUSTO_KM_PADRAO = 0.20;                       // € por km (vamos usar depois nos relatórios)
+
+
 // ======================================================================
 // TIPOS
 // ======================================================================
