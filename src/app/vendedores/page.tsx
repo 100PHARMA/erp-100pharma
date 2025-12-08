@@ -1,10 +1,29 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  UserCircle, Plus, Search, Edit, Trash2, Eye, Phone, Mail, 
-  TrendingUp, Target, Users, Package, FileText, MapPin, Calendar,
-  DollarSign, Award, Building2, CheckCircle, XCircle, Download, AlertCircle
+import {
+  UserCircle,
+  Plus,
+  Search,
+  Edit,
+  Trash2,
+  Eye,
+  Phone,
+  Mail,
+  TrendingUp,
+  Target,
+  Users,
+  Package,
+  FileText,
+  MapPin,
+  Calendar,
+  DollarSign,
+  Award,
+  Building2,
+  CheckCircle,
+  XCircle,
+  Download,
+  AlertCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
@@ -14,7 +33,6 @@ import {
   type ConfiguracaoFinanceira,
 } from '@/lib/configuracoes-financeiras';
 import { gerarRelatorioVendedorPdf } from '@/lib/relatorio-vendedor-pdf';
-
 
 // ======================================================================
 // TIPOS E INTERFACES
@@ -92,8 +110,6 @@ interface Visita {
   notas: string;
 }
 
-// Funções de cálculo agora importadas de configuracoes-financeiras.ts
-
 // ======================================================================
 // COMPONENTE PRINCIPAL
 // ======================================================================
@@ -107,7 +123,8 @@ export default function VendedoresPage() {
   const [quilometragens, setQuilometragens] = useState<Quilometragem[]>([]);
   const [visitas, setVisitas] = useState<Visita[]>([]);
 
-  const [configFinanceira, setConfigFinanceira] = useState<ConfiguracaoFinanceira | null>(null);
+  const [configFinanceira, setConfigFinanceira] =
+    useState<ConfiguracaoFinanceira | null>(null);
 
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -123,7 +140,8 @@ export default function VendedoresPage() {
   const [vendedorSelecionado, setVendedorSelecionado] = useState<Vendedor | null>(null);
   const [kmSelecionada, setKmSelecionada] = useState<Quilometragem | null>(null);
   const [visitaSelecionada, setVisitaSelecionada] = useState<Visita | null>(null);
-  const [abaAtiva, setAbaAtiva] = useState<'resumo' | 'carteira' | 'vendas' | 'km'>('resumo');
+  const [abaAtiva, setAbaAtiva] =
+    useState<'resumo' | 'carteira' | 'vendas' | 'km'>('resumo');
   const [buscaCliente, setBuscaCliente] = useState('');
 
   // Período do relatório do vendedor
@@ -135,14 +153,13 @@ export default function VendedoresPage() {
   const [dataFimRelatorio, setDataFimRelatorio] = useState<string>('');
   const [mostrarModalPeriodo, setMostrarModalPeriodo] = useState(false);
 
-
   // Estados para formulários
   const [novoVendedor, setNovoVendedor] = useState({
     nome: '',
     email: '',
     telefone: '',
     salario_base: 0,
-    custo_km: 0.40,
+    custo_km: 0.4,
   });
 
   const [novaKm, setNovaKm] = useState({
@@ -163,6 +180,13 @@ export default function VendedoresPage() {
 
   const calcularIntervaloRelatorio = () => {
     const hoje = new Date();
+
+    const formatDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
 
     // Se for personalizado e as duas datas estiverem preenchidas, usa-as diretamente
     if (
@@ -204,11 +228,11 @@ export default function VendedoresPage() {
     }
 
     return {
-      dataInicio: inicio.toISOString().split('T')[0],
-      dataFim: fim.toISOString().split('T')[0],
+      dataInicio: formatDate(inicio),
+      dataFim: formatDate(fim),
     };
   };
-  
+
   // ======================================================================
   // CARREGAMENTO DE DADOS DO SUPABASE
   // ======================================================================
@@ -226,7 +250,6 @@ export default function VendedoresPage() {
       const configFinanceira = await buscarConfiguracaoFinanceira();
       setConfigFinanceira(configFinanceira);
 
-      
       // Carregar vendedores
       const { data: vendedoresData, error: vendedoresError } = await supabase
         .from('vendedores')
@@ -244,9 +267,8 @@ export default function VendedoresPage() {
       if (clientesError) throw clientesError;
 
       // Carregar vendedor_clientes
-      const { data: vendedorClientesData, error: vendedorClientesError } = await supabase
-        .from('vendedor_clientes')
-        .select('*');
+      const { data: vendedorClientesData, error: vendedorClientesError } =
+        await supabase.from('vendedor_clientes').select('*');
 
       if (vendedorClientesError) throw vendedorClientesError;
 
@@ -290,11 +312,11 @@ export default function VendedoresPage() {
       const vendedoresComMetricas = (vendedoresData || []).map((vendedor) => {
         // Vendas do mês
         const vendasDoVendedor = (vendasData || []).filter(
-          (v) => v.vendedor_id === vendedor.id
+          (v) => v.vendedor_id === vendedor.id,
         );
         const vendasMes = vendasDoVendedor.reduce(
           (total, venda) => total + (venda.total_com_iva || 0),
-          0
+          0,
         );
 
         // Frascos vendidos no mês
@@ -311,7 +333,7 @@ export default function VendedoresPage() {
 
         // Clientes ativos
         const clientesAtivos = (vendedorClientesData || []).filter(
-          (vc) => vc.vendedor_id === vendedor.id && vc.ativo
+          (vc) => vc.vendedor_id === vendedor.id && vc.ativo,
         ).length;
 
         // KM rodados no mês (soma de km da tabela vendedor_km)
@@ -320,10 +342,16 @@ export default function VendedoresPage() {
           const dataKm = new Date(km.data);
           return dataKm >= primeiroDiaMes && dataKm <= ultimoDiaMes;
         });
-        const kmRodadosMes = kmDoMes.reduce((total, km) => total + (km.km || 0), 0);
+        const kmRodadosMes = kmDoMes.reduce(
+          (total, km) => total + (km.km || 0),
+          0,
+        );
 
         // Custo de km no mês (soma de valor da tabela vendedor_km)
-        const custoKmMes = kmDoMes.reduce((total, km) => total + (km.valor || 0), 0);
+        const custoKmMes = kmDoMes.reduce(
+          (total, km) => total + (km.valor || 0),
+          0,
+        );
 
         return {
           ...vendedor,
@@ -346,22 +374,27 @@ export default function VendedoresPage() {
       setVisitas(visitasData || []);
     } catch (error: any) {
       console.error('Erro ao carregar dados:', error);
-      
+
       // Mensagens de erro mais específicas
       let mensagemErro = 'Erro ao carregar dados do Supabase';
-      
-      if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
-        mensagemErro = 'Não foi possível conectar ao Supabase. Verifique:\n\n' +
+
+      if (
+        error.message?.includes('Failed to fetch') ||
+        error.message?.includes('NetworkError')
+      ) {
+        mensagemErro =
+          'Não foi possível conectar ao Supabase. Verifique:\n\n' +
           '1. Sua conexão com a internet\n' +
           '2. Se as variáveis de ambiente estão configuradas corretamente\n' +
           '3. Se o projeto Supabase está ativo e acessível\n' +
           '4. Se as configurações de CORS estão corretas no Supabase';
       } else if (error.message?.includes('timeout')) {
-        mensagemErro = 'Tempo limite de conexão excedido. O servidor Supabase pode estar lento ou indisponível.';
+        mensagemErro =
+          'Tempo limite de conexão excedido. O servidor Supabase pode estar lento ou indisponível.';
       } else {
         mensagemErro = error.message || 'Erro desconhecido ao carregar dados';
       }
-      
+
       setErro(mensagemErro);
     } finally {
       setCarregando(false);
@@ -372,7 +405,7 @@ export default function VendedoresPage() {
   const vendedoresFiltrados = vendedores.filter(
     (v) =>
       v.nome.toLowerCase().includes(busca.toLowerCase()) ||
-      v.email.toLowerCase().includes(busca.toLowerCase())
+      v.email.toLowerCase().includes(busca.toLowerCase()),
   );
 
   // ======================================================================
@@ -408,7 +441,7 @@ export default function VendedoresPage() {
         email: '',
         telefone: '',
         salario_base: 0,
-        custo_km: 0.40,
+        custo_km: 0.4,
       });
       carregarDados();
       alert('Vendedor cadastrado com sucesso!');
@@ -642,158 +675,153 @@ export default function VendedoresPage() {
     }
   };
 
-  type IntervaloRelatorio = {
-  dataInicio?: string;
-  dataFim?: string;
-};
+  // ======================================================================
+  // RELATÓRIO DO VENDEDOR (USA O PERÍODO ESCOLHIDO)
+  // ======================================================================
 
-const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
-  if (!vendedorSelecionado) return;
+  const gerarRelatorioMensal = async () => {
+    if (!vendedorSelecionado) return;
 
-  if (!configFinanceira) {
-    alert('Configuração financeira não carregada. Tente recarregar a página.');
-    return;
-  }
+    if (!configFinanceira) {
+      alert('Configuração financeira não carregada. Tente recarregar a página.');
+      return;
+    }
 
-  try {
-    // Se não vier intervalo, usa MÊS ATUAL como padrão
-    const hoje = new Date();
-    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    try {
+      // 1) Intervalo calculado com base em tipoPeriodoRelatorio + datas personalizadas
+      const { dataInicio, dataFim } = calcularIntervaloRelatorio();
 
-    const dataInicio =
-      intervalo?.dataInicio ?? primeiroDiaMes.toISOString().split('T')[0];
-    const dataFim =
-      intervalo?.dataFim ?? ultimoDiaMes.toISOString().split('T')[0];
+      // -------------------------------------------------------------------
+      // 2) DADOS BÁSICOS DO VENDEDOR
+      // -------------------------------------------------------------------
+      const vendedorInfo = {
+        nome: vendedorSelecionado.nome,
+        email: vendedorSelecionado.email,
+        telefone: vendedorSelecionado.telefone,
+        ativo: vendedorSelecionado.ativo,
+      };
 
-    // -------------------------------------------------------------------
-    // 1) DADOS BÁSICOS DO VENDEDOR
-    // -------------------------------------------------------------------
-    const vendedorInfo = {
-      nome: vendedorSelecionado.nome,
-      email: vendedorSelecionado.email,
-      telefone: vendedorSelecionado.telefone,
-      ativo: vendedorSelecionado.ativo,
-    };
+      // -------------------------------------------------------------------
+      // 3) VENDAS DO PERÍODO
+      // -------------------------------------------------------------------
+      const vendasPeriodo = vendas
+        .filter(
+          (v) =>
+            v.vendedor_id === vendedorSelecionado.id &&
+            v.data >= dataInicio &&
+            v.data <= dataFim,
+        )
+        .map((venda) => {
+          const cliente = clientes.find((c) => c.id === venda.cliente_id);
+          const itens = vendaItens.filter((item) => item.venda_id === venda.id);
+          const totalFrascos = itens.reduce(
+            (sum, item) => sum + (item.quantidade || 0),
+            0,
+          );
 
-    // -------------------------------------------------------------------
-    // 2) VENDAS DO PERÍODO
-    // -------------------------------------------------------------------
-    const vendasPeriodo = vendas
-      .filter(
-        (v) =>
-          v.vendedor_id === vendedorSelecionado.id &&
-          v.data >= dataInicio &&
-          v.data <= dataFim
-      )
-      .map((venda) => {
-        const cliente = clientes.find((c) => c.id === venda.cliente_id);
-        const itens = vendaItens.filter((item) => item.venda_id === venda.id);
-        const totalFrascos = itens.reduce(
-          (sum, item) => sum + (item.quantidade || 0),
-          0
-        );
+          return {
+            id: venda.id,
+            data: venda.data,
+            cliente_nome: cliente?.nome || 'N/A',
+            total_com_iva: venda.total_com_iva,
+            frascos: totalFrascos,
+          };
+        });
 
-        return {
-          id: venda.id,
-          data: venda.data,
-          cliente_nome: cliente?.nome || 'N/A',
-          total_com_iva: venda.total_com_iva,
-          frascos: totalFrascos,
-        };
+      // Faturação e frascos do PERÍODO (não mais do mês fixo)
+      const faturacaoPeriodo = vendasPeriodo.reduce(
+        (total, v) => total + (v.total_com_iva || 0),
+        0,
+      );
+
+      const frascosPeriodo = vendasPeriodo.reduce(
+        (total, v) => total + (v.frascos || 0),
+        0,
+      );
+
+      // -------------------------------------------------------------------
+      // 4) KM DO PERÍODO
+      // -------------------------------------------------------------------
+      const quilometragensPeriodo = quilometragens.filter(
+        (km) =>
+          km.vendedor_id === vendedorSelecionado.id &&
+          km.data >= dataInicio &&
+          km.data <= dataFim,
+      );
+
+      const kmRodadosPeriodo = quilometragensPeriodo.reduce(
+        (total, km) => total + (km.km || 0),
+        0,
+      );
+
+      const custoKmPeriodo = quilometragensPeriodo.reduce(
+        (total, km) => total + (km.valor || 0),
+        0,
+      );
+
+      // -------------------------------------------------------------------
+      // 5) VISITAS DO PERÍODO
+      // -------------------------------------------------------------------
+      const visitasPeriodo = visitas
+        .filter(
+          (visita) =>
+            visita.vendedor_id === vendedorSelecionado.id &&
+            visita.data_visita >= dataInicio &&
+            visita.data_visita <= dataFim,
+        )
+        .map((visita) => {
+          const cliente = clientes.find((c) => c.id === visita.cliente_id);
+          return {
+            id: visita.id,
+            data_visita: visita.data_visita,
+            estado: visita.estado,
+            notas: visita.notas,
+            cliente_nome: cliente?.nome || 'N/A',
+          };
+        });
+
+      // -------------------------------------------------------------------
+      // 6) RE-CÁLCULO DE COMISSÃO E META PARA O PERÍODO
+      // -------------------------------------------------------------------
+      const comissaoPeriodo = calcularComissaoProgressiva(
+        faturacaoPeriodo,
+        configFinanceira,
+      );
+
+      const percentualMetaPeriodo = calcularPercentualMeta(
+        faturacaoPeriodo,
+        configFinanceira,
+      );
+
+      const resumo = {
+        vendasPeriodo: faturacaoPeriodo, // € do período
+        frascosPeriodo, // frascos do período
+        comissaoPeriodo, // comissão só deste intervalo
+        percentualMetaPeriodo, // meta sobre este intervalo
+        clientesAtivos: vendedorSelecionado.clientesAtivos, // mantido
+        kmRodadosPeriodo,
+        custoKmPeriodo,
+      };
+
+      // -------------------------------------------------------------------
+      // 7) CHAMAR GERADOR DE PDF
+      // -------------------------------------------------------------------
+      await gerarRelatorioVendedorPdf({
+        vendedor: vendedorInfo,
+        intervalo: { dataInicio, dataFim },
+        resumo,
+        vendas: vendasPeriodo,
+        quilometragens: quilometragensPeriodo,
+        visitas: visitasPeriodo,
       });
-
-    // Faturação e frascos do PERÍODO (não mais do mês fixo)
-    const faturacaoPeriodo = vendasPeriodo.reduce(
-      (total, v) => total + (v.total_com_iva || 0),
-      0
-    );
-
-    const frascosPeriodo = vendasPeriodo.reduce(
-      (total, v) => total + (v.frascos || 0),
-      0
-    );
-
-    // -------------------------------------------------------------------
-    // 3) KM DO PERÍODO
-    // -------------------------------------------------------------------
-    const quilometragensPeriodo = quilometragens.filter(
-      (km) =>
-        km.vendedor_id === vendedorSelecionado.id &&
-        km.data >= dataInicio &&
-        km.data <= dataFim
-    );
-
-    const kmRodadosPeriodo = quilometragensPeriodo.reduce(
-      (total, km) => total + (km.km || 0),
-      0
-    );
-
-    const custoKmPeriodo = quilometragensPeriodo.reduce(
-      (total, km) => total + (km.valor || 0),
-      0
-    );
-
-    // -------------------------------------------------------------------
-    // 4) VISITAS DO PERÍODO
-    // -------------------------------------------------------------------
-    const visitasPeriodo = visitas
-      .filter(
-        (visita) =>
-          visita.vendedor_id === vendedorSelecionado.id &&
-          visita.data_visita >= dataInicio &&
-          visita.data_visita <= dataFim
-      )
-      .map((visita) => {
-        const cliente = clientes.find((c) => c.id === visita.cliente_id);
-        return {
-          id: visita.id,
-          data_visita: visita.data_visita,
-          estado: visita.estado,
-          notas: visita.notas,
-          cliente_nome: cliente?.nome || 'N/A',
-        };
-      });
-
-    // -------------------------------------------------------------------
-    // 5) RE-CÁLCULO DE COMISSÃO E META PARA O PERÍODO
-    // -------------------------------------------------------------------
-    const comissaoPeriodo = calcularComissaoProgressiva(
-      faturacaoPeriodo,
-      configFinanceira
-    );
-
-    const percentualMetaPeriodo = calcularPercentualMeta(
-      faturacaoPeriodo,
-      configFinanceira
-    );
-
-    const resumo = {
-      vendasPeriodo: faturacaoPeriodo,        // € do período
-      frascosPeriodo,                         // frascos do período
-      comissaoPeriodo,                        // comissão só deste intervalo
-      percentualMetaPeriodo,                  // meta sobre este intervalo
-      clientesAtivos: vendedorSelecionado.clientesAtivos, // pode manter
-      kmRodadosPeriodo,
-      custoKmPeriodo,
-    };
-
-    // -------------------------------------------------------------------
-    // 6) CHAMAR GERADOR DE PDF
-    // -------------------------------------------------------------------
-    await gerarRelatorioVendedorPdf({
-      vendedor: vendedorInfo,
-      intervalo: { dataInicio, dataFim },
-      resumo,
-      vendas: vendasPeriodo,
-      quilometragens: quilometragensPeriodo,
-      visitas: visitasPeriodo,
-    });
-  } catch (error: any) {
-    console.error('Erro ao gerar relatório do vendedor:', error);
-    alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
-  }
-};
+    } catch (error: any) {
+      console.error('Erro ao gerar relatório do vendedor:', error);
+      alert(
+        'Erro ao gerar relatório do vendedor: ' +
+          (error.message || 'Erro desconhecido'),
+      );
+    }
+  };
 
   const abrirModalAdicionarCliente = () => {
     setBuscaCliente('');
@@ -896,7 +924,8 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
     .filter(
       (c) =>
         c.nome.toLowerCase().includes(buscaCliente.toLowerCase()) ||
-        (c.localidade && c.localidade.toLowerCase().includes(buscaCliente.toLowerCase()))
+        (c.localidade &&
+          c.localidade.toLowerCase().includes(buscaCliente.toLowerCase())),
     );
 
   // Calcular valor total automaticamente quando KM mudar
@@ -928,7 +957,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
           <div className="flex items-start gap-3">
             <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h3 className="text-lg font-semibold text-red-900 mb-2">Erro ao carregar dados</h3>
+              <h3 className="text-lg font-semibold text-red-900 mb-2">
+                Erro ao carregar dados
+              </h3>
               <div className="text-red-700 mb-4 whitespace-pre-line">{erro}</div>
               <div className="flex gap-3">
                 <button
@@ -938,7 +969,7 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   Tentar Novamente
                 </button>
                 <button
-                  onClick={() => window.location.href = '/'}
+                  onClick={() => (window.location.href = '/')}
                   className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors"
                 >
                   Voltar ao Início
@@ -1050,7 +1081,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <Phone className="w-4 h-4" />
-                    <span className="truncate">{vendedor.telefone || 'N/A'}</span>
+                    <span className="truncate">
+                      {vendedor.telefone || 'N/A'}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <Mail className="w-4 h-4" />
@@ -1071,12 +1104,18 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Frascos Vendidos</span>
-                    <span className="font-bold text-blue-600">{vendedor.frascosMes}</span>
+                    <span className="text-sm text-gray-600">
+                      Frascos Vendidos
+                    </span>
+                    <span className="font-bold text-blue-600">
+                      {vendedor.frascosMes}
+                    </span>
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Comissão Atual</span>
+                    <span className="text-sm text-gray-600">
+                      Comissão Atual
+                    </span>
                     <span className="font-bold text-green-600">
                       {vendedor.comissaoMes.toLocaleString('pt-PT', {
                         minimumFractionDigits: 2,
@@ -1152,7 +1191,10 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                     type="text"
                     value={novoVendedor.nome}
                     onChange={(e) =>
-                      setNovoVendedor({ ...novoVendedor, nome: e.target.value })
+                      setNovoVendedor({
+                        ...novoVendedor,
+                        nome: e.target.value,
+                      })
                     }
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                     placeholder="Nome do vendedor"
@@ -1167,7 +1209,10 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                     type="email"
                     value={novoVendedor.email}
                     onChange={(e) =>
-                      setNovoVendedor({ ...novoVendedor, email: e.target.value })
+                      setNovoVendedor({
+                        ...novoVendedor,
+                        email: e.target.value,
+                      })
                     }
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                     placeholder="email@100pharma.pt"
@@ -1182,7 +1227,10 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                     type="text"
                     value={novoVendedor.telefone}
                     onChange={(e) =>
-                      setNovoVendedor({ ...novoVendedor, telefone: e.target.value })
+                      setNovoVendedor({
+                        ...novoVendedor,
+                        telefone: e.target.value,
+                      })
                     }
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                     placeholder="+351 91 234 5678"
@@ -1256,8 +1304,12 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-bold">{vendedorSelecionado.nome}</h2>
-                  <p className="text-sm opacity-90">{vendedorSelecionado.email}</p>
+                  <h2 className="text-2xl font-bold">
+                    {vendedorSelecionado.nome}
+                  </h2>
+                  <p className="text-sm opacity-90">
+                    {vendedorSelecionado.email}
+                  </p>
                 </div>
                 <button
                   onClick={() => setModalDetalhes(false)}
@@ -1340,7 +1392,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
                     <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-pink-600 font-medium">Meta Mensal</span>
+                        <span className="text-sm text-pink-600 font-medium">
+                          Meta Mensal
+                        </span>
                         <Target className="w-5 h-5 text-pink-600" />
                       </div>
                       <p className="text-2xl font-bold text-pink-900">
@@ -1361,7 +1415,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                         })}
                         €
                       </p>
-                      <p className="text-xs text-emerald-600 mt-1">Faixas progressivas</p>
+                      <p className="text-xs text-emerald-600 mt-1">
+                        Faixas progressivas
+                      </p>
                     </div>
 
                     <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-xl">
@@ -1407,7 +1463,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-bold text-gray-900">Clientes Atribuídos</h3>
+                      <h3 className="text-lg font-bold text-gray-900">
+                        Clientes Atribuídos
+                      </h3>
                       <p className="text-sm text-gray-600">
                         {clientesDoVendedor.length} clientes
                       </p>
@@ -1436,7 +1494,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                           <div className="flex items-center gap-3">
                             <Building2 className="w-5 h-5 text-gray-400" />
                             <div>
-                              <p className="font-medium text-gray-900">{cliente.nome}</p>
+                              <p className="font-medium text-gray-900">
+                                {cliente.nome}
+                              </p>
                               <p className="text-sm text-gray-600">
                                 {cliente.localidade || 'N/A'}
                               </p>
@@ -1453,7 +1513,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                               {cliente.ativo ? 'Ativo' : 'Inativo'}
                             </span>
                             <button
-                              onClick={() => removerClienteDoVendedor(cliente.id)}
+                              onClick={() =>
+                                removerClienteDoVendedor(cliente.id)
+                              }
                               className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                               title="Remover cliente"
                             >
@@ -1477,9 +1539,12 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                         Comissão do Mês
                       </p>
                       <p className="text-2xl font-bold text-green-900">
-                        {vendedorSelecionado.comissaoMes.toLocaleString('pt-PT', {
-                          minimumFractionDigits: 2,
-                        })}
+                        {vendedorSelecionado.comissaoMes.toLocaleString(
+                          'pt-PT',
+                          {
+                            minimumFractionDigits: 2,
+                          },
+                        )}
                         €
                       </p>
                     </div>
@@ -1508,7 +1573,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
                   {/* Lista de Vendas */}
                   <div>
-                    <h3 className="text-lg font-bold text-gray-900 mb-4">Vendas Recentes</h3>
+                    <h3 className="text-lg font-bold text-gray-900 mb-4">
+                      Vendas Recentes
+                    </h3>
                     <div className="space-y-2">
                       {vendasDoVendedor.length === 0 ? (
                         <div className="text-center py-8 text-gray-500">
@@ -1517,13 +1584,15 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                         </div>
                       ) : (
                         vendasDoVendedor.map((venda) => {
-                          const cliente = clientes.find((c) => c.id === venda.cliente_id);
+                          const cliente = clientes.find(
+                            (c) => c.id === venda.cliente_id,
+                          );
                           const itens = vendaItens.filter(
-                            (item) => item.venda_id === venda.id
+                            (item) => item.venda_id === venda.id,
                           );
                           const totalFrascos = itens.reduce(
                             (sum, item) => sum + item.quantidade,
-                            0
+                            0,
                           );
 
                           return (
@@ -1536,8 +1605,10 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                                   {cliente?.nome || 'Cliente não encontrado'}
                                 </p>
                                 <p className="text-sm text-gray-600">
-                                  {new Date(venda.data).toLocaleDateString('pt-PT')} •{' '}
-                                  {totalFrascos} frascos
+                                  {new Date(
+                                    venda.data,
+                                  ).toLocaleDateString('pt-PT')}{' '}
+                                  • {totalFrascos} frascos
                                 </p>
                               </div>
                               <div className="text-right">
@@ -1547,7 +1618,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                                   })}
                                   €
                                 </p>
-                                <p className="text-sm text-gray-600">com IVA</p>
+                                <p className="text-sm text-gray-600">
+                                  com IVA
+                                </p>
                               </div>
                             </div>
                           );
@@ -1564,7 +1637,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   {/* Quilometragem */}
                   <div>
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-bold text-gray-900">Quilometragem</h3>
+                      <h3 className="text-lg font-bold text-gray-900">
+                        Quilometragem
+                      </h3>
                       <button
                         onClick={abrirModalAdicionarKm}
                         className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
@@ -1590,9 +1665,13 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                               <MapPin className="w-5 h-5 text-gray-400" />
                               <div>
                                 <p className="font-medium text-gray-900">
-                                  {new Date(km.data).toLocaleDateString('pt-PT')}
+                                  {new Date(
+                                    km.data,
+                                  ).toLocaleDateString('pt-PT')}
                                 </p>
-                                <p className="text-sm text-gray-600">{km.km} km</p>
+                                <p className="text-sm text-gray-600">
+                                  {km.km} km
+                                </p>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1626,7 +1705,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   {/* Visitas */}
                   <div>
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-bold text-gray-900">Visitas</h3>
+                      <h3 className="text-lg font-bold text-gray-900">
+                        Visitas
+                      </h3>
                       <button
                         onClick={abrirModalAdicionarVisita}
                         className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
@@ -1644,7 +1725,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                         </div>
                       ) : (
                         visitasDoVendedor.map((visita) => {
-                          const cliente = clientes.find((c) => c.id === visita.cliente_id);
+                          const cliente = clientes.find(
+                            (c) => c.id === visita.cliente_id,
+                          );
 
                           return (
                             <div
@@ -1655,10 +1738,13 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                                 <Calendar className="w-5 h-5 text-gray-400" />
                                 <div>
                                   <p className="font-medium text-gray-900">
-                                    {cliente?.nome || 'Cliente não encontrado'}
+                                    {cliente?.nome ||
+                                      'Cliente não encontrado'}
                                   </p>
                                   <p className="text-sm text-gray-600">
-                                    {new Date(visita.data_visita).toLocaleDateString('pt-PT')}
+                                    {new Date(
+                                      visita.data_visita,
+                                    ).toLocaleDateString('pt-PT')}
                                   </p>
                                 </div>
                               </div>
@@ -1702,129 +1788,128 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
         </div>
       )}
 
-{/* Modal Período do Relatório do Vendedor */}
-{mostrarModalPeriodo && (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
-      <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold">Período do Relatório</h2>
-          <button
-            onClick={() => setMostrarModalPeriodo(false)}
-            className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      <div className="p-6 space-y-4">
-        {/* Opções de período */}
-        <div className="space-y-3">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="radio"
-              className="text-purple-600"
-              checked={tipoPeriodoRelatorio === 'MES_ATUAL'}
-              onChange={() => setTipoPeriodoRelatorio('MES_ATUAL')}
-            />
-            <span>Mês atual</span>
-          </label>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="radio"
-              className="text-purple-600"
-              checked={tipoPeriodoRelatorio === 'ULTIMOS_30'}
-              onChange={() => setTipoPeriodoRelatorio('ULTIMOS_30')}
-            />
-            <span>Últimos 30 dias</span>
-          </label>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="radio"
-              className="text-purple-600"
-              checked={tipoPeriodoRelatorio === 'MES_ANTERIOR'}
-              onChange={() => setTipoPeriodoRelatorio('MES_ANTERIOR')}
-            />
-            <span>Mês anterior</span>
-          </label>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="radio"
-              className="text-purple-600"
-              checked={tipoPeriodoRelatorio === 'PERSONALIZADO'}
-              onChange={() => setTipoPeriodoRelatorio('PERSONALIZADO')}
-            />
-            <span>Período personalizado</span>
-          </label>
-        </div>
-
-        {/* Campos de datas – só aparecem no modo PERSONALIZADO */}
-        {tipoPeriodoRelatorio === 'PERSONALIZADO' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Data início
-              </label>
-              <input
-                type="date"
-                value={dataInicioRelatorio}
-                onChange={(e) => setDataInicioRelatorio(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-              />
+      {/* Modal Período do Relatório do Vendedor */}
+      {mostrarModalPeriodo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+            <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold">Período do Relatório</h2>
+                <button
+                  onClick={() => setMostrarModalPeriodo(false)}
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Data fim
-              </label>
-              <input
-                type="date"
-                value={dataFimRelatorio}
-                onChange={(e) => setDataFimRelatorio(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-              />
+
+            <div className="p-6 space-y-4">
+              {/* Opções de período */}
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    className="text-purple-600"
+                    checked={tipoPeriodoRelatorio === 'MES_ATUAL'}
+                    onChange={() => setTipoPeriodoRelatorio('MES_ATUAL')}
+                  />
+                  <span>Mês atual</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    className="text-purple-600"
+                    checked={tipoPeriodoRelatorio === 'ULTIMOS_30'}
+                    onChange={() => setTipoPeriodoRelatorio('ULTIMOS_30')}
+                  />
+                  <span>Últimos 30 dias</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    className="text-purple-600"
+                    checked={tipoPeriodoRelatorio === 'MES_ANTERIOR'}
+                    onChange={() => setTipoPeriodoRelatorio('MES_ANTERIOR')}
+                  />
+                  <span>Mês anterior</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    className="text-purple-600"
+                    checked={tipoPeriodoRelatorio === 'PERSONALIZADO'}
+                    onChange={() => setTipoPeriodoRelatorio('PERSONALIZADO')}
+                  />
+                  <span>Período personalizado</span>
+                </label>
+              </div>
+
+              {/* Campos de datas – só aparecem no modo PERSONALIZADO */}
+              {tipoPeriodoRelatorio === 'PERSONALIZADO' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Data início
+                    </label>
+                    <input
+                      type="date"
+                      value={dataInicioRelatorio}
+                      onChange={(e) => setDataInicioRelatorio(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Data fim
+                    </label>
+                    <input
+                      type="date"
+                      value={dataFimRelatorio}
+                      onChange={(e) => setDataFimRelatorio(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Botões */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => {
+                    setMostrarModalPeriodo(false);
+                  }}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    // Validação simples para período personalizado
+                    if (
+                      tipoPeriodoRelatorio === 'PERSONALIZADO' &&
+                      (!dataInicioRelatorio || !dataFimRelatorio)
+                    ) {
+                      alert('Preencha as datas de início e fim.');
+                      return;
+                    }
+
+                    await gerarRelatorioMensal();
+                    setMostrarModalPeriodo(false);
+                  }}
+                  className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
+                >
+                  Gerar PDF
+                </button>
+              </div>
             </div>
           </div>
-        )}
-
-        {/* Botões */}
-        <div className="flex gap-3 pt-4">
-          <button
-            onClick={() => {
-              setMostrarModalPeriodo(false);
-            }}
-            className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={async () => {
-              // Validação simples para período personalizado
-              if (
-                tipoPeriodoRelatorio === 'PERSONALIZADO' &&
-                (!dataInicioRelatorio || !dataFimRelatorio)
-              ) {
-                alert('Preencha as datas de início e fim.');
-                return;
-              }
-
-              await gerarRelatorioMensal(); // usa o filtro escolhido
-              setMostrarModalPeriodo(false);
-            }}
-            className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition-all"
-          >
-            Gerar PDF
-          </button>
         </div>
-      </div>
-    </div>
-  </div>
-)}
+      )}
 
-      
       {/* Modal Adicionar Cliente */}
       {modalAdicionarCliente && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
@@ -1870,7 +1955,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                       <div className="flex items-center gap-3">
                         <Building2 className="w-5 h-5 text-gray-400" />
                         <div>
-                          <p className="font-medium text-gray-900">{cliente.nome}</p>
+                          <p className="font-medium text-gray-900">
+                            {cliente.nome}
+                          </p>
                           <p className="text-sm text-gray-600">
                             {cliente.localidade || 'N/A'}
                           </p>
@@ -1902,21 +1989,29 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Data</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data
+                </label>
                 <input
                   type="date"
                   value={novaKm.data}
-                  onChange={(e) => setNovaKm({ ...novaKm, data: e.target.value })}
+                  onChange={(e) =>
+                    setNovaKm({ ...novaKm, data: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">KM Total</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  KM Total
+                </label>
                 <input
                   type="number"
                   value={novaKm.km}
-                  onChange={(e) => setNovaKm({ ...novaKm, km: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setNovaKm({ ...novaKm, km: Number(e.target.value) })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   placeholder="120"
                   min="0"
@@ -1935,7 +2030,8 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   placeholder="Calculado automaticamente"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Calculado automaticamente: {novaKm.km} km × {vendedorSelecionado?.custo_km.toFixed(2)}€/km
+                  Calculado automaticamente: {novaKm.km} km ×{' '}
+                  {vendedorSelecionado?.custo_km.toFixed(2)}€/km
                 </p>
               </div>
 
@@ -1968,21 +2064,29 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Data</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data
+                </label>
                 <input
                   type="date"
                   value={novaKm.data}
-                  onChange={(e) => setNovaKm({ ...novaKm, data: e.target.value })}
+                  onChange={(e) =>
+                    setNovaKm({ ...novaKm, data: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">KM Total</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  KM Total
+                </label>
                 <input
                   type="number"
                   value={novaKm.km}
-                  onChange={(e) => setNovaKm({ ...novaKm, km: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setNovaKm({ ...novaKm, km: Number(e.target.value) })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   min="0"
                 />
@@ -2000,7 +2104,8 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                   placeholder="Calculado automaticamente"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Calculado automaticamente: {novaKm.km} km × {vendedorSelecionado?.custo_km.toFixed(2)}€/km
+                  Calculado automaticamente: {novaKm.km} km ×{' '}
+                  {vendedorSelecionado?.custo_km.toFixed(2)}€/km
                 </p>
               </div>
 
@@ -2033,7 +2138,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Cliente
+                </label>
                 <select
                   value={novaVisita.cliente_id}
                   onChange={(e) =>
@@ -2051,22 +2158,31 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Data</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data
+                </label>
                 <input
                   type="date"
                   value={novaVisita.data_visita}
                   onChange={(e) =>
-                    setNovaVisita({ ...novaVisita, data_visita: e.target.value })
+                    setNovaVisita({
+                      ...novaVisita,
+                      data_visita: e.target.value,
+                    })
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Estado
+                </label>
                 <select
                   value={novaVisita.estado}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value })}
+                  onChange={(e) =>
+                    setNovaVisita({ ...novaVisita, estado: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 >
                   <option value="PENDENTE">Pendente</option>
@@ -2081,7 +2197,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                 </label>
                 <textarea
                   value={novaVisita.notas}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, notas: e.target.value })}
+                  onChange={(e) =>
+                    setNovaVisita({ ...novaVisita, notas: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                   rows={3}
                   placeholder="Observações sobre a visita..."
@@ -2117,7 +2235,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Cliente
+                </label>
                 <select
                   value={novaVisita.cliente_id}
                   onChange={(e) =>
@@ -2135,22 +2255,31 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Data</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data
+                </label>
                 <input
                   type="date"
                   value={novaVisita.data_visita}
                   onChange={(e) =>
-                    setNovaVisita({ ...novaVisita, data_visita: e.target.value })
+                    setNovaVisita({
+                      ...novaVisita,
+                      data_visita: e.target.value,
+                    })
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Estado
+                </label>
                 <select
                   value={novaVisita.estado}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value })}
+                  onChange={(e) =>
+                    setNovaVisita({ ...novaVisita, estado: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 >
                   <option value="PENDENTE">Pendente</option>
@@ -2165,7 +2294,9 @@ const gerarRelatorioMensal = async (intervalo?: IntervaloRelatorio) => {
                 </label>
                 <textarea
                   value={novaVisita.notas}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, notas: e.target.value })}
+                  onChange={(e) =>
+                    setNovaVisita({ ...novaVisita, notas: e.target.value })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                   rows={3}
                   placeholder="Observações sobre a visita..."
