@@ -316,7 +316,9 @@ export default function VendasPage() {
       const totais = calcularTotais(itensVenda);
 
       const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
-      const valorComissao = totais.total_com_iva * (percentualComissao / 100);
+       // Comissão deve ser calculada sobre o valor SEM IVA
+      const valorComissao = totais.subtotal * (percentualComissao / 100);
+
 
       const totalFrascos = itensVenda.reduce(
         (acc, item) => acc + item.quantidade,
