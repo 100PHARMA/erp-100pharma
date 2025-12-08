@@ -55,6 +55,13 @@ interface ItemVenda {
   quantidade: number;
   preco_unitario: number;
   total_linha: number;
+
+  // Novos campos congelados por item
+  percentual_comissao_vendedor?: number;
+  valor_comissao_vendedor?: number;
+  incentivo_farmacia?: number;
+  incentivo_podologista?: number;
+  taxa_iva?: number;
 }
 
 interface Venda {
@@ -70,6 +77,16 @@ interface Venda {
   observacoes: string;
   created_at: string;
   updated_at: string;
+
+  // Novos campos congelados por venda
+  taxa_iva?: number;
+  percentual_comissao_vendedor?: number;
+  valor_total_comissao?: number;
+  incentivo_farmacia_total?: number;
+  incentivo_podologista_total?: number;
+  meta_mensal_vendedor_no_momento?: number;
+  custo_km_no_momento?: number;
+
   // Relacionamentos
   clientes?: Cliente;
   vendedores?: Vendedor;
@@ -255,6 +272,7 @@ export default function VendasPage() {
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
             observacoes,
+            taxa_iva: TAXA_IVA, // 👈
             updated_at: new Date().toISOString()
           })
           .eq('id', vendaEditando.id);
@@ -270,13 +288,15 @@ export default function VendasPage() {
         if (deleteError) throw deleteError;
 
         // Inserir novos itens
-        const itensParaInserir = itensVenda.map(item => ({
-          venda_id: vendaEditando.id,
-          produto_id: item.produto_id,
-          quantidade: item.quantidade,
-          preco_unitario: item.preco_unitario,
-          total_linha: item.total_linha
-        }));
+       const itensParaInserir = itensVenda.map(item => ({
+        venda_id: vendaData.id,
+        produto_id: item.produto_id,
+        quantidade: item.quantidade,
+        preco_unitario: item.preco_unitario,
+        total_linha: item.total_linha,
+        taxa_iva: TAXA_IVA   // 👈 IVA congelado por linha
+}));
+
 
         const { error: itensError } = await supabase
           .from('venda_itens')
@@ -305,6 +325,7 @@ export default function VendasPage() {
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
             observacoes
+            taxa_iva: TAXA_IVA // 👈 IVA congelado na venda
           })
           .select()
           .single();
