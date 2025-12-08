@@ -324,7 +324,7 @@ export default function VendasPage() {
             subtotal: totais.subtotal,
             iva: totais.iva,
             total_com_iva: totais.total_com_iva,
-            observacoes
+            observacoes,
             taxa_iva: TAXA_IVA // 👈 IVA congelado na venda
           })
           .select()
