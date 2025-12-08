@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { 
   Plus, Search, Eye, Edit, Trash2, 
   FileText, CheckCircle, X, ChevronRight,
-  AlertCircle, TrendingUp, Package, Calendar, Save, XCircle
+  AlertCircle, TrendingUp, Package, Save
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
@@ -62,7 +62,7 @@ interface ItemVenda {
   preco_unitario: number;
   total_linha: number;
 
-  // Novos campos congelados por item (ainda não usados)
+  // Novos campos congelados por item (ainda não usados, mas já declarados)
   percentual_comissao_vendedor?: number;
   valor_comissao_vendedor?: number;
   incentivo_farmacia?: number;
@@ -243,9 +243,9 @@ export default function VendasPage() {
   };
 
   // ======================================================================
-  // NOVA FUNÇÃO — Meta Mensal do Vendedor
+  // META MENSAL DO VENDEDOR
   // ======================================================================
-  
+
   const obterMetaMensalDoVendedor = async (
     vendedorId: string,
     dataVendaISO: string
@@ -254,24 +254,45 @@ export default function VendasPage() {
     const ano = data.getFullYear();
     const mes = data.getMonth() + 1;
 
-    const { data: metaEspecifica } = await supabase
-      .from('vendedor_metas_mensais')
-      .select('meta_mensal')
-      .eq('vendedor_id', vendedorId)
-      .eq('ano', ano)
-      .eq('mes', mes)
-      .maybeSingle();
+    try {
+      // Tenta meta específica do vendedor para ano/mês
+      const { data: metasEspecificas, error: metaError } = await supabase
+        .from('vendedor_metas_mensais')
+        .select('meta_mensal')
+        .eq('vendedor_id', vendedorId)
+        .eq('ano', ano)
+        .eq('mes', mes)
+        .limit(1);
 
-    if (metaEspecifica?.meta_mensal) {
-      return Number(metaEspecifica.meta_mensal);
+      if (metaError) {
+        console.error('Erro ao buscar meta específica do vendedor:', metaError);
+      }
+
+      if (
+        metasEspecificas &&
+        metasEspecificas.length > 0 &&
+        metasEspecificas[0].meta_mensal != null
+      ) {
+        return Number(metasEspecificas[0].meta_mensal);
+      }
+
+      // Caso não exista meta específica, busca configuração global
+      const { data: configRows, error: configError } = await supabase
+        .from('configuracoes_financeiras')
+        .select('meta_mensal_vendedor')
+        .limit(1);
+
+      if (configError) {
+        console.error('Erro ao buscar configuração financeira:', configError);
+        return 0;
+      }
+
+      const config = configRows?.[0];
+      return Number(config?.meta_mensal_vendedor ?? 0);
+    } catch (e) {
+      console.error('Erro inesperado ao obter meta mensal do vendedor:', e);
+      return 0;
     }
-
-    const { data: config } = await supabase
-      .from('configuracoes_financeiras')
-      .select('meta_mensal_vendedor')
-      .single();
-
-    return Number(config?.meta_mensal_vendedor ?? 0);
   };
 
   // ======================================================================
@@ -293,14 +314,24 @@ export default function VendasPage() {
       setCarregando(true);
 
       const totais = calcularTotais(itensVenda);
-      const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO; // 5%
+
+      const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
       const valorComissao = totais.total_com_iva * (percentualComissao / 100);
 
-      // Se quisermos usar a meta já agora, bastava descomentar:
-      // const metaMensalVendedor = await obterMetaMensalDoVendedor(
-      //   vendedorSelecionado,
-      //   dataVenda
-      // );
+      const totalFrascos = itensVenda.reduce(
+        (acc, item) => acc + item.quantidade,
+        0
+      );
+
+      const incentivoFarmaciaTotal =
+        totalFrascos * INCENTIVO_FARMACIA_PADRAO;
+      const incentivoPodologistaTotal =
+        totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
+
+      const metaMensalVendedor = await obterMetaMensalDoVendedor(
+        vendedorSelecionado,
+        dataVenda
+      );
 
       if (vendaEditando) {
         // ============================================================
@@ -323,10 +354,10 @@ export default function VendasPage() {
             taxa_iva: TAXA_IVA,
             percentual_comissao_vendedor: percentualComissao,
             valor_total_comissao: valorComissao,
-            incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
-            incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
-            // meta_mensal_vendedor_no_momento: metaMensalVendedor,
-            // custo_km_no_momento: CUSTO_KM_PADRAO,
+            incentivo_farmacia_total: incentivoFarmaciaTotal,
+            incentivo_podologista_total: incentivoPodologistaTotal,
+            meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            custo_km_no_momento: CUSTO_KM_PADRAO,
 
             updated_at: new Date().toISOString()
           })
@@ -342,14 +373,14 @@ export default function VendasPage() {
 
         if (deleteError) throw deleteError;
 
-        // Inserir novos itens (usando o id da venda em edição)
+        // Inserir novos itens (com IVA congelado por linha, se quiser usar no futuro)
         const itensParaInserir = itensVenda.map(item => ({
           venda_id: vendaEditando.id,
           produto_id: item.produto_id,
           quantidade: item.quantidade,
           preco_unitario: item.preco_unitario,
-          total_linha: item.total_linha
-          // taxa_iva: TAXA_IVA // só adiciona se criarmos essa coluna em venda_itens
+          total_linha: item.total_linha,
+          taxa_iva: TAXA_IVA
         }));
 
         const { error: itensError } = await supabase
@@ -384,10 +415,10 @@ export default function VendasPage() {
             taxa_iva: TAXA_IVA,
             percentual_comissao_vendedor: percentualComissao,
             valor_total_comissao: valorComissao,
-            incentivo_farmacia_total: INCENTIVO_FARMACIA_PADRAO,
-            incentivo_podologista_total: INCENTIVO_PODOLOGISTA_PADRAO,
-            // meta_mensal_vendedor_no_momento: metaMensalVendedor,
-            // custo_km_no_momento: CUSTO_KM_PADRAO
+            incentivo_farmacia_total: incentivoFarmaciaTotal,
+            incentivo_podologista_total: incentivoPodologistaTotal,
+            meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            custo_km_no_momento: CUSTO_KM_PADRAO
           })
           .select()
           .single();
@@ -400,8 +431,8 @@ export default function VendasPage() {
           produto_id: item.produto_id,
           quantidade: item.quantidade,
           preco_unitario: item.preco_unitario,
-          total_linha: item.total_linha
-          // taxa_iva: TAXA_IVA // idem observação acima
+          total_linha: item.total_linha,
+          taxa_iva: TAXA_IVA
         }));
 
         const { error: itensError } = await supabase
@@ -733,17 +764,12 @@ export default function VendasPage() {
                         €{venda.total_com_iva.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span
-                          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                            venda.estado === 'FECHADA'
-                              ? 'bg-green-100 text-green-800'
-                              : venda.estado === 'ABERTA'
-                              ? 'bg-orange-100 text-orange-800'
-                              : venda.estado === 'ORCAMENTO'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-gray-100 text-gray-800'
-                          }`}
-                        >
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
+                          venda.estado === 'FECHADA' ? 'bg-green-100 text-green-800' :
+                          venda.estado === 'ABERTA' ? 'bg-orange-100 text-orange-800' :
+                          venda.estado === 'ORCAMENTO' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
                           {venda.estado}
                         </span>
                       </td>
