@@ -342,7 +342,7 @@ export default function VendasPage() {
       const { data: relacao, error: relacaoErro } = await supabase
         .from('podologista_farmacia')
         .select('podologista_id')
-        .eq('cliente_id', clienteSelecionado)
+        .eq('farmacia_id', clienteSelecionado)
         .maybeSingle(); // assumindo 1 podologista ativo por farmácia
 
       if (relacaoErro) throw relacaoErro;
