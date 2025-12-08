@@ -240,8 +240,40 @@ export default function VendasPage() {
   };
 
   const removerItem = (index: number) => {
-    setItensVenda(itensVenda.filter((_, i) => i !== index));
-  };
+  setItensVenda(itensVenda.filter((_, i) => i !== index));
+};
+
+// ======================================================================
+// NOVA FUNÇÃO — Meta Mensal do Vendedor (colocar AQUI, exatamente aqui)
+// ======================================================================
+  
+  const obterMetaMensalDoVendedor = async (
+  vendedorId: string,
+  dataVendaISO: string
+): Promise<number> => {
+  const data = new Date(dataVendaISO);
+  const ano = data.getFullYear();
+  const mes = data.getMonth() + 1;
+
+  const { data: metaEspecifica } = await supabase
+    .from('vendedor_metas_mensais')
+    .select('meta_mensal')
+    .eq('vendedor_id', vendedorId)
+    .eq('ano', ano)
+    .eq('mes', mes)
+    .maybeSingle();
+
+  if (metaEspecifica?.meta_mensal) {
+    return Number(metaEspecifica.meta_mensal);
+  }
+
+  const { data: config } = await supabase
+    .from('configuracoes_financeiras')
+    .select('meta_mensal_vendedor')
+    .single();
+
+  return Number(config?.meta_mensal_vendedor ?? 0);
+};
 
   // ======================================================================
   // SALVAR VENDA (SEMPRE COMO ABERTA)
