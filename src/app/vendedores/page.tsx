@@ -794,13 +794,22 @@ export default function VendedoresPage() {
       );
 
       const resumo = {
-        vendasPeriodo: faturacaoPeriodo, // € do período
-        frascosPeriodo, // frascos do período
-        comissaoPeriodo, // comissão só deste intervalo
-        percentualMetaPeriodo, // meta sobre este intervalo
-        clientesAtivos: vendedorSelecionado.clientesAtivos, // mantido
+        // Campos esperados pelo gerador de PDF (antigos)
+        vendasMes: faturacaoPeriodo,             // Faturação no período
+        frascosMes: frascosPeriodo,              // Frascos vendidos
+        comissaoMes: comissaoPeriodo,            // Comissão no período
+        clientesAtivos: vendedorSelecionado.clientesAtivos,
+        kmRodadosMes: kmRodadosPeriodo,          // Km rodados no período
+        custoKmMes: custoKmPeriodo,              // Custo de km no período
+        percentualMeta: percentualMetaPeriodo,   // Percentual da meta
+
+        // Aliases (se quiser manter para uso futuro no front)
+        vendasPeriodo: faturacaoPeriodo,
+        frascosPeriodo,
+        comissaoPeriodo,
         kmRodadosPeriodo,
         custoKmPeriodo,
+        percentualMetaPeriodo,
       };
 
       // -------------------------------------------------------------------
