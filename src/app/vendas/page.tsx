@@ -296,183 +296,200 @@ export default function VendasPage() {
   };
 
     // ======================================================================
-   // SALVAR VENDA (SEMPRE COMO ABERTA)
-   // ======================================================================
+// SALVAR VENDA (SEMPRE COMO ABERTA)
+// ======================================================================
 
-  const salvarVenda = async () => {
-    try {
-      if (!clienteSelecionado || !vendedorSelecionado) {
-        alert('Selecione cliente e vendedor');
-        return;
-      }
+const salvarVenda = async () => {
+  try {
+    if (!clienteSelecionado || !vendedorSelecionado) {
+      alert('Selecione cliente e vendedor');
+      return;
+    }
 
-      if (itensVenda.length === 0) {
-        alert('Adicione pelo menos um produto');
-        return;
-      }
+    if (itensVenda.length === 0) {
+      alert('Adicione pelo menos um produto');
+      return;
+    }
 
-      setCarregando(true);
+    setCarregando(true);
 
-      // Totais da venda
-      const totais = calcularTotais(itensVenda);
+    // 1) Descobrir qual podologista está associado a este cliente
+    let podologistaIdParaGravar: string | null = null;
 
-      const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
-      // Comissão deve ser calculada sobre o valor SEM IVA
-      const valorComissao = totais.subtotal * (percentualComissao / 100);
+    // Tenta primeiro a coluna direta em CLIENTES
+    const { data: clienteData, error: clienteError } = await supabase
+      .from('clientes')
+      .select('podologista_id')
+      .eq('id', clienteSelecionado)
+      .maybeSingle();
 
-      // Total de unidades (frascos)
-      const totalFrascos = itensVenda.reduce(
-        (acc, item) => acc + item.quantidade,
-        0
-      );
+    if (clienteError) throw clienteError;
 
-      const incentivoFarmaciaTotal =
-        totalFrascos * INCENTIVO_FARMACIA_PADRAO;
-
-      const incentivoPodologistaTotal =
-        totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
-
-      // Meta mensal do vendedor congelada no momento
-      const metaMensalVendedor = await obterMetaMensalDoVendedor(
-        vendedorSelecionado,
-        dataVenda
-      );
-
-      // Buscar podologista associado à farmácia (cliente) no momento da venda
-      const { data: relacao, error: relacaoErro } = await supabase
+    if (clienteData?.podologista_id) {
+      podologistaIdParaGravar = clienteData.podologista_id;
+    } else {
+      // Fallback: relacionamento na tabela podologista_farmacia
+      const { data: podoRel, error: podoRelError } = await supabase
         .from('podologista_farmacia')
         .select('podologista_id')
-        .eq('farmacia_id', clienteSelecionado)
-        .maybeSingle(); // assumindo 1 podologista ativo por farmácia
+        .eq('farmacia_id', clienteSelecionado) // nome correto da coluna
+        .eq('ativo', true)
+        .limit(1)
+        .maybeSingle();
 
-      if (relacaoErro) throw relacaoErro;
-
-      const podologistaId = relacao?.podologista_id ?? null;
-
-
-      if (vendaEditando) {
-        // ============================================================
-        // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
-        // ============================================================
-
-        const { error: vendaError } = await supabase
-          .from('vendas')
-          .update({
-            cliente_id: clienteSelecionado,
-            vendedor_id: vendedorSelecionado,
-            data: dataVenda,
-            estado: 'ABERTA',
-            subtotal: totais.subtotal,
-            iva: totais.iva,
-            total_com_iva: totais.total_com_iva,
-            observacoes,
-
-            // campos congelados
-            taxa_iva: TAXA_IVA,
-            percentual_comissao_vendedor: percentualComissao,
-            valor_total_comissao: valorComissao,
-            incentivo_farmacia_total: incentivoFarmaciaTotal,
-            incentivo_podologista_total: incentivoPodologistaTotal,
-            meta_mensal_vendedor_no_momento: metaMensalVendedor,
-            custo_km_no_momento: CUSTO_KM_PADRAO,
-
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', vendaEditando.id);
-
-        if (vendaError) throw vendaError;
-
-        // Deletar itens antigos
-        const { error: deleteError } = await supabase
-          .from('venda_itens')
-          .delete()
-          .eq('venda_id', vendaEditando.id);
-
-        if (deleteError) throw deleteError;
-
-        // Inserir novos itens (IVA + podologista congelados por linha)
-        const itensParaInserir = itensVenda.map(item => ({
-          venda_id: vendaEditando.id,
-          produto_id: item.produto_id,
-          quantidade: item.quantidade,
-          preco_unitario: item.preco_unitario,
-          total_linha: item.total_linha,
-          taxa_iva: TAXA_IVA,
-          incentivo_podologista: INCENTIVO_PODOLOGISTA_PADRAO,
-          podologista_id: podologistaId
-        }));
-
-        const { error: itensError } = await supabase
-          .from('venda_itens')
-          .insert(itensParaInserir);
-
-        if (itensError) throw itensError;
-
-        alert('Venda atualizada com sucesso!');
-      } else {
-        // ============================================================
-        // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
-        // ============================================================
-
-        const numeroVenda = `VD${Date.now()}`;
-
-        const { data: vendaData, error: vendaError } = await supabase
-          .from('vendas')
-          .insert({
-            numero: numeroVenda,
-            cliente_id: clienteSelecionado,
-            vendedor_id: vendedorSelecionado,
-            data: dataVenda,
-            estado: 'ABERTA',
-            subtotal: totais.subtotal,
-            iva: totais.iva,
-            total_com_iva: totais.total_com_iva,
-            observacoes,
-
-            // campos congelados
-            taxa_iva: TAXA_IVA,
-            percentual_comissao_vendedor: percentualComissao,
-            valor_total_comissao: valorComissao,
-            incentivo_farmacia_total: incentivoFarmaciaTotal,
-            incentivo_podologista_total: incentivoPodologistaTotal,
-            meta_mensal_vendedor_no_momento: metaMensalVendedor,
-            custo_km_no_momento: CUSTO_KM_PADRAO
-          })
-          .select()
-          .single();
-
-        if (vendaError) throw vendaError;
-
-        // Inserir itens (IVA + podologista congelados por linha)
-        const itensParaInserir = itensVenda.map(item => ({
-          venda_id: vendaData.id,
-          produto_id: item.produto_id,
-          quantidade: item.quantidade,
-          preco_unitario: item.preco_unitario,
-          total_linha: item.total_linha,
-          taxa_iva: TAXA_IVA,
-          incentivo_podologista: INCENTIVO_PODOLOGISTA_PADRAO,
-          podologista_id: podologistaId
-        }));
-
-        const { error: itensError } = await supabase
-          .from('venda_itens')
-          .insert(itensParaInserir);
-
-        if (itensError) throw itensError;
-
-        alert('Venda criada com sucesso!');
+      // PGRST116 = nenhuma linha encontrada; não é erro “grave”
+      if (podoRelError && (podoRelError as any).code !== 'PGRST116') {
+        throw podoRelError;
       }
 
-      fecharModal();
-      await carregarDados();
-    } catch (error: any) {
-      console.error('Erro ao salvar venda:', error);
-      alert('Erro ao salvar venda: ' + error.message);
-    } finally {
-      setCarregando(false);
+      if (podoRel?.podologista_id) {
+        podologistaIdParaGravar = podoRel.podologista_id;
+      }
     }
-  };
+
+    // 2) Cálculos financeiros
+    const totais = calcularTotais(itensVenda);
+
+    const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
+    // Comissão sempre sobre o valor SEM IVA
+    const valorComissao = totais.subtotal * (percentualComissao / 100);
+
+    const totalFrascos = itensVenda.reduce(
+      (acc, item) => acc + item.quantidade,
+      0
+    );
+
+    const incentivoFarmaciaTotal =
+      totalFrascos * INCENTIVO_FARMACIA_PADRAO;
+    const incentivoPodologistaTotal =
+      totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
+
+    const metaMensalVendedor = await obterMetaMensalDoVendedor(
+      vendedorSelecionado,
+      dataVenda
+    );
+
+    if (vendaEditando) {
+      // ==========================================================
+      // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
+      // ==========================================================
+
+      const { error: vendaError } = await supabase
+        .from('vendas')
+        .update({
+          cliente_id: clienteSelecionado,
+          vendedor_id: vendedorSelecionado,
+          data: dataVenda,
+          estado: 'ABERTA',
+          subtotal: totais.subtotal,
+          iva: totais.iva,
+          total_com_iva: totais.total_com_iva,
+          observacoes,
+
+          // campos congelados (sem podologista aqui)
+          taxa_iva: TAXA_IVA,
+          percentual_comissao_vendedor: percentualComissao,
+          valor_total_comissao: valorComissao,
+          incentivo_farmacia_total: incentivoFarmaciaTotal,
+          incentivo_podologista_total: incentivoPodologistaTotal,
+          meta_mensal_vendedor_no_momento: metaMensalVendedor,
+          custo_km_no_momento: CUSTO_KM_PADRAO,
+
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', vendaEditando.id);
+
+      if (vendaError) throw vendaError;
+
+      // Deletar itens antigos
+      const { error: deleteError } = await supabase
+        .from('venda_itens')
+        .delete()
+        .eq('venda_id', vendaEditando.id);
+
+      if (deleteError) throw deleteError;
+
+      // Inserir novos itens, congelando podologista_id por linha
+      const itensParaInserir = itensVenda.map(item => ({
+        venda_id: vendaEditando.id,
+        produto_id: item.produto_id,
+        quantidade: item.quantidade,
+        preco_unitario: item.preco_unitario,
+        total_linha: item.total_linha,
+        taxa_iva: TAXA_IVA,
+        podologista_id: podologistaIdParaGravar
+      }));
+
+      const { error: itensError } = await supabase
+        .from('venda_itens')
+        .insert(itensParaInserir);
+
+      if (itensError) throw itensError;
+
+      alert('Venda atualizada com sucesso!');
+    } else {
+      // ==========================================================
+      // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
+      // ==========================================================
+
+      const numeroVenda = `VD${Date.now()}`;
+
+      const { data: vendaData, error: vendaError } = await supabase
+        .from('vendas')
+        .insert({
+          numero: numeroVenda,
+          cliente_id: clienteSelecionado,
+          vendedor_id: vendedorSelecionado,
+          data: dataVenda,
+          estado: 'ABERTA',
+          subtotal: totais.subtotal,
+          iva: totais.iva,
+          total_com_iva: totais.total_com_iva,
+          observacoes,
+
+          // campos congelados (sem podologista aqui)
+          taxa_iva: TAXA_IVA,
+          percentual_comissao_vendedor: percentualComissao,
+          valor_total_comissao: valorComissao,
+          incentivo_farmacia_total: incentivoFarmaciaTotal,
+          incentivo_podologista_total: incentivoPodologistaTotal,
+          meta_mensal_vendedor_no_momento: metaMensalVendedor,
+          custo_km_no_momento: CUSTO_KM_PADRAO
+        })
+        .select()
+        .single();
+
+      if (vendaError) throw vendaError;
+
+      // Inserir itens com podologista congelado
+      const itensParaInserir = itensVenda.map(item => ({
+        venda_id: vendaData.id,
+        produto_id: item.produto_id,
+        quantidade: item.quantidade,
+        preco_unitario: item.preco_unitario,
+        total_linha: item.total_linha,
+        taxa_iva: TAXA_IVA,
+        podologista_id: podologistaIdParaGravar
+      }));
+
+      const { error: itensError } = await supabase
+        .from('venda_itens')
+        .insert(itensParaInserir);
+
+      if (itensError) throw itensError;
+
+      alert('Venda criada com sucesso!');
+    }
+
+    fecharModal();
+    await carregarDados();
+  } catch (error: any) {
+    console.error('Erro ao salvar venda:', error);
+    alert('Erro ao salvar venda: ' + error.message);
+  } finally {
+    setCarregando(false);
+  }
+};
 
   // ======================================================================
   // DELETAR VENDA
