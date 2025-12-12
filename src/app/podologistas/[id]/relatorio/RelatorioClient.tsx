@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import {
   gerarRelatorioPodologistaPdf,
   RelatorioRow,
@@ -19,9 +19,33 @@ type RelatorioClientProps = {
 
 function formatDate(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null;
-  const [year, month, day] = dateStr.split('-').map(Number);
+  // Esperado: YYYY-MM-DD
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+
+  const [year, month, day] = parts.map(Number);
   if (!year || !month || !day) return dateStr;
-  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(
+    2,
+    '0'
+  )}/${year}`;
+}
+
+function toNumberSafe(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function formatEuro(value: unknown): string {
+  const n = toNumberSafe(value, 0);
+  // Formatação PT (vírgula decimal)
+  return new Intl.NumberFormat('pt-PT', {
+    style: 'currency',
+    currency: 'EUR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
 }
 
 export default function RelatorioClient(props: RelatorioClientProps) {
@@ -35,7 +59,7 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     dataFim,
   } = props;
 
-  const periodoLabel = (() => {
+  const periodoLabel = useMemo(() => {
     const ini = formatDate(dataInicio);
     const fim = formatDate(dataFim);
 
@@ -43,16 +67,29 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     if (ini && !fim) return `Período: a partir de ${ini}`;
     if (!ini && fim) return `Período: até ${fim}`;
     return 'Período: todo o histórico válido';
-  })();
+  }, [dataInicio, dataFim]);
+
+  // Normalizar rows para evitar NaN / strings inesperadas
+  const rowsNormalizadas = useMemo(() => {
+    return (rows ?? []).map((r) => ({
+      ...r,
+      frascos_validos: toNumberSafe((r as any).frascos_validos, 0),
+      incentivo_total: toNumberSafe((r as any).incentivo_total, 0),
+    }));
+  }, [rows]);
+
+  const totalIncentivosSeguro = useMemo(() => {
+    return toNumberSafe(totalIncentivos, 0);
+  }, [totalIncentivos]);
 
   const handleExportPdf = useCallback(() => {
     try {
       gerarRelatorioPodologistaPdf({
         podologistaNome,
-        rows,
-        totalFarmacias,
-        totalFrascosValidos,
-        totalIncentivos,
+        rows: rowsNormalizadas as any,
+        totalFarmacias: toNumberSafe(totalFarmacias, 0),
+        totalFrascosValidos: toNumberSafe(totalFrascosValidos, 0),
+        totalIncentivos: totalIncentivosSeguro,
         dataInicio,
         dataFim,
       });
@@ -62,10 +99,10 @@ export default function RelatorioClient(props: RelatorioClientProps) {
     }
   }, [
     podologistaNome,
-    rows,
+    rowsNormalizadas,
     totalFarmacias,
     totalFrascosValidos,
-    totalIncentivos,
+    totalIncentivosSeguro,
     dataInicio,
     dataFim,
   ]);
@@ -76,9 +113,7 @@ export default function RelatorioClient(props: RelatorioClientProps) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{podologistaNome}</h1>
-          <p className="text-sm text-gray-500">
-            Relatório de incentivos por farmácia
-          </p>
+          <p className="text-sm text-gray-500">Relatório de incentivos por cliente</p>
           <p className="text-xs text-gray-400 mt-1">{periodoLabel}</p>
         </div>
 
@@ -153,9 +188,11 @@ export default function RelatorioClient(props: RelatorioClientProps) {
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="border rounded-lg p-4 bg-white shadow-sm">
           <p className="text-xs text-gray-500 uppercase tracking-wide">
-            Total de farmácias
+            Total de clientes
           </p>
-          <p className="mt-2 text-2xl font-semibold">{totalFarmacias}</p>
+          <p className="mt-2 text-2xl font-semibold">
+            {toNumberSafe(totalFarmacias, 0)}
+          </p>
         </div>
 
         <div className="border rounded-lg p-4 bg-white shadow-sm">
@@ -163,62 +200,53 @@ export default function RelatorioClient(props: RelatorioClientProps) {
             Total de frascos válidos
           </p>
           <p className="mt-2 text-2xl font-semibold">
-            {totalFrascosValidos}
+            {toNumberSafe(totalFrascosValidos, 0)}
           </p>
         </div>
 
         <div className="border rounded-lg p-4 bg-white shadow-sm">
           <p className="text-xs text-gray-500 uppercase tracking-wide">
-            Total de incentivos (€)
+            Total de incentivos
           </p>
           <p className="mt-2 text-2xl font-semibold">
-            {totalIncentivos.toFixed(2).replace('.', ',')} €
+            {formatEuro(totalIncentivosSeguro)}
           </p>
         </div>
       </section>
 
-      {/* Tabela detalhada por farmácia */}
+      {/* Tabela detalhada por cliente */}
       <section className="border rounded-lg bg-white shadow-sm overflow-hidden">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 border-b">
             <tr>
               <th className="px-4 py-2 text-left font-medium text-gray-600">
-                Farmácia
+                Cliente
               </th>
               <th className="px-4 py-2 text-right font-medium text-gray-600">
                 Frascos válidos
               </th>
               <th className="px-4 py-2 text-right font-medium text-gray-600">
-                Incentivo (€)
+                Incentivo
               </th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {rowsNormalizadas.length === 0 && (
               <tr>
-                <td
-                  colSpan={3}
-                  className="px-4 py-6 text-center text-gray-500"
-                >
-                  Nenhum frasco válido encontrado para os filtros
-                  selecionados.
+                <td colSpan={3} className="px-4 py-6 text-center text-gray-500">
+                  Nenhum frasco válido encontrado para os filtros selecionados.
                 </td>
               </tr>
             )}
 
-            {rows.map((row) => (
+            {rowsNormalizadas.map((row) => (
               <tr key={row.cliente_id} className="border-t">
                 <td className="px-4 py-2">
                   <span className="font-medium">{row.cliente_nome}</span>
                 </td>
+                <td className="px-4 py-2 text-right">{row.frascos_validos}</td>
                 <td className="px-4 py-2 text-right">
-                  {row.frascos_validos}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {Number(row.incentivo_total)
-                    .toFixed(2)
-                    .replace('.', ',')}{' '}
-                  €
+                  {formatEuro(row.incentivo_total)}
                 </td>
               </tr>
             ))}
