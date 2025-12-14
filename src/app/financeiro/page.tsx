@@ -32,9 +32,10 @@ interface Fatura {
   id: string;
   venda_id: string;
   estado: string;
-  data_pagamento: string | null;
-  valor_pago: number | null;
-  total_com_iva: number;
+  data_emissao: string;
+  subtotal: number | null;
+  total_sem_iva: number | null;
+  total_com_iva: number | null;
 }
 
 interface VendaItem {
@@ -87,6 +88,7 @@ interface ResumoMensal {
   status: string;
   observacoes: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 // ======================================================================
@@ -124,8 +126,6 @@ export default function FinanceiroPage() {
   // Histórico de meses fechados
   const [historicoMeses, setHistoricoMeses] = useState<ResumoMensal[]>([]);
 
-
-
   // ======================================================================
   // CARREGAMENTO DE DADOS
   // ======================================================================
@@ -133,6 +133,7 @@ export default function FinanceiroPage() {
   useEffect(() => {
     carregarDadosFinanceiros();
     carregarHistoricoMeses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesSelecionado, anoSelecionado]);
 
   const carregarDadosFinanceiros = async () => {
@@ -181,27 +182,29 @@ export default function FinanceiroPage() {
       // 2. Buscar configuração financeira
       const config = await buscarConfiguracaoFinanceira();
 
-      // 3. Calcular período do mês selecionado
-      const primeiroDiaMes = new Date(anoSelecionado, mesSelecionado - 1, 1);
-      const ultimoDiaMes = new Date(anoSelecionado, mesSelecionado, 0);
+      // 3. Calcular período do mês selecionado (UTC, intervalo [início, próximo mês))
+      const inicioMes = new Date(Date.UTC(anoSelecionado, mesSelecionado - 1, 1, 0, 0, 0));
+      const inicioProximoMes = new Date(Date.UTC(anoSelecionado, mesSelecionado, 1, 0, 0, 0));
 
-      const dataInicio = primeiroDiaMes.toISOString().split('T')[0];
-      const dataFim = ultimoDiaMes.toISOString().split('T')[0];
+      const dataInicio = inicioMes.toISOString();
+      const dataFimExclusivo = inicioProximoMes.toISOString();
 
-      // 4. Buscar faturas PAGAS do mês (pela data_pagamento)
+      // 4. Buscar faturas EMITIDAS do mês (pela data_emissao) - PENDENTE + PAGA
       const { data: faturasData, error: faturasError } = await supabase
         .from('faturas')
-        .select('id, venda_id, estado, data_pagamento, valor_pago, total_com_iva')
-        .eq('estado', 'PAGA')
-        .gte('data_pagamento', dataInicio)
-        .lte('data_pagamento', dataFim);
+        .select('id, venda_id, estado, data_emissao, subtotal, total_sem_iva, total_com_iva')
+        .in('estado', ['PENDENTE', 'PAGA'])
+        .gte('data_emissao', dataInicio)
+        .lt('data_emissao', dataFimExclusivo);
 
       if (faturasError) throw faturasError;
 
-      // 5. Buscar itens de vendas das faturas pagas
-      const vendasIds = (faturasData || []).map((f) => f.venda_id);
-      let vendaItensData: VendaItem[] = [];
+      const vendasIds = (faturasData || [])
+        .map((f) => f.venda_id)
+        .filter(Boolean);
 
+      // 5. Buscar itens de vendas das faturas emitidas
+      let vendaItensData: VendaItem[] = [];
       if (vendasIds.length > 0) {
         const { data: itensData, error: itensError } = await supabase
           .from('venda_itens')
@@ -213,23 +216,24 @@ export default function FinanceiroPage() {
       }
 
       // 6. Buscar quilometragem do mês
+      // (mantém como está: por data do registo de KM)
       const { data: kmData, error: kmError } = await supabase
         .from('vendedor_km')
         .select('*')
-        .gte('data', dataInicio)
-        .lte('data', dataFim);
+        .gte('data', inicioMes.toISOString().slice(0, 10))
+        .lte('data', new Date(Date.UTC(anoSelecionado, mesSelecionado, 0, 0, 0, 0)).toISOString().slice(0, 10));
 
       if (kmError) throw kmError;
 
       // 7. CALCULAR MÉTRICAS
 
-      // Faturação bruta do mês (COALESCE: valor_pago se existir, senão total_com_iva)
+      // Faturação bruta do mês (com IVA) - por faturas emitidas
       const faturacaoBruta = (faturasData || []).reduce(
-        (total, fatura) => total + (fatura.valor_pago ?? fatura.total_com_iva),
+        (total, f) => total + (Number(f.total_com_iva) || 0),
         0
       );
 
-      // Frascos vendidos no mês (das vendas associadas às faturas pagas)
+      // Frascos vendidos no mês (das vendas associadas às faturas emitidas)
       const frascosVendidos = vendaItensData.reduce(
         (total, item) => total + (item.quantidade || 0),
         0
@@ -241,49 +245,52 @@ export default function FinanceiroPage() {
         0
       );
 
-      // Incentivo podologista
+      // Incentivo podologista (por frasco)
       const incentivoPodologista =
         frascosVendidos * config.incentivo_podologista_por_frasco;
 
-      // Fundo farmacêutico
+      // Fundo farmacêutico (por frasco)
       const fundoFarmaceutico =
         frascosVendidos * config.fundo_farmaceutico_por_frasco;
 
-      // Comissão total (calcular por vendedor usando faturas pagas)
-      // Buscar vendas associadas às faturas pagas para obter vendedor_id
-      const { data: vendasData, error: vendasError } = await supabase
-        .from('vendas')
-        .select('id, vendedor_id, total_com_iva')
-        .in('id', vendasIds);
-
-      if (vendasError) throw vendasError;
-
-      const vendedoresUnicos = Array.from(
-        new Set((vendasData || []).map((v) => v.vendedor_id))
-      );
-
+      // Comissão total (progressiva) por vendedor
+      // IMPORTANTÍSSIMO: Base SEM IVA (subtotal/total_sem_iva)
       let comissaoTotal = 0;
-      for (const vendedorId of vendedoresUnicos) {
-        // Para cada vendedor, somar o valor das faturas pagas das suas vendas
-        const vendasDoVendedor = (vendasData || []).filter(
-          (v) => v.vendedor_id === vendedorId
+
+      if (vendasIds.length > 0) {
+        const { data: vendasData, error: vendasError } = await supabase
+          .from('vendas')
+          .select('id, vendedor_id')
+          .in('id', vendasIds);
+
+        if (vendasError) throw vendasError;
+
+        const vendedoresUnicos = Array.from(
+          new Set((vendasData || []).map((v) => v.vendedor_id).filter(Boolean))
         );
-        const vendasIdsDoVendedor = vendasDoVendedor.map((v) => v.id);
-        
-        const faturasDoVendedor = (faturasData || []).filter((f) =>
-          vendasIdsDoVendedor.includes(f.venda_id)
-        );
-        
-        const totalVendasVendedor = faturasDoVendedor.reduce(
-          (sum, f) => sum + (f.valor_pago ?? f.total_com_iva),
-          0
-        );
-        
-        const comissaoVendedor = calcularComissaoProgressiva(
-          totalVendasVendedor,
-          config
-        );
-        comissaoTotal += comissaoVendedor;
+
+        for (const vendedorId of vendedoresUnicos) {
+          const vendasDoVendedor = (vendasData || []).filter(
+            (v) => v.vendedor_id === vendedorId
+          );
+          const vendasIdsDoVendedor = vendasDoVendedor.map((v) => v.id);
+
+          const faturasDoVendedor = (faturasData || []).filter((f) =>
+            vendasIdsDoVendedor.includes(f.venda_id)
+          );
+
+          const baseSemIvaVendedor = faturasDoVendedor.reduce((sum, f) => {
+            const semIva = Number(f.total_sem_iva) || Number(f.subtotal) || 0;
+            return sum + semIva;
+          }, 0);
+
+          const comissaoVendedor = calcularComissaoProgressiva(
+            baseSemIvaVendedor,
+            config
+          );
+
+          comissaoTotal += comissaoVendedor;
+        }
       }
 
       // Resultado operacional
@@ -363,15 +370,16 @@ export default function FinanceiroPage() {
       if (dados.frascosVendidos > 0 && dados.resultadoOperacional > 0) {
         const margemContribuicaoPorFrasco =
           dados.resultadoOperacional / dados.frascosVendidos;
+
         pontoEquilibrioFrascos = custosFixos / margemContribuicaoPorFrasco;
 
         const precoMedioPorFrasco =
           dados.faturacaoBruta / dados.frascosVendidos;
-        pontoEquilibrioFaturacao =
-          pontoEquilibrioFrascos * precoMedioPorFrasco;
+
+        pontoEquilibrioFaturacao = pontoEquilibrioFrascos * precoMedioPorFrasco;
       }
 
-      // Inserir registro na tabela
+      // Inserir registro na tabela (snapshot do mês)
       const { error } = await supabase
         .from('resumo_financeiro_mensal')
         .insert({
@@ -420,8 +428,6 @@ export default function FinanceiroPage() {
     setAnoSelecionado(ano);
     setMesSelecionado(mes);
   };
-
-
 
   // ======================================================================
   // HELPERS
@@ -595,10 +601,10 @@ export default function FinanceiroPage() {
             <AlertCircle className="w-6 h-6 text-yellow-600" />
             <div>
               <h3 className="text-lg font-semibold text-yellow-900">
-                Nenhuma fatura paga registada para este mês
+                Nenhuma fatura emitida registada para este mês
               </h3>
               <p className="text-yellow-700 text-sm">
-                Selecione outro período ou aguarde pagamentos de faturas.
+                Selecione outro período ou emita novas faturas.
               </p>
             </div>
           </div>
@@ -618,7 +624,7 @@ export default function FinanceiroPage() {
           <p className="text-3xl font-bold text-blue-900">
             {formatarMoeda(dados.faturacaoBruta)}€
           </p>
-          <p className="text-xs text-blue-600 mt-2">Faturas pagas no mês</p>
+          <p className="text-xs text-blue-600 mt-2">Faturas emitidas no mês</p>
         </div>
 
         {/* Frascos Vendidos */}
@@ -850,7 +856,7 @@ export default function FinanceiroPage() {
         </p>
         <p className="text-gray-700 text-sm leading-relaxed mt-2">
           <strong>Nota:</strong> Os valores de faturação são calculados com base em{' '}
-          <strong>faturas pagas</strong>, usando a data de pagamento como referência.
+          <strong>faturas emitidas</strong>, usando a <strong>data de emissão</strong> como referência.
         </p>
       </div>
 
