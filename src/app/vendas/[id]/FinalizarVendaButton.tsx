@@ -8,8 +8,15 @@ import { toast } from 'sonner';
 
 type FinalizarVendaButtonProps = {
   vendaId: string;        // UUID da venda
-  estadoInicial: string;  // 'ABERTA' ou 'FECHADA'
+  estadoInicial: string;  // 'ABERTA' | 'FECHADA' (ou outros)
   vendaNumero: string;    // Número da venda (ex: VD-001) para exibição
+};
+
+type FaturaMin = {
+  id: string;
+  venda_id: string;
+  tipo?: string | null;
+  created_at?: string | null;
 };
 
 export default function FinalizarVendaButton({
@@ -21,18 +28,45 @@ export default function FinalizarVendaButton({
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  const buscarFaturaDaVenda = async (): Promise<FaturaMin | null> => {
+    // Busca a FATURA mais recente desta venda.
+    // Se a coluna `tipo` existir (no seu schema existe), filtramos por 'FATURA'.
+    const { data, error } = await supabase
+      .from('faturas')
+      .select('id, venda_id, tipo, created_at')
+      .eq('venda_id', vendaId)
+      .eq('tipo', 'FATURA')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ Erro ao buscar fatura da venda:', error);
+      return null;
+    }
+
+    return data ?? null;
+  };
+
+  const normalizarFatura = (data: any): FaturaMin | null => {
+    if (!data) return null;
+    // Alguns RPCs retornam array de registros
+    if (Array.isArray(data)) return data[0] ?? null;
+    // Outros retornam objeto direto
+    return data;
+  };
+
   const handleClick = async () => {
     if (loading) return;
     if (estado === 'FECHADA') return;
 
-    // Confirmação do usuário
     const confirmar = confirm(
       `Deseja finalizar a venda ${vendaNumero} e emitir a fatura?\n\n` +
-      'Esta ação irá:\n' +
-      '- Fechar a venda\n' +
-      '- Criar a fatura\n' +
-      '- Registrar saídas no estoque\n' +
-      '- Atualizar quantidades dos produtos'
+        'Esta ação irá:\n' +
+        '- Fechar a venda\n' +
+        '- Criar/recuperar a fatura\n' +
+        '- Registrar saídas no estoque\n' +
+        '- Atualizar quantidades dos produtos'
     );
 
     if (!confirmar) return;
@@ -44,47 +78,56 @@ export default function FinalizarVendaButton({
       console.log('📋 Venda ID (UUID):', vendaId);
       console.log('📋 Venda Número:', vendaNumero);
 
-      // Chamar a RPC do Supabase
       const { data, error } = await supabase.rpc('finalizar_venda_e_criar_fatura', {
-        p_venda_id: vendaId, // IMPORTANTE: usar o UUID da venda, não o número
+        p_venda_id: vendaId,
       });
 
       if (error) {
-        console.error('❌ Erro ao finalizar venda:', error);
+        console.error('❌ Erro ao finalizar venda (RPC):', error);
         toast.error(error.message || 'Erro ao finalizar venda');
         return;
       }
 
-      console.log('✅ Fatura criada com sucesso:', data);
+      // 1) Tentar obter a fatura pelo retorno do RPC
+      let fatura = normalizarFatura(data);
 
-      // data é a fatura criada
-      if (data) {
-        // Atualizar estado local
-        setEstado('FECHADA');
-
-        toast.success('Venda finalizada e fatura emitida com sucesso!');
-
-        // Recarregar a página para atualizar todos os dados
-        router.refresh();
-
-        // Perguntar se deseja visualizar a fatura
-        const irParaFatura = confirm('Deseja visualizar a fatura criada?');
-        if (irParaFatura && data.id) {
-          router.push(`/faturas/${data.id}`);
-        }
+      // 2) Se o RPC não devolveu id, buscar no banco pela venda_id
+      if (!fatura?.id) {
+        fatura = await buscarFaturaDaVenda();
       }
-    } catch (error: any) {
-      console.error('❌ Erro ao processar venda:', error);
-      toast.error(`Erro ao finalizar venda: ${error.message}`);
+
+      // 3) Se ainda assim não achou, é erro real (não navegar no escuro)
+      if (!fatura?.id) {
+        console.error('❌ RPC executou sem erro, mas não foi possível obter a fatura.');
+        toast.error(
+          'A venda foi processada, mas não foi possível localizar a fatura. Verifique a tabela faturas.'
+        );
+        // Ainda assim, atualiza tela
+        setEstado('FECHADA');
+        router.refresh();
+        return;
+      }
+
+      // Atualizar estado local
+      setEstado('FECHADA');
+
+      toast.success('Venda finalizada e fatura emitida com sucesso!');
+
+      // Navegar diretamente para a fatura (fluxo antigo “automático”)
+      router.push(`/faturas/${fatura.id}`);
+
+      // Refresh depois do push (evita “engolir” a navegação em alguns casos)
+      router.refresh();
+    } catch (err: any) {
+      console.error('❌ Erro ao processar venda:', err);
+      toast.error(`Erro ao finalizar venda: ${err?.message || 'Erro desconhecido'}`);
     } finally {
       setLoading(false);
     }
   };
 
   // Se já está fechada, não mostrar o botão
-  if (estado === 'FECHADA') {
-    return null;
-  }
+  if (estado === 'FECHADA') return null;
 
   return (
     <button
