@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 import {
   TrendingUp,
   Package,
@@ -15,14 +15,14 @@ import {
   Unlock,
   Eye,
   X,
-} from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+} from "lucide-react";
+import { supabase } from "@/lib/supabase";
 import {
   buscarConfiguracaoFinanceira,
   calcularComissaoProgressiva,
   type ConfiguracaoFinanceira,
-} from '@/lib/configuracoes-financeiras';
-import { RelatorioFinanceiroPdfButton } from './RelatorioFinanceiroPdfButton';
+} from "@/lib/configuracoes-financeiras";
+import { RelatorioFinanceiroPdfButton } from "./RelatorioFinanceiroPdfButton";
 
 // ======================================================================
 // TIPOS E INTERFACES
@@ -31,19 +31,28 @@ import { RelatorioFinanceiroPdfButton } from './RelatorioFinanceiroPdfButton';
 interface Fatura {
   id: string;
   venda_id: string;
-  estado: string;
-  data_emissao: string;
+  estado: string; // PENDENTE | PAGA | CANCELADA ...
+  data_emissao: string; // timestamp
+  total?: number | null;
+  subtotal?: number | null;
+  total_sem_iva?: number | null;
+  total_com_iva?: number | null;
+}
+
+interface Venda {
+  id: string;
+  vendedor_id: string | null;
   subtotal: number | null;
-  total_sem_iva: number | null;
+  iva: number | null;
   total_com_iva: number | null;
 }
 
 interface VendaItem {
   id: string;
   venda_id: string;
-  produto_id: string;
   quantidade: number;
-  preco_unitario: number;
+  incentivo_podologista: number | null; // normalmente por frasco (congelado)
+  incentivo_farmacia: number | null; // normalmente por frasco (congelado)
 }
 
 interface Quilometragem {
@@ -88,7 +97,6 @@ interface ResumoMensal {
   status: string;
   observacoes: string | null;
   created_at: string;
-  updated_at: string;
 }
 
 // ======================================================================
@@ -98,6 +106,7 @@ interface ResumoMensal {
 export default function FinanceiroPage() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
   const [dados, setDados] = useState<DadosFinanceiros>({
     faturacaoBruta: 0,
     frascosVendidos: 0,
@@ -108,27 +117,19 @@ export default function FinanceiroPage() {
     resultadoOperacional: 0,
   });
 
-  // Seletor de mês/ano (padrão: mês atual)
   const hoje = new Date();
   const [mesSelecionado, setMesSelecionado] = useState(hoje.getMonth() + 1);
   const [anoSelecionado, setAnoSelecionado] = useState(hoje.getFullYear());
 
-  // Estado do fechamento de mês
   const [mesFechado, setMesFechado] = useState(false);
   const [resumoMensal, setResumoMensal] = useState<ResumoMensal | null>(null);
 
-  // Modal de fechamento
   const [modalAberto, setModalAberto] = useState(false);
-  const [custosFixosInput, setCustosFixosInput] = useState('');
-  const [observacoesInput, setObservacoesInput] = useState('');
+  const [custosFixosInput, setCustosFixosInput] = useState("");
+  const [observacoesInput, setObservacoesInput] = useState("");
   const [processandoFechamento, setProcessandoFechamento] = useState(false);
 
-  // Histórico de meses fechados
   const [historicoMeses, setHistoricoMeses] = useState<ResumoMensal[]>([]);
-
-  // ======================================================================
-  // CARREGAMENTO DE DADOS
-  // ======================================================================
 
   useEffect(() => {
     carregarDadosFinanceiros();
@@ -136,27 +137,47 @@ export default function FinanceiroPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesSelecionado, anoSelecionado]);
 
+  // ======================================================================
+  // HELPERS DE DATA (intervalo mensal)
+  // ======================================================================
+
+  const getMonthRangeUTC = (ano: number, mes: number) => {
+    // range [start, endExclusive)
+    const start = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
+    const endExclusive = new Date(Date.UTC(ano, mes, 1, 0, 0, 0));
+    return {
+      startISO: start.toISOString(),
+      endExclusiveISO: endExclusive.toISOString(),
+      startDateOnly: start.toISOString().slice(0, 10),
+      endDateOnlyExclusive: endExclusive.toISOString().slice(0, 10),
+    };
+  };
+
+  // ======================================================================
+  // CARREGAMENTO DE DADOS
+  // ======================================================================
+
   const carregarDadosFinanceiros = async () => {
     try {
       setCarregando(true);
       setErro(null);
 
-      // 1. Verificar se o mês está fechado
+      // 1) Verificar snapshot (mês fechado)
       const { data: resumoData, error: resumoError } = await supabase
-        .from('resumo_financeiro_mensal')
-        .select('*')
-        .eq('ano', anoSelecionado)
-        .eq('mes', mesSelecionado)
+        .from("resumo_financeiro_mensal")
+        .select("*")
+        .eq("ano", anoSelecionado)
+        .eq("mes", mesSelecionado)
         .single();
 
-      if (resumoError && resumoError.code !== 'PGRST116') {
+      if (resumoError && resumoError.code !== "PGRST116") {
         throw resumoError;
       }
 
       if (resumoData) {
-        // Mês está fechado - usar snapshot
         setMesFechado(true);
         setResumoMensal(resumoData);
+
         setDados({
           faturacaoBruta: resumoData.faturacao_bruta,
           frascosVendidos: resumoData.frascos_vendidos,
@@ -171,135 +192,132 @@ export default function FinanceiroPage() {
           pontoEquilibrioFaturacao: resumoData.ponto_equilibrio_faturacao || undefined,
           observacoes: resumoData.observacoes || undefined,
         });
+
         setCarregando(false);
         return;
       }
 
-      // Mês em aberto - calcular dinamicamente
+      // 2) Mês em aberto — calcular dinamicamente
       setMesFechado(false);
       setResumoMensal(null);
 
-      // 2. Buscar configuração financeira
-      const config = await buscarConfiguracaoFinanceira();
+      const config: ConfiguracaoFinanceira = await buscarConfiguracaoFinanceira();
 
-      // 3. Calcular período do mês selecionado (UTC, intervalo [início, próximo mês))
-      const inicioMes = new Date(Date.UTC(anoSelecionado, mesSelecionado - 1, 1, 0, 0, 0));
-      const inicioProximoMes = new Date(Date.UTC(anoSelecionado, mesSelecionado, 1, 0, 0, 0));
+      // Regra: comissão mensal baseada em FATURAS EMITIDAS no mês (data_emissao)
+      // e calculada SEM IVA.
+      const { startISO, endExclusiveISO, startDateOnly, endDateOnlyExclusive } =
+        getMonthRangeUTC(anoSelecionado, mesSelecionado);
 
-      const dataInicio = inicioMes.toISOString();
-      const dataFimExclusivo = inicioProximoMes.toISOString();
-
-      // 4. Buscar faturas EMITIDAS do mês (pela data_emissao) - PENDENTE + PAGA
+      // 3) Buscar faturas EMITIDAS do mês (PENDENTE + PAGA). Ignorar CANCELADA.
       const { data: faturasData, error: faturasError } = await supabase
-        .from('faturas')
-        .select('id, venda_id, estado, data_emissao, subtotal, total_sem_iva, total_com_iva')
-        .in('estado', ['PENDENTE', 'PAGA'])
-        .gte('data_emissao', dataInicio)
-        .lt('data_emissao', dataFimExclusivo);
+        .from("faturas")
+        .select("id, venda_id, estado, data_emissao, total, subtotal, total_sem_iva, total_com_iva")
+        .in("estado", ["PENDENTE", "PAGA"])
+        .gte("data_emissao", startISO)
+        .lt("data_emissao", endExclusiveISO);
 
       if (faturasError) throw faturasError;
 
-      const vendasIds = (faturasData || [])
-        .map((f) => f.venda_id)
-        .filter(Boolean);
+      const faturas = (faturasData || []) as Fatura[];
+      const vendasIds = Array.from(new Set(faturas.map((f) => f.venda_id))).filter(Boolean);
 
-      // 5. Buscar itens de vendas das faturas emitidas
-      let vendaItensData: VendaItem[] = [];
+      // 4) Buscar vendas associadas (para vendedor_id e fallback de subtotal)
+      let vendas: Venda[] = [];
       if (vendasIds.length > 0) {
-        const { data: itensData, error: itensError } = await supabase
-          .from('venda_itens')
-          .select('*')
-          .in('venda_id', vendasIds);
+        const { data: vendasData, error: vendasError } = await supabase
+          .from("vendas")
+          .select("id, vendedor_id, subtotal, iva, total_com_iva")
+          .in("id", vendasIds);
 
-        if (itensError) throw itensError;
-        vendaItensData = itensData || [];
+        if (vendasError) throw vendasError;
+        vendas = (vendasData || []) as Venda[];
       }
 
-      // 6. Buscar quilometragem do mês
-      // (mantém como está: por data do registo de KM)
+      const vendaById = new Map<string, Venda>();
+      for (const v of vendas) vendaById.set(v.id, v);
+
+      // 5) Buscar itens das vendas (para frascos e incentivos congelados)
+      let itens: VendaItem[] = [];
+      if (vendasIds.length > 0) {
+        const { data: itensData, error: itensError } = await supabase
+          .from("venda_itens")
+          .select("id, venda_id, quantidade, incentivo_podologista, incentivo_farmacia")
+          .in("venda_id", vendasIds);
+
+        if (itensError) throw itensError;
+        itens = (itensData || []) as VendaItem[];
+      }
+
+      // 6) Buscar quilometragem do mês (continua por data — base caixa/despesa)
       const { data: kmData, error: kmError } = await supabase
-        .from('vendedor_km')
-        .select('*')
-        .gte('data', inicioMes.toISOString().slice(0, 10))
-        .lte('data', new Date(Date.UTC(anoSelecionado, mesSelecionado, 0, 0, 0, 0)).toISOString().slice(0, 10));
+        .from("vendedor_km")
+        .select("*")
+        .gte("data", startDateOnly)
+        .lt("data", endDateOnlyExclusive);
 
       if (kmError) throw kmError;
 
-      // 7. CALCULAR MÉTRICAS
+      const kms = (kmData || []) as Quilometragem[];
 
-      // Faturação bruta do mês (com IVA) - por faturas emitidas
-      const faturacaoBruta = (faturasData || []).reduce(
-        (total, f) => total + (Number(f.total_com_iva) || 0),
-        0
-      );
+      // ======================================================================
+      // CÁLCULOS
+      // ======================================================================
 
-      // Frascos vendidos no mês (das vendas associadas às faturas emitidas)
-      const frascosVendidos = vendaItensData.reduce(
-        (total, item) => total + (item.quantidade || 0),
-        0
-      );
+      // A) Faturação bruta (mantemos COM IVA para o indicador macro)
+      // Preferir total_com_iva da fatura; fallback para venda.total_com_iva
+      const faturacaoBruta = faturas.reduce((acc, f) => {
+        const venda = vendaById.get(f.venda_id);
+        const totalComIva =
+          (f.total_com_iva ?? f.total ?? null) ??
+          (venda?.total_com_iva ?? 0);
+        return acc + (Number(totalComIva) || 0);
+      }, 0);
 
-      // Custo total de quilometragem
-      const custoKmTotal = (kmData || []).reduce(
-        (total, km) => total + (km.valor || 0),
-        0
-      );
+      // B) Frascos vendidos (quantidades dos itens)
+      const frascosVendidos = itens.reduce((acc, it) => acc + (Number(it.quantidade) || 0), 0);
 
-      // Incentivo podologista (por frasco)
-      const incentivoPodologista =
-        frascosVendidos * config.incentivo_podologista_por_frasco;
+      // C) Incentivos (congelados nos itens) — respeita histórico
+      // Assumindo que incentivo_* em venda_itens é valor por frasco no momento da venda.
+      const incentivoPodologista = itens.reduce((acc, it) => {
+        const rate = Number(it.incentivo_podologista ?? 0);
+        return acc + (Number(it.quantidade) || 0) * rate;
+      }, 0);
 
-      // Fundo farmacêutico (por frasco)
-      const fundoFarmaceutico =
-        frascosVendidos * config.fundo_farmaceutico_por_frasco;
+      const fundoFarmaceutico = itens.reduce((acc, it) => {
+        const rate = Number(it.incentivo_farmacia ?? 0);
+        return acc + (Number(it.quantidade) || 0) * rate;
+      }, 0);
 
-      // Comissão total (progressiva) por vendedor
-      // IMPORTANTÍSSIMO: Base SEM IVA (subtotal/total_sem_iva)
-      let comissaoTotal = 0;
+      // D) Custo km total
+      const custoKmTotal = kms.reduce((acc, km) => acc + (Number(km.valor) || 0), 0);
 
-      if (vendasIds.length > 0) {
-        const { data: vendasData, error: vendasError } = await supabase
-          .from('vendas')
-          .select('id, vendedor_id')
-          .in('id', vendasIds);
+      // E) Comissão total: progressiva por vendedor com base no SEM IVA (emitido no mês)
+      // baseSemIva = COALESCE(faturas.total_sem_iva, faturas.subtotal, vendas.subtotal)
+      const totalSemIvaPorVendedor = new Map<string, number>();
 
-        if (vendasError) throw vendasError;
+      for (const f of faturas) {
+        const venda = vendaById.get(f.venda_id);
+        const vendedorId = venda?.vendedor_id;
 
-        const vendedoresUnicos = Array.from(
-          new Set((vendasData || []).map((v) => v.vendedor_id).filter(Boolean))
-        );
+        if (!vendedorId) continue;
 
-        for (const vendedorId of vendedoresUnicos) {
-          const vendasDoVendedor = (vendasData || []).filter(
-            (v) => v.vendedor_id === vendedorId
-          );
-          const vendasIdsDoVendedor = vendasDoVendedor.map((v) => v.id);
+        const baseSemIva =
+          (f.total_sem_iva ?? f.subtotal ?? null) ??
+          (venda?.subtotal ?? 0);
 
-          const faturasDoVendedor = (faturasData || []).filter((f) =>
-            vendasIdsDoVendedor.includes(f.venda_id)
-          );
-
-          const baseSemIvaVendedor = faturasDoVendedor.reduce((sum, f) => {
-            const semIva = Number(f.total_sem_iva) || Number(f.subtotal) || 0;
-            return sum + semIva;
-          }, 0);
-
-          const comissaoVendedor = calcularComissaoProgressiva(
-            baseSemIvaVendedor,
-            config
-          );
-
-          comissaoTotal += comissaoVendedor;
-        }
+        const atual = totalSemIvaPorVendedor.get(vendedorId) || 0;
+        totalSemIvaPorVendedor.set(vendedorId, atual + (Number(baseSemIva) || 0));
       }
 
-      // Resultado operacional
+      let comissaoTotal = 0;
+      for (const [vendedorId, totalSemIva] of totalSemIvaPorVendedor.entries()) {
+        // cálculo progressivo (5/8/10) em cima do SEM IVA
+        comissaoTotal += calcularComissaoProgressiva(totalSemIva, config);
+      }
+
+      // F) Resultado operacional (modelo: faturação bruta - comissões - km - incentivos)
       const resultadoOperacional =
-        faturacaoBruta -
-        comissaoTotal -
-        custoKmTotal -
-        incentivoPodologista -
-        fundoFarmaceutico;
+        faturacaoBruta - comissaoTotal - custoKmTotal - incentivoPodologista - fundoFarmaceutico;
 
       setDados({
         faturacaoBruta,
@@ -311,8 +329,8 @@ export default function FinanceiroPage() {
         resultadoOperacional,
       });
     } catch (error: any) {
-      console.error('Erro ao carregar dados financeiros:', error);
-      setErro(error.message || 'Erro ao carregar dados financeiros');
+      console.error("Erro ao carregar dados financeiros:", error);
+      setErro(error.message || "Erro ao carregar dados financeiros");
     } finally {
       setCarregando(false);
     }
@@ -321,15 +339,15 @@ export default function FinanceiroPage() {
   const carregarHistoricoMeses = async () => {
     try {
       const { data, error } = await supabase
-        .from('resumo_financeiro_mensal')
-        .select('*')
-        .order('ano', { ascending: false })
-        .order('mes', { ascending: false });
+        .from("resumo_financeiro_mensal")
+        .select("*")
+        .order("ano", { ascending: false })
+        .order("mes", { ascending: false });
 
       if (error) throw error;
-      setHistoricoMeses(data || []);
+      setHistoricoMeses((data || []) as ResumoMensal[]);
     } catch (error) {
-      console.error('Erro ao carregar histórico:', error);
+      console.error("Erro ao carregar histórico:", error);
     }
   };
 
@@ -338,72 +356,62 @@ export default function FinanceiroPage() {
   // ======================================================================
 
   const abrirModalFechamento = () => {
-    setCustosFixosInput('');
-    setObservacoesInput('');
+    setCustosFixosInput("");
+    setObservacoesInput("");
     setModalAberto(true);
   };
 
   const fecharModal = () => {
     setModalAberto(false);
-    setCustosFixosInput('');
-    setObservacoesInput('');
+    setCustosFixosInput("");
+    setObservacoesInput("");
   };
 
   const confirmarFechamento = async () => {
     try {
       setProcessandoFechamento(true);
 
-      // Validar custos fixos
       const custosFixos = parseFloat(custosFixosInput);
       if (isNaN(custosFixos) || custosFixos < 0) {
-        alert('Por favor, insira um valor válido para os custos fixos.');
+        alert("Por favor, insira um valor válido para os custos fixos.");
         return;
       }
 
-      // Calcular resultado líquido
       const resultadoLiquido = dados.resultadoOperacional - custosFixos;
 
-      // Calcular ponto de equilíbrio
       let pontoEquilibrioFrascos: number | null = null;
       let pontoEquilibrioFaturacao: number | null = null;
 
       if (dados.frascosVendidos > 0 && dados.resultadoOperacional > 0) {
-        const margemContribuicaoPorFrasco =
-          dados.resultadoOperacional / dados.frascosVendidos;
-
+        const margemContribuicaoPorFrasco = dados.resultadoOperacional / dados.frascosVendidos;
         pontoEquilibrioFrascos = custosFixos / margemContribuicaoPorFrasco;
 
-        const precoMedioPorFrasco =
-          dados.faturacaoBruta / dados.frascosVendidos;
-
+        const precoMedioPorFrasco = dados.faturacaoBruta / dados.frascosVendidos;
         pontoEquilibrioFaturacao = pontoEquilibrioFrascos * precoMedioPorFrasco;
       }
 
-      // Inserir registro na tabela (snapshot do mês)
-      const { error } = await supabase
-        .from('resumo_financeiro_mensal')
-        .insert({
-          ano: anoSelecionado,
-          mes: mesSelecionado,
-          faturacao_bruta: dados.faturacaoBruta,
-          frascos_vendidos: dados.frascosVendidos,
-          comissao_total: dados.comissaoTotal,
-          custo_km_total: dados.custoKmTotal,
-          incentivo_podologista_total: dados.incentivoPodologista,
-          fundo_farmaceutico_total: dados.fundoFarmaceutico,
-          resultado_operacional: dados.resultadoOperacional,
-          custos_fixos: custosFixos,
-          resultado_liquido: resultadoLiquido,
-          ponto_equilibrio_frascos: pontoEquilibrioFrascos,
-          ponto_equilibrio_faturacao: pontoEquilibrioFaturacao,
-          status: 'FECHADO',
-          observacoes: observacoesInput || null,
-        });
+      const { error } = await supabase.from("resumo_financeiro_mensal").insert({
+        ano: anoSelecionado,
+        mes: mesSelecionado,
+        faturacao_bruta: dados.faturacaoBruta,
+        frascos_vendidos: dados.frascosVendidos,
+        comissao_total: dados.comissaoTotal,
+        custo_km_total: dados.custoKmTotal,
+        incentivo_podologista_total: dados.incentivoPodologista,
+        fundo_farmaceutico_total: dados.fundoFarmaceutico,
+        resultado_operacional: dados.resultadoOperacional,
+        custos_fixos: custosFixos,
+        resultado_liquido: resultadoLiquido,
+        ponto_equilibrio_frascos: pontoEquilibrioFrascos,
+        ponto_equilibrio_faturacao: pontoEquilibrioFaturacao,
+        status: "FECHADO",
+        observacoes: observacoesInput || null,
+      });
 
       if (error) {
-        if (error.code === '23505') {
+        if (error.code === "23505") {
           alert(
-            'Este mês já foi fechado. Para alterar os dados, é necessário ajustar o registo em resumo_financeiro_mensal.'
+            "Este mês já foi fechado. Para alterar os dados, é necessário ajustar o registo em resumo_financeiro_mensal."
           );
         } else {
           throw error;
@@ -411,14 +419,13 @@ export default function FinanceiroPage() {
         return;
       }
 
-      // Sucesso - recarregar dados
       fecharModal();
       await carregarDadosFinanceiros();
       await carregarHistoricoMeses();
-      alert('Mês fechado com sucesso!');
+      alert("Mês fechado com sucesso!");
     } catch (error: any) {
-      console.error('Erro ao fechar mês:', error);
-      alert('Erro ao fechar mês: ' + (error.message || 'Erro desconhecido'));
+      console.error("Erro ao fechar mês:", error);
+      alert("Erro ao fechar mês: " + (error.message || "Erro desconhecido"));
     } finally {
       setProcessandoFechamento(false);
     }
@@ -434,25 +441,25 @@ export default function FinanceiroPage() {
   // ======================================================================
 
   const formatarMoeda = (valor: number) => {
-    return valor.toLocaleString('pt-PT', {
+    return valor.toLocaleString("pt-PT", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
   };
 
   const meses = [
-    'Janeiro',
-    'Fevereiro',
-    'Março',
-    'Abril',
-    'Maio',
-    'Junho',
-    'Julho',
-    'Agosto',
-    'Setembro',
-    'Outubro',
-    'Novembro',
-    'Dezembro',
+    "Janeiro",
+    "Fevereiro",
+    "Março",
+    "Abril",
+    "Maio",
+    "Junho",
+    "Julho",
+    "Agosto",
+    "Setembro",
+    "Outubro",
+    "Novembro",
+    "Dezembro",
   ];
 
   const anos = Array.from({ length: 5 }, (_, i) => hoje.getFullYear() - i);
@@ -464,7 +471,7 @@ export default function FinanceiroPage() {
     dados.custoKmTotal === 0;
 
   // ======================================================================
-  // RENDERIZAÇÃO
+  // RENDER
   // ======================================================================
 
   if (carregando) {
@@ -518,9 +525,8 @@ export default function FinanceiroPage() {
             </p>
           </div>
 
-          {/* Seletor de Período e Botões */}
+          {/* Seletor + botões */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* Badge de Status */}
             {mesFechado ? (
               <div className="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-lg font-semibold">
                 <Lock className="w-4 h-4" />
@@ -533,7 +539,6 @@ export default function FinanceiroPage() {
               </div>
             )}
 
-            {/* Seletor de Período */}
             <div className="flex items-center gap-3 bg-white p-4 rounded-xl shadow-md">
               <Calendar className="w-5 h-5 text-blue-600" />
               <select
@@ -560,7 +565,6 @@ export default function FinanceiroPage() {
               </select>
             </div>
 
-            {/* Botão Fechar Mês */}
             {!mesFechado && (
               <button
                 onClick={abrirModalFechamento}
@@ -571,7 +575,6 @@ export default function FinanceiroPage() {
               </button>
             )}
 
-            {/* Botão Gerar Relatório PDF */}
             {mesFechado && (
               <RelatorioFinanceiroPdfButton
                 dados={{
@@ -594,7 +597,6 @@ export default function FinanceiroPage() {
         </div>
       </div>
 
-      {/* Mensagem se não houver dados */}
       {semDados && !mesFechado && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6 mb-6">
           <div className="flex items-center gap-3">
@@ -604,7 +606,7 @@ export default function FinanceiroPage() {
                 Nenhuma fatura emitida registada para este mês
               </h3>
               <p className="text-yellow-700 text-sm">
-                Selecione outro período ou emita novas faturas.
+                Selecione outro período ou verifique emissões de faturas.
               </p>
             </div>
           </div>
@@ -613,7 +615,6 @@ export default function FinanceiroPage() {
 
       {/* Primeira Linha de Cartões */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        {/* Faturação Bruta */}
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-blue-600 font-semibold">
@@ -627,7 +628,6 @@ export default function FinanceiroPage() {
           <p className="text-xs text-blue-600 mt-2">Faturas emitidas no mês</p>
         </div>
 
-        {/* Frascos Vendidos */}
         <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-green-600 font-semibold">
@@ -635,52 +635,41 @@ export default function FinanceiroPage() {
             </span>
             <Package className="w-6 h-6 text-green-600" />
           </div>
-          <p className="text-3xl font-bold text-green-900">
-            {dados.frascosVendidos}
-          </p>
+          <p className="text-3xl font-bold text-green-900">{dados.frascosVendidos}</p>
           <p className="text-xs text-green-600 mt-2">Unidades totais</p>
         </div>
 
-        {/* Resultado Operacional */}
         <div
           className={`bg-gradient-to-br p-6 rounded-2xl shadow-lg ${
             dados.resultadoOperacional >= 0
-              ? 'from-purple-50 to-purple-100'
-              : 'from-red-50 to-red-100'
+              ? "from-purple-50 to-purple-100"
+              : "from-red-50 to-red-100"
           }`}
         >
           <div className="flex items-center justify-between mb-4">
             <span
               className={`text-sm font-semibold ${
-                dados.resultadoOperacional >= 0
-                  ? 'text-purple-600'
-                  : 'text-red-600'
+                dados.resultadoOperacional >= 0 ? "text-purple-600" : "text-red-600"
               }`}
             >
               Resultado Operacional
             </span>
             <Calculator
               className={`w-6 h-6 ${
-                dados.resultadoOperacional >= 0
-                  ? 'text-purple-600'
-                  : 'text-red-600'
+                dados.resultadoOperacional >= 0 ? "text-purple-600" : "text-red-600"
               }`}
             />
           </div>
           <p
             className={`text-3xl font-bold ${
-              dados.resultadoOperacional >= 0
-                ? 'text-purple-900'
-                : 'text-red-900'
+              dados.resultadoOperacional >= 0 ? "text-purple-900" : "text-red-900"
             }`}
           >
             {formatarMoeda(dados.resultadoOperacional)}€
           </p>
           <p
             className={`text-xs mt-2 ${
-              dados.resultadoOperacional >= 0
-                ? 'text-purple-600'
-                : 'text-red-600'
+              dados.resultadoOperacional >= 0 ? "text-purple-600" : "text-red-600"
             }`}
           >
             Antes de custos fixos
@@ -688,9 +677,8 @@ export default function FinanceiroPage() {
         </div>
       </div>
 
-      {/* Segunda Linha de Cartões */}
+      {/* Segunda Linha */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-        {/* Comissão Total */}
         <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-emerald-600 font-semibold">
@@ -701,10 +689,11 @@ export default function FinanceiroPage() {
           <p className="text-2xl font-bold text-emerald-900">
             {formatarMoeda(dados.comissaoTotal)}€
           </p>
-          <p className="text-xs text-emerald-600 mt-2">Vendedores</p>
+          <p className="text-xs text-emerald-600 mt-2">
+            Progressiva, sem IVA, por emissão
+          </p>
         </div>
 
-        {/* Custo de KM */}
         <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-orange-600 font-semibold">
@@ -718,7 +707,6 @@ export default function FinanceiroPage() {
           <p className="text-xs text-orange-600 mt-2">Quilometragem</p>
         </div>
 
-        {/* Incentivo Podologista */}
         <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-pink-600 font-semibold">
@@ -729,12 +717,9 @@ export default function FinanceiroPage() {
           <p className="text-2xl font-bold text-pink-900">
             {formatarMoeda(dados.incentivoPodologista)}€
           </p>
-          <p className="text-xs text-pink-600 mt-2">
-            {dados.frascosVendidos} frascos
-          </p>
+          <p className="text-xs text-pink-600 mt-2">Baseado nos itens (congelado)</p>
         </div>
 
-        {/* Fundo Farmacêutico */}
         <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 p-6 rounded-2xl shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-cyan-600 font-semibold">
@@ -745,19 +730,16 @@ export default function FinanceiroPage() {
           <p className="text-2xl font-bold text-cyan-900">
             {formatarMoeda(dados.fundoFarmaceutico)}€
           </p>
-          <p className="text-xs text-cyan-600 mt-2">Farmácia Campeã</p>
+          <p className="text-xs text-cyan-600 mt-2">Baseado nos itens (congelado)</p>
         </div>
       </div>
 
-      {/* Cartões Adicionais para Mês Fechado */}
+      {/* Cartões adicionais mês fechado */}
       {mesFechado && dados.custosFixos !== undefined && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          {/* Custos Fixos */}
           <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-6 rounded-2xl shadow-lg">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-gray-600 font-semibold">
-                Custos Fixos
-              </span>
+              <span className="text-sm text-gray-600 font-semibold">Custos Fixos</span>
               <Calculator className="w-6 h-6 text-gray-600" />
             </div>
             <p className="text-2xl font-bold text-gray-900">
@@ -766,53 +748,43 @@ export default function FinanceiroPage() {
             <p className="text-xs text-gray-600 mt-2">Mês fechado</p>
           </div>
 
-          {/* Resultado Líquido */}
           <div
             className={`bg-gradient-to-br p-6 rounded-2xl shadow-lg ${
               (dados.resultadoLiquido || 0) >= 0
-                ? 'from-green-50 to-green-100'
-                : 'from-red-50 to-red-100'
+                ? "from-green-50 to-green-100"
+                : "from-red-50 to-red-100"
             }`}
           >
             <div className="flex items-center justify-between mb-4">
               <span
                 className={`text-sm font-semibold ${
-                  (dados.resultadoLiquido || 0) >= 0
-                    ? 'text-green-600'
-                    : 'text-red-600'
+                  (dados.resultadoLiquido || 0) >= 0 ? "text-green-600" : "text-red-600"
                 }`}
               >
                 Resultado Líquido
               </span>
               <TrendingUp
                 className={`w-6 h-6 ${
-                  (dados.resultadoLiquido || 0) >= 0
-                    ? 'text-green-600'
-                    : 'text-red-600'
+                  (dados.resultadoLiquido || 0) >= 0 ? "text-green-600" : "text-red-600"
                 }`}
               />
             </div>
             <p
               className={`text-2xl font-bold ${
-                (dados.resultadoLiquido || 0) >= 0
-                  ? 'text-green-900'
-                  : 'text-red-900'
+                (dados.resultadoLiquido || 0) >= 0 ? "text-green-900" : "text-red-900"
               }`}
             >
               {formatarMoeda(dados.resultadoLiquido || 0)}€
             </p>
             <p
               className={`text-xs mt-2 ${
-                (dados.resultadoLiquido || 0) >= 0
-                  ? 'text-green-600'
-                  : 'text-red-600'
+                (dados.resultadoLiquido || 0) >= 0 ? "text-green-600" : "text-red-600"
               }`}
             >
               Após custos fixos
             </p>
           </div>
 
-          {/* Ponto de Equilíbrio */}
           {dados.pontoEquilibrioFrascos && dados.pontoEquilibrioFaturacao && (
             <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-6 rounded-2xl shadow-lg">
               <div className="flex items-center justify-between mb-4">
@@ -832,7 +804,6 @@ export default function FinanceiroPage() {
         </div>
       )}
 
-      {/* Observações (se houver) */}
       {mesFechado && dados.observacoes && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
           <h3 className="text-lg font-bold text-blue-900 mb-2">Observações</h3>
@@ -842,25 +813,7 @@ export default function FinanceiroPage() {
         </div>
       )}
 
-      {/* Informação Adicional */}
-      <div className="mt-8 bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-2xl border border-blue-200 mb-8">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">
-          Sobre o Resultado Operacional
-        </h3>
-        <p className="text-gray-700 text-sm leading-relaxed">
-          O <strong>Resultado Operacional</strong> representa o lucro após
-          deduzir comissões de vendedores, custos de quilometragem, incentivos
-          a podologistas e fundo farmacêutico. Este valor{' '}
-          <strong>não inclui custos fixos</strong> como salários base, aluguel,
-          utilidades e outros custos operacionais mensais.
-        </p>
-        <p className="text-gray-700 text-sm leading-relaxed mt-2">
-          <strong>Nota:</strong> Os valores de faturação são calculados com base em{' '}
-          <strong>faturas emitidas</strong>, usando a <strong>data de emissão</strong> como referência.
-        </p>
-      </div>
-
-      {/* Histórico de Meses Fechados */}
+      {/* Histórico */}
       {historicoMeses.length > 0 && (
         <div className="mt-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-4">
@@ -890,19 +843,14 @@ export default function FinanceiroPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {historicoMeses.map((resumo) => (
-                    <tr
-                      key={resumo.id}
-                      className="hover:bg-gray-50 transition-colors"
-                    >
+                    <tr key={resumo.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-semibold text-gray-900">
                           {meses[resumo.mes - 1]} {resumo.ano}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Fechado em{' '}
-                          {new Date(resumo.data_fechamento).toLocaleDateString(
-                            'pt-PT'
-                          )}
+                          Fechado em{" "}
+                          {new Date(resumo.data_fechamento).toLocaleDateString("pt-PT")}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right">
@@ -913,24 +861,18 @@ export default function FinanceiroPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div
                           className={`text-sm font-semibold ${
-                            resumo.resultado_liquido >= 0
-                              ? 'text-green-600'
-                              : 'text-red-600'
+                            resumo.resultado_liquido >= 0 ? "text-green-600" : "text-red-600"
                           }`}
                         >
                           {formatarMoeda(resumo.resultado_liquido)}€
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right">
-                        <div className="text-sm text-gray-900">
-                          {resumo.frascos_vendidos}
-                        </div>
+                        <div className="text-sm text-gray-900">{resumo.frascos_vendidos}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-center">
                         <button
-                          onClick={() =>
-                            visualizarMesFechado(resumo.ano, resumo.mes)
-                          }
+                          onClick={() => visualizarMesFechado(resumo.ano, resumo.mes)}
                           className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
                         >
                           <Eye className="w-4 h-4" />
@@ -946,11 +888,10 @@ export default function FinanceiroPage() {
         </div>
       )}
 
-      {/* Modal de Fechamento de Mês */}
+      {/* Modal Fechamento */}
       {modalAberto && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            {/* Header do Modal */}
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold text-white">
@@ -965,34 +906,24 @@ export default function FinanceiroPage() {
               </div>
             </div>
 
-            {/* Conteúdo do Modal */}
             <div className="p-6">
-              {/* Resumo dos Valores Calculados */}
               <div className="mb-6">
                 <h3 className="text-lg font-bold text-gray-900 mb-4">
                   Resumo do Mês (valores calculados)
                 </h3>
                 <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-xl">
                   <div>
-                    <p className="text-xs text-gray-600 mb-1">
-                      Faturação Bruta
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Faturação Bruta</p>
                     <p className="text-lg font-bold text-gray-900">
                       {formatarMoeda(dados.faturacaoBruta)}€
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-600 mb-1">
-                      Frascos Vendidos
-                    </p>
-                    <p className="text-lg font-bold text-gray-900">
-                      {dados.frascosVendidos}
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Frascos Vendidos</p>
+                    <p className="text-lg font-bold text-gray-900">{dados.frascosVendidos}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-600 mb-1">
-                      Comissão Total
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Comissão Total</p>
                     <p className="text-lg font-bold text-gray-900">
                       {formatarMoeda(dados.comissaoTotal)}€
                     </p>
@@ -1004,30 +935,22 @@ export default function FinanceiroPage() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-600 mb-1">
-                      Incentivo Podologista
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Incentivo Podologista</p>
                     <p className="text-lg font-bold text-gray-900">
                       {formatarMoeda(dados.incentivoPodologista)}€
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-600 mb-1">
-                      Fundo Farmacêutico
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Fundo Farmacêutico</p>
                     <p className="text-lg font-bold text-gray-900">
                       {formatarMoeda(dados.fundoFarmaceutico)}€
                     </p>
                   </div>
                   <div className="col-span-2 pt-4 border-t border-gray-300">
-                    <p className="text-xs text-gray-600 mb-1">
-                      Resultado Operacional
-                    </p>
+                    <p className="text-xs text-gray-600 mb-1">Resultado Operacional</p>
                     <p
                       className={`text-xl font-bold ${
-                        dados.resultadoOperacional >= 0
-                          ? 'text-green-600'
-                          : 'text-red-600'
+                        dados.resultadoOperacional >= 0 ? "text-green-600" : "text-red-600"
                       }`}
                     >
                       {formatarMoeda(dados.resultadoOperacional)}€
@@ -1036,9 +959,7 @@ export default function FinanceiroPage() {
                 </div>
               </div>
 
-              {/* Campos de Entrada */}
               <div className="space-y-4 mb-6">
-                {/* Custos Fixos */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Custos Fixos deste mês (€) *
@@ -1058,7 +979,6 @@ export default function FinanceiroPage() {
                   </p>
                 </div>
 
-                {/* Observações */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Observações (opcional)
@@ -1073,22 +993,18 @@ export default function FinanceiroPage() {
                 </div>
               </div>
 
-              {/* Aviso */}
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
                   <div className="text-sm text-yellow-800">
                     <p className="font-semibold mb-1">Atenção</p>
                     <p>
-                      Ao confirmar o fechamento, os valores serão gravados
-                      permanentemente. Este mês não poderá ser fechado novamente
-                      sem ajustes diretos na base de dados.
+                      Ao confirmar o fechamento, os valores serão gravados permanentemente.
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Botões de Ação */}
               <div className="flex gap-3">
                 <button
                   onClick={fecharModal}
