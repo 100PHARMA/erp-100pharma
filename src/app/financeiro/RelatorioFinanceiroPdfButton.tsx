@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { FileText } from "lucide-react";
 import { gerarRelatorioFinanceiroPDF } from "@/lib/pdf/gerarRelatorioFinanceiro";
 
@@ -24,18 +24,32 @@ type Props = {
 };
 
 export function RelatorioFinanceiroPdfButton({ dados }: Props) {
-  const handleClick = useCallback(() => {
-    gerarRelatorioFinanceiroPDF(dados);
-  }, [dados]);
+  const [gerando, setGerando] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (gerando) return;
+
+    try {
+      setGerando(true);
+      await Promise.resolve(gerarRelatorioFinanceiroPDF(dados));
+    } catch (err) {
+      console.error("Erro ao gerar relatório financeiro PDF:", err);
+      alert("Erro ao gerar o PDF. Veja o console para detalhes.");
+    } finally {
+      setGerando(false);
+    }
+  }, [dados, gerando]);
 
   return (
     <button
       type="button"
       onClick={handleClick}
-      className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-3 rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-colors font-semibold shadow-md flex items-center gap-2 justify-center"
+      disabled={gerando}
+      className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-3 rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-colors font-semibold shadow-md flex items-center gap-2 justify-center disabled:opacity-60 disabled:cursor-not-allowed"
     >
       <FileText className="w-5 h-5" />
-      Gerar Relatório (PDF)
+      {gerando ? "Gerando..." : "Gerar Relatório (PDF)"}
     </button>
   );
 }
+
