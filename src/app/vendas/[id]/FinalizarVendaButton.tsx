@@ -82,11 +82,25 @@ export default function FinalizarVendaButton({
         p_venda_id: vendaId,
       });
 
-      if (error) {
-        console.error('❌ Erro ao finalizar venda (RPC):', error);
-        toast.error(error.message || 'Erro ao finalizar venda');
+            if (error) {
+        console.error("❌ Erro ao finalizar venda:", error);
+
+        const msg = (error as any)?.message || "";
+        const code = (error as any)?.code;
+
+        // Se já existe uma fatura, a tua RPC/trigger devolve a frase "Fatura existente: <uuid>"
+        const match = msg.match(/Fatura existente:\s*([0-9a-fA-F-]{36})/);
+
+        if (code === "23505" && match?.[1]) {
+          toast.warning("Já existe fatura para esta venda. A abrir fatura...");
+          router.push(`/faturas/${match[1]}`);
+          return;
+        }
+
+        toast.error(msg || "Erro ao finalizar venda");
         return;
       }
+
 
       // 1) Tentar obter a fatura pelo retorno do RPC
       let fatura = normalizarFatura(data);
