@@ -137,7 +137,7 @@ function calcularComissaoProgressivaLocal(total: number, config: ConfiguracaoFin
   const t = Math.max(0, safeNum(total, 0));
 
   const f1 = Math.max(0, safeNum(config.faixa1_limite, 3000));
-  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000)); // garante f2 >= f1
+  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000));
 
   const p1 = safeNum(config.comissao_faixa1, 5) / 100;
   const p2 = safeNum(config.comissao_faixa2, 8) / 100;
@@ -189,25 +189,6 @@ export default function ComissoesPage() {
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
   const [detalheFaturas, setDetalheFaturas] = useState<
-
-useEffect(() => {
-  function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') fecharDetalhe();
-  }
-
-  if (detalheAberto) {
-    document.addEventListener('keydown', onKeyDown);
-    // trava scroll do body, mas o modal continua scrollável
-    document.body.style.overflow = 'hidden';
-  }
-
-  return () => {
-    document.removeEventListener('keydown', onKeyDown);
-    document.body.style.overflow = '';
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [detalheAberto]);
-   
     Array<{
       id: string;
       numero: string;
@@ -218,6 +199,24 @@ useEffect(() => {
       base_sem_iva: number;
     }>
   >([]);
+
+  // ✅ ESC + trava scroll do body quando o modal abre
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') fecharDetalhe();
+    }
+
+    if (detalheAberto) {
+      document.addEventListener('keydown', onKeyDown);
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = '';
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detalheAberto]);
 
   const { anoSelecionado, mesSelecionado } = useMemo(() => {
     const [anoStr, mesStr] = mesAno.split('-');
@@ -255,7 +254,7 @@ useEffect(() => {
       const vendedoresList = (vendedoresData || []) as Vendedor[];
       setVendedores(vendedoresList);
 
-      // Faturas emitidas (obrigatório): tipo FATURA e não CANCELADA
+      // Faturas emitidas: tipo FATURA e estado != CANCELADA
       const { data: faturasData, error: faturasError } = await supabase
         .from('faturas')
         .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, subtotal, total_sem_iva')
@@ -325,7 +324,6 @@ useEffect(() => {
         );
       }
 
-      // Agregação por vendedor
       const agg = new Map<
         string,
         {
@@ -371,7 +369,10 @@ useEffect(() => {
         const base = a ? safeNum(a.base, 0) : 0;
 
         const frascos = a
-          ? Array.from(a.vendasSet).reduce((sum, vendaId) => sum + (frascosPorVenda.get(vendaId) || 0), 0)
+          ? Array.from(a.vendasSet).reduce(
+              (sum, vendaId) => sum + (frascosPorVenda.get(vendaId) || 0),
+              0
+            )
           : 0;
 
         const numFaturas = a ? a.numFaturas : 0;
@@ -499,10 +500,7 @@ useEffect(() => {
       const faturas = (faturasData || []) as FaturaRow[];
       const vendaIds = Array.from(new Set(faturas.map((f) => f.venda_id)));
 
-      if (vendaIds.length === 0) {
-        setDetalheFaturas([]);
-        return;
-      }
+      if (vendaIds.length === 0) return;
 
       const { data: vendasData, error: vendasError } = await supabase
         .from('vendas')
@@ -517,7 +515,10 @@ useEffect(() => {
 
       const faturasDoVendedor = faturas.filter((f) => vendasSet.has(f.venda_id));
 
-      const clienteIds = Array.from(new Set(faturasDoVendedor.map((f) => f.cliente_id).filter(Boolean)));
+      const clienteIds = Array.from(
+        new Set(faturasDoVendedor.map((f) => f.cliente_id).filter(Boolean))
+      );
+
       let clientesMap = new Map<string, string>();
 
       if (clienteIds.length > 0) {
@@ -616,9 +617,12 @@ useEffect(() => {
       <div className="mb-6">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Comissões e Performance</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
+              Comissões e Performance
+            </h1>
             <p className="text-gray-600 text-sm sm:text-base">
-              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA), com faixas progressivas.
+              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA),
+              com faixas progressivas.
             </p>
           </div>
 
@@ -647,11 +651,31 @@ useEffect(() => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard title="Base (sem IVA)" value={formatCurrencyEUR(stats.totalBase)} icon={<TrendingUp className="w-5 h-5" />} />
-        <StatCard title="Comissão" value={formatCurrencyEUR(stats.totalComissao)} icon={<DollarSign className="w-5 h-5" />} />
-        <StatCard title="Frascos" value={formatInt(stats.totalFrascos)} icon={<Package className="w-5 h-5" />} />
-        <StatCard title="Faturas" value={formatInt(stats.totalFaturas)} icon={<Receipt className="w-5 h-5" />} />
-        <StatCard title="Ticket médio" value={formatCurrencyEUR(stats.ticketMedioGeral)} icon={<Users className="w-5 h-5" />} />
+        <StatCard
+          title="Base (sem IVA)"
+          value={formatCurrencyEUR(stats.totalBase)}
+          icon={<TrendingUp className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Comissão"
+          value={formatCurrencyEUR(stats.totalComissao)}
+          icon={<DollarSign className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Frascos"
+          value={formatInt(stats.totalFrascos)}
+          icon={<Package className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Faturas"
+          value={formatInt(stats.totalFaturas)}
+          icon={<Receipt className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Ticket médio"
+          value={formatCurrencyEUR(stats.ticketMedioGeral)}
+          icon={<Users className="w-5 h-5" />}
+        />
         <StatCard
           title="Pagas / Pendentes"
           value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`}
@@ -665,29 +689,61 @@ useEffect(() => {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <Th onClick={() => toggleSort('vendedor_nome')} active={sortKey === 'vendedor_nome'} dir={sortDir}>
+                <Th
+                  onClick={() => toggleSort('vendedor_nome')}
+                  active={sortKey === 'vendedor_nome'}
+                  dir={sortDir}
+                >
                   Vendedor
                 </Th>
-                <ThRight onClick={() => toggleSort('base_sem_iva')} active={sortKey === 'base_sem_iva'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('base_sem_iva')}
+                  active={sortKey === 'base_sem_iva'}
+                  dir={sortDir}
+                >
                   Base (sem IVA)
                 </ThRight>
-                <ThRight onClick={() => toggleSort('comissao_calculada')} active={sortKey === 'comissao_calculada'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('comissao_calculada')}
+                  active={sortKey === 'comissao_calculada'}
+                  dir={sortDir}
+                >
                   Comissão
                 </ThRight>
                 <ThCenter>Faixa</ThCenter>
-                <ThRight onClick={() => toggleSort('num_faturas')} active={sortKey === 'num_faturas'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('num_faturas')}
+                  active={sortKey === 'num_faturas'}
+                  dir={sortDir}
+                >
                   Nº faturas
                 </ThRight>
-                <ThRight onClick={() => toggleSort('clientes_unicos')} active={sortKey === 'clientes_unicos'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('clientes_unicos')}
+                  active={sortKey === 'clientes_unicos'}
+                  dir={sortDir}
+                >
                   Clientes únicos
                 </ThRight>
-                <ThRight onClick={() => toggleSort('frascos')} active={sortKey === 'frascos'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('frascos')}
+                  active={sortKey === 'frascos'}
+                  dir={sortDir}
+                >
                   Frascos
                 </ThRight>
-                <ThRight onClick={() => toggleSort('ticket_medio')} active={sortKey === 'ticket_medio'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('ticket_medio')}
+                  active={sortKey === 'ticket_medio'}
+                  dir={sortDir}
+                >
                   Ticket médio
                 </ThRight>
-                <ThRight onClick={() => toggleSort('preco_medio_frasco')} active={sortKey === 'preco_medio_frasco'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('preco_medio_frasco')}
+                  active={sortKey === 'preco_medio_frasco'}
+                  dir={sortDir}
+                >
                   €/frasco (médio)
                 </ThRight>
                 <ThRight>Meta</ThRight>
@@ -706,22 +762,32 @@ useEffect(() => {
                       </span>
                       {config && (
                         <span className="text-xs text-gray-500">
-                          Falta p/ {formatInt(config.faixa1_limite)}: {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
+                          Falta p/ {formatInt(config.faixa1_limite)}:{' '}
+                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/{' '}
+                          {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
                         </span>
                       )}
                     </div>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.base_sem_iva)}</span>
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.base_sem_iva)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.comissao_calculada)}</span>
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.comissao_calculada)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-center">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(r.faixa_atual)}`}>
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(
+                        r.faixa_atual
+                      )}`}
+                    >
                       {faixaLabel(r.faixa_atual)}
                     </span>
                   </td>
@@ -739,16 +805,22 @@ useEffect(() => {
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.ticket_medio)}</span>
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.ticket_medio)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.preco_medio_frasco)}</span>
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.preco_medio_frasco)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
                     <div className="flex flex-col items-end">
-                      <span className="text-sm font-semibold text-gray-900">{Math.round(r.percentual_meta)}%</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {Math.round(r.percentual_meta)}%
+                      </span>
                       {config && (
                         <span className="text-xs text-gray-500">
                           Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
@@ -769,6 +841,7 @@ useEffect(() => {
                   </td>
                 </tr>
               ))}
+
               {sortedRows.length === 0 && (
                 <tr>
                   <td colSpan={11} className="py-10 text-center text-gray-600">
@@ -783,119 +856,138 @@ useEffect(() => {
 
       {/* Modal detalhe */}
       {detalheAberto && detalheVendedor && (
-  <div
-    className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-    onMouseDown={(e) => {
-      // fecha ao clicar fora do modal
-      if (e.target === e.currentTarget) fecharDetalhe();
-    }}
-    role="dialog"
-    aria-modal="true"
-  >
-    <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-      <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
-        <div>
-          <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
-          <p className="text-sm text-white/80">
-            {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={fecharDetalhe}
-          className="p-2 rounded-lg hover:bg-white/10"
-          aria-label="Fechar"
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) fecharDetalhe();
+          }}
+          role="dialog"
+          aria-modal="true"
         >
-          <X className="w-6 h-6" />
-        </button>
-      </div>
+          <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
+                <p className="text-sm text-white/80">
+                  {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharDetalhe}
+                className="p-2 rounded-lg hover:bg-white/10"
+                aria-label="Fechar"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
 
-      {/* corpo scrollável */}
-      <div className="p-6 overflow-y-auto">
-        {detalheLoading && (
-          <div className="flex items-center gap-3 text-gray-700">
-            <RefreshCw className="w-5 h-5 animate-spin" />
-            Carregando detalhe...
+            <div className="p-6 overflow-y-auto">
+              {detalheLoading && (
+                <div className="flex items-center gap-3 text-gray-700">
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  Carregando detalhe...
+                </div>
+              )}
+
+              {detalheErro && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
+                  {detalheErro}
+                </div>
+              )}
+
+              {!detalheLoading && !detalheErro && (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                      <tr>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Fatura
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Cliente
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Data
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Tipo
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Estado
+                        </th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">
+                          Base (sem IVA)
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {detalheFaturas.map((f) => (
+                        <tr key={f.id} className="hover:bg-gray-50">
+                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">
+                            {f.numero}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
+                          <td className="py-3 px-4 text-sm text-gray-800">
+                            {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
+                          </td>
+                          <td className="py-3 px-4 text-center text-xs font-semibold">
+                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
+                              {f.tipo || 'FATURA'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center text-xs font-semibold">
+                            <span
+                              className={`px-2 py-1 rounded-full ${
+                                f.estado === 'PAGA'
+                                  ? 'bg-green-100 text-green-800'
+                                  : f.estado === 'PENDENTE'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-gray-100 text-gray-800'
+                              }`}
+                            >
+                              {f.estado}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
+                            {formatCurrencyEUR(f.base_sem_iva)}
+                          </td>
+                        </tr>
+                      ))}
+
+                      {detalheFaturas.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-10 text-center text-gray-600">
+                            Sem faturas neste período para este vendedor.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="mt-4 text-xs text-gray-500">
+                Dica: fecha com <strong>ESC</strong> ou clicando fora do modal.
+              </div>
+            </div>
           </div>
-        )}
-
-        {detalheErro && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
-            {detalheErro}
-          </div>
-        )}
-
-        {!detalheLoading && !detalheErro && (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
-                <tr>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Fatura</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Cliente</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Data</th>
-                  <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Tipo</th>
-                  <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Estado</th>
-                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Base (sem IVA)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {detalheFaturas.map((f) => (
-                  <tr key={f.id} className="hover:bg-gray-50">
-                    <td className="py-3 px-4 text-sm font-semibold text-gray-900">{f.numero}</td>
-                    <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
-                    <td className="py-3 px-4 text-sm text-gray-800">
-                      {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
-                    </td>
-                    <td className="py-3 px-4 text-center text-xs font-semibold">
-                      <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
-                        {f.tipo || 'FATURA'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-center text-xs font-semibold">
-                      <span
-                        className={`px-2 py-1 rounded-full ${
-                          f.estado === 'PAGA'
-                            ? 'bg-green-100 text-green-800'
-                            : f.estado === 'PENDENTE'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-gray-100 text-gray-800'
-                        }`}
-                      >
-                        {f.estado}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
-                      {formatCurrencyEUR(f.base_sem_iva)}
-                    </td>
-                  </tr>
-                ))}
-                {detalheFaturas.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-10 text-center text-gray-600">
-                      Sem faturas neste período para este vendedor.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <div className="mt-4 text-xs text-gray-500">
-          Dica: fecha com <strong>ESC</strong> ou clicando fora do modal.
         </div>
-      </div>
+      )}
     </div>
-  </div>
-)}
-
+  );
+}
 
 // =====================================================
 // COMPONENTES AUXILIARES
 // =====================================================
 
 function CalendarIcon() {
-  return <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">📅</span>;
+  return (
+    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">
+      📅
+    </span>
+  );
 }
 
 function StatCard({
