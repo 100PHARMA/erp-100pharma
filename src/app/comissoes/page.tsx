@@ -399,88 +399,40 @@ async function carregar() {
   // =====================================================
 
   async function abrirDetalhe(vendedorId: string, vendedorNome: string) {
-    setDetalheAberto(true);
-    setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
-    setDetalheLoading(true);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
+  setDetalheAberto(true);
+  setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
+  setDetalheLoading(true);
+  setDetalheErro(null);
+  setDetalheFaturas([]);
 
-    try {
-      const { data: faturasData, error: faturasError } = await supabase
-        .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, subtotal, total_sem_iva')
-        .eq('tipo', 'FATURA')
-        .neq('estado', 'CANCELADA')
-        .gte('data_emissao', periodo.inicio)
-        .lt('data_emissao', periodo.fimExclusivo);
+  try {
+    const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
+      p_vendedor_id: vendedorId,
+      p_ano: anoSelecionado,
+      p_mes: mesSelecionado,
+    });
 
-      if (faturasError) throw faturasError;
+    if (error) throw error;
 
-      const faturas = (faturasData || []) as FaturaRow[];
-      const vendaIds = Array.from(new Set(faturas.map((f) => f.venda_id)));
-
-      if (vendaIds.length === 0) return;
-
-      const { data: vendasData, error: vendasError } = await supabase
-        .from('vendas')
-        .select('id, vendedor_id, cliente_id')
-        .in('id', vendaIds)
-        .eq('vendedor_id', vendedorId);
-
-      if (vendasError) throw vendasError;
-
-      const vendas = (vendasData || []) as VendaRow[];
-      const vendasSet = new Set(vendas.map((v) => v.id));
-
-      const faturasDoVendedor = faturas.filter((f) => vendasSet.has(f.venda_id));
-
-      const clienteIds = Array.from(
-        new Set(faturasDoVendedor.map((f) => f.cliente_id).filter(Boolean))
-      );
-
-      let clientesMap = new Map<string, string>();
-
-      if (clienteIds.length > 0) {
-        const { data: clientesData, error: clientesError } = await supabase
-          .from('clientes')
-          .select('id, nome')
-          .in('id', clienteIds);
-
-        if (clientesError) throw clientesError;
-
-        const clientes = (clientesData || []) as ClienteRow[];
-        clientesMap = new Map(clientes.map((c) => [c.id, c.nome]));
-      }
-
-      const baseSemIvaDaFatura = (f: FaturaRow) => safeNum(f.total_sem_iva ?? f.subtotal ?? 0);
-
-      setDetalheFaturas(
-        faturasDoVendedor
-          .map((f) => ({
-            id: f.id,
-            numero: f.numero,
-            data_emissao: f.data_emissao,
-            estado: f.estado,
-            tipo: f.tipo,
-            cliente_nome: clientesMap.get(f.cliente_id) || '—',
-            base_sem_iva: baseSemIvaDaFatura(f),
-          }))
-          .sort((a, b) => (a.data_emissao < b.data_emissao ? 1 : -1))
-      );
-    } catch (e: any) {
-      console.error(e);
-      setDetalheErro(e?.message || 'Erro ao carregar detalhe');
-    } finally {
-      setDetalheLoading(false);
-    }
+    setDetalheFaturas(
+      (data || []).map((r: any) => ({
+        id: r.fatura_id,
+        numero: r.numero,
+        data_emissao: r.data_emissao,
+        estado: r.estado,
+        tipo: r.tipo,
+        cliente_nome: r.cliente_nome || '—',
+        base_sem_iva: safeNum(r.base_sem_iva, 0),
+      }))
+    );
+  } catch (e: any) {
+    console.error(e);
+    setDetalheErro(e?.message || 'Erro ao carregar detalhe');
+  } finally {
+    setDetalheLoading(false);
   }
+}
 
-  function fecharDetalhe() {
-    setDetalheAberto(false);
-    setDetalheVendedor(null);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
-  }
 
   // =====================================================
   // RENDER
