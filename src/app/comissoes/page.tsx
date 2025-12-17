@@ -236,185 +236,104 @@ export default function ComissoesPage() {
   // CARREGAMENTO
   // =====================================================
 
-  async function carregar() {
-    setLoading(true);
-    setErro(null);
+async function carregar() {
+  setLoading(true);
+  setErro(null);
 
-    try {
-      const cfg = await buscarConfiguracaoFinanceira();
-      setConfig(cfg);
+  try {
+    // 1) Config (faixas + meta)
+    const cfg = await buscarConfiguracaoFinanceira();
+    setConfig(cfg);
 
-      const { data: vendedoresData, error: vendedoresError } = await supabase
-        .from('vendedores')
-        .select('id, nome')
-        .order('nome', { ascending: true });
+    // 2) Vendedores (para mostrar também quem está zerado no mês)
+    const { data: vendedoresData, error: vendedoresError } = await supabase
+      .from('vendedores')
+      .select('id, nome')
+      .order('nome', { ascending: true });
 
-      if (vendedoresError) throw vendedoresError;
+    if (vendedoresError) throw vendedoresError;
 
-      const vendedoresList = (vendedoresData || []) as Vendedor[];
-      setVendedores(vendedoresList);
+    const vendedoresList = (vendedoresData || []) as Vendedor[];
+    setVendedores(vendedoresList);
 
-      // Faturas emitidas: tipo FATURA e estado != CANCELADA
-      const { data: faturasData, error: faturasError } = await supabase
-        .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, subtotal, total_sem_iva')
-        .eq('tipo', 'FATURA')
-        .neq('estado', 'CANCELADA')
-        .gte('data_emissao', periodo.inicio)
-        .lt('data_emissao', periodo.fimExclusivo);
+    // 3) RPC do ranking mensal (server-side)
+    const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
+      p_ano: anoSelecionado,
+      p_mes: mesSelecionado,
+    });
 
-      if (faturasError) throw faturasError;
+    if (rpcError) throw rpcError;
 
-      const faturas = (faturasData || []) as FaturaRow[];
-      const vendaIds = Array.from(new Set(faturas.map((f) => f.venda_id).filter(Boolean)));
+    type RpcRow = {
+      vendedor_id: string;
+      vendedor_nome: string;
+      base_sem_iva: number;
+      num_faturas: number;
+      clientes_unicos: number;
+      frascos: number;
+      faturas_pagas: number;
+      faturas_pendentes: number;
+    };
 
-      if (vendaIds.length === 0) {
-        setRows(
-          vendedoresList.map((v) => ({
-            vendedor_id: v.id,
-            vendedor_nome: v.nome,
-            base_sem_iva: 0,
-            comissao_calculada: 0,
-            faixa_atual: 'FAIXA_1',
-            percentual_meta: 0,
-            falta_para_3000: cfg.faixa1_limite,
-            falta_para_7000: cfg.faixa2_limite,
-            num_faturas: 0,
-            clientes_unicos: 0,
-            frascos: 0,
-            ticket_medio: 0,
-            preco_medio_frasco: 0,
-            faturas_pagas: 0,
-            faturas_pendentes: 0,
-          }))
-        );
-        return;
-      }
-
-      const { data: vendasData, error: vendasError } = await supabase
-        .from('vendas')
-        .select('id, vendedor_id, cliente_id')
-        .in('id', vendaIds);
-
-      if (vendasError) throw vendasError;
-
-      const vendas = (vendasData || []) as VendaRow[];
-      const vendaToVendedor = new Map<string, string>();
-      const vendaToCliente = new Map<string, string>();
-
-      for (const v of vendas) {
-        if (v.vendedor_id) vendaToVendedor.set(v.id, v.vendedor_id);
-        vendaToCliente.set(v.id, v.cliente_id);
-      }
-
-      const { data: itensData, error: itensError } = await supabase
-        .from('venda_itens')
-        .select('venda_id, quantidade')
-        .in('venda_id', vendaIds);
-
-      if (itensError) throw itensError;
-
-      const itens = (itensData || []) as VendaItemRow[];
-      const frascosPorVenda = new Map<string, number>();
-
-      for (const it of itens) {
-        frascosPorVenda.set(
-          it.venda_id,
-          (frascosPorVenda.get(it.venda_id) || 0) + safeNum(it.quantidade, 0)
-        );
-      }
-
-      const agg = new Map<
-        string,
-        {
-          base: number;
-          numFaturas: number;
-          clientes: Set<string>;
-          vendasSet: Set<string>;
-          pagas: number;
-          pendentes: number;
-        }
-      >();
-
-      const baseSemIvaDaFatura = (f: FaturaRow) => safeNum(f.total_sem_iva ?? f.subtotal ?? 0);
-
-      for (const f of faturas) {
-        const vendedorId = vendaToVendedor.get(f.venda_id);
-        if (!vendedorId) continue;
-
-        if (!agg.has(vendedorId)) {
-          agg.set(vendedorId, {
-            base: 0,
-            numFaturas: 0,
-            clientes: new Set<string>(),
-            vendasSet: new Set<string>(),
-            pagas: 0,
-            pendentes: 0,
-          });
-        }
-
-        const a = agg.get(vendedorId)!;
-        a.base += baseSemIvaDaFatura(f);
-        a.numFaturas += 1;
-        a.vendasSet.add(f.venda_id);
-
-        a.clientes.add(f.cliente_id || vendaToCliente.get(f.venda_id) || '');
-
-        if (f.estado === 'PAGA') a.pagas += 1;
-        if (f.estado === 'PENDENTE') a.pendentes += 1;
-      }
-
-      const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
-        const a = agg.get(vend.id);
-        const base = a ? safeNum(a.base, 0) : 0;
-
-        const frascos = a
-          ? Array.from(a.vendasSet).reduce(
-              (sum, vendaId) => sum + (frascosPorVenda.get(vendaId) || 0),
-              0
-            )
-          : 0;
-
-        const numFaturas = a ? a.numFaturas : 0;
-        const clientesUnicos = a ? Array.from(a.clientes).filter(Boolean).length : 0;
-
-        const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
-        const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
-
-        const faixaAtual = getFaixa(base, cfg);
-        const comissao = calcularComissaoProgressivaLocal(base, cfg);
-        const percentualMeta = calcularPercentualMetaLocal(base, cfg);
-
-        const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
-        const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
-
-        return {
-          vendedor_id: vend.id,
-          vendedor_nome: vend.nome,
-          base_sem_iva: base,
-          comissao_calculada: comissao,
-          faixa_atual: faixaAtual,
-          percentual_meta: percentualMeta,
-          falta_para_3000: falta3000,
-          falta_para_7000: falta7000,
-          num_faturas: numFaturas,
-          clientes_unicos: clientesUnicos,
-          frascos,
-          ticket_medio: ticketMedio,
-          preco_medio_frasco: precoMedioFrasco,
-          faturas_pagas: a ? a.pagas : 0,
-          faturas_pendentes: a ? a.pendentes : 0,
-        };
+    const porVendedor = new Map<string, RpcRow>();
+    for (const r of (rpcData || []) as RpcRow[]) {
+      porVendedor.set(r.vendedor_id, {
+        ...r,
+        base_sem_iva: safeNum(r.base_sem_iva, 0),
+        num_faturas: safeNum(r.num_faturas, 0),
+        clientes_unicos: safeNum(r.clientes_unicos, 0),
+        frascos: safeNum(r.frascos, 0),
+        faturas_pagas: safeNum(r.faturas_pagas, 0),
+        faturas_pendentes: safeNum(r.faturas_pendentes, 0),
       });
-
-      setRows(rowsOut);
-    } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Erro ao carregar comissões');
-    } finally {
-      setLoading(false);
     }
+
+    // 4) Monta rows finais (inclui vendedores sem movimento)
+    const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
+      const r = porVendedor.get(vend.id);
+
+      const base = r ? safeNum(r.base_sem_iva, 0) : 0;
+      const numFaturas = r ? safeNum(r.num_faturas, 0) : 0;
+      const clientesUnicos = r ? safeNum(r.clientes_unicos, 0) : 0;
+      const frascos = r ? safeNum(r.frascos, 0) : 0;
+
+      const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
+      const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
+
+      const faixaAtual = getFaixa(base, cfg);
+      const comissao = calcularComissaoProgressivaLocal(base, cfg);
+      const percentualMeta = calcularPercentualMetaLocal(base, cfg);
+
+      const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
+      const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
+
+      return {
+        vendedor_id: vend.id,
+        vendedor_nome: vend.nome,
+        base_sem_iva: base,
+        comissao_calculada: comissao,
+        faixa_atual: faixaAtual,
+        percentual_meta: percentualMeta,
+        falta_para_3000: falta3000,
+        falta_para_7000: falta7000,
+        num_faturas: numFaturas,
+        clientes_unicos: clientesUnicos,
+        frascos,
+        ticket_medio: ticketMedio,
+        preco_medio_frasco: precoMedioFrasco,
+        faturas_pagas: r ? safeNum(r.faturas_pagas, 0) : 0,
+        faturas_pendentes: r ? safeNum(r.faturas_pendentes, 0) : 0,
+      };
+    });
+
+    setRows(rowsOut);
+  } catch (e: any) {
+    console.error(e);
+    setErro(e?.message || 'Erro ao carregar comissões');
+  } finally {
+    setLoading(false);
   }
+}
 
   useEffect(() => {
     carregar();
