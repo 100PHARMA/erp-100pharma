@@ -406,32 +406,32 @@ async function carregar() {
   setDetalheFaturas([]);
 
   try {
-    const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
-      p_vendedor_id: vendedorId,
-      p_ano: anoSelecionado,
-      p_mes: mesSelecionado,
-    });
+  const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
+    p_vendedor_id: vendedorId,
+    p_ano: anoSelecionado,
+    p_mes: mesSelecionado,
+  });
 
-    if (error) throw error;
+  if (error) throw error;
 
-    setDetalheFaturas(
-      (data || []).map((r: any) => ({
-        id: r.fatura_id,
-        numero: r.numero,
-        data_emissao: r.data_emissao,
-        estado: r.estado,
-        tipo: r.tipo,
-        cliente_nome: r.cliente_nome || '—',
-        base_sem_iva: safeNum(r.base_sem_iva, 0),
-      }))
-    );
-  } catch (e: any) {
-    console.error(e);
-    setDetalheErro(e?.message || 'Erro ao carregar detalhe');
-  } finally {
-    setDetalheLoading(false);
-  }
+  setDetalheFaturas(
+    (data || []).map((r: any) => ({
+      id: r.fatura_id,
+      numero: r.numero,
+      data_emissao: r.data_emissao,
+      estado: r.estado,
+      tipo: r.tipo,
+      cliente_nome: r.cliente_nome || '—',
+      base_sem_iva: safeNum(r.base_sem_iva, 0),
+    }))
+  );
+} catch (e: any) {
+  console.error(e);
+  setDetalheErro(e?.message || 'Erro ao carregar detalhe');
+} finally {
+  setDetalheLoading(false);
 }
+
 
 
   // =====================================================
