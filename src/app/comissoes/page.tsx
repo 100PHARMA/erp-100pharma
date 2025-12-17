@@ -27,34 +27,6 @@ type Vendedor = {
   nome: string;
 };
 
-type FaturaRow = {
-  id: string;
-  numero: string;
-  venda_id: string;
-  cliente_id: string;
-  tipo: string | null;
-  estado: string;
-  data_emissao: string; // timestamptz
-  subtotal: number; // numeric
-  total_sem_iva: number | null;
-};
-
-type VendaRow = {
-  id: string;
-  vendedor_id: string | null;
-  cliente_id: string;
-};
-
-type VendaItemRow = {
-  venda_id: string;
-  quantidade: number;
-};
-
-type ClienteRow = {
-  id: string;
-  nome: string;
-};
-
 type RowComissao = {
   vendedor_id: string;
   vendedor_nome: string;
@@ -91,6 +63,16 @@ type SortKey =
 
 type SortDir = 'asc' | 'desc';
 
+type DetalheRow = {
+  id: string;
+  numero: string;
+  data_emissao: string;
+  estado: string;
+  tipo: string | null;
+  cliente_nome: string;
+  base_sem_iva: number;
+};
+
 // =====================================================
 // HELPERS
 // =====================================================
@@ -106,16 +88,6 @@ function formatCurrencyEUR(valor: number) {
 
 function formatInt(n: number) {
   return n.toLocaleString('pt-PT');
-}
-
-function startOfMonthISO(ano: number, mes: number) {
-  const d = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
-  return d.toISOString();
-}
-
-function endOfMonthISOExclusive(ano: number, mes: number) {
-  const d = new Date(Date.UTC(ano, mes, 1, 0, 0, 0));
-  return d.toISOString();
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -188,19 +160,24 @@ export default function ComissoesPage() {
   const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
-  const [detalheFaturas, setDetalheFaturas] = useState<
-    Array<{
-      id: string;
-      numero: string;
-      data_emissao: string;
-      estado: string;
-      tipo: string | null;
-      cliente_nome: string;
-      base_sem_iva: number;
-    }>
-  >([]);
+  const [detalheFaturas, setDetalheFaturas] = useState<DetalheRow[]>([]);
 
-  // ✅ ESC + trava scroll do body quando o modal abre
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    const [anoStr, mesStr] = mesAno.split('-');
+    return {
+      anoSelecionado: Number(anoStr),
+      mesSelecionado: Number(mesStr),
+    };
+  }, [mesAno]);
+
+  function fecharDetalhe() {
+    setDetalheAberto(false);
+    setDetalheVendedor(null);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
+  }
+
+  // ESC + trava scroll do body quando o modal abre
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') fecharDetalhe();
@@ -218,122 +195,108 @@ export default function ComissoesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detalheAberto]);
 
-  const { anoSelecionado, mesSelecionado } = useMemo(() => {
-    const [anoStr, mesStr] = mesAno.split('-');
-    return {
-      anoSelecionado: Number(anoStr),
-      mesSelecionado: Number(mesStr),
-    };
-  }, [mesAno]);
-
-  const periodo = useMemo(() => {
-    const inicio = startOfMonthISO(anoSelecionado, mesSelecionado);
-    const fimExclusivo = endOfMonthISOExclusive(anoSelecionado, mesSelecionado);
-    return { inicio, fimExclusivo };
-  }, [anoSelecionado, mesSelecionado]);
-
   // =====================================================
   // CARREGAMENTO
   // =====================================================
 
-async function carregar() {
-  setLoading(true);
-  setErro(null);
+  async function carregar() {
+    setLoading(true);
+    setErro(null);
 
-  try {
-    // 1) Config (faixas + meta)
-    const cfg = await buscarConfiguracaoFinanceira();
-    setConfig(cfg);
+    try {
+      // 1) Config (faixas + meta)
+      const cfg = await buscarConfiguracaoFinanceira();
+      setConfig(cfg);
 
-    // 2) Vendedores (para mostrar também quem está zerado no mês)
-    const { data: vendedoresData, error: vendedoresError } = await supabase
-      .from('vendedores')
-      .select('id, nome')
-      .order('nome', { ascending: true });
+      // 2) Vendedores
+      const { data: vendedoresData, error: vendedoresError } = await supabase
+        .from('vendedores')
+        .select('id, nome')
+        .order('nome', { ascending: true });
 
-    if (vendedoresError) throw vendedoresError;
+      if (vendedoresError) throw vendedoresError;
 
-    const vendedoresList = (vendedoresData || []) as Vendedor[];
-    setVendedores(vendedoresList);
+      const vendedoresList = (vendedoresData || []) as Vendedor[];
+      setVendedores(vendedoresList);
 
-    // 3) RPC do ranking mensal (server-side)
-    const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
-      p_ano: anoSelecionado,
-      p_mes: mesSelecionado,
-    });
-
-    if (rpcError) throw rpcError;
-
-    type RpcRow = {
-      vendedor_id: string;
-      vendedor_nome: string;
-      base_sem_iva: number;
-      num_faturas: number;
-      clientes_unicos: number;
-      frascos: number;
-      faturas_pagas: number;
-      faturas_pendentes: number;
-    };
-
-    const porVendedor = new Map<string, RpcRow>();
-    for (const r of (rpcData || []) as RpcRow[]) {
-      porVendedor.set(r.vendedor_id, {
-        ...r,
-        base_sem_iva: safeNum(r.base_sem_iva, 0),
-        num_faturas: safeNum(r.num_faturas, 0),
-        clientes_unicos: safeNum(r.clientes_unicos, 0),
-        frascos: safeNum(r.frascos, 0),
-        faturas_pagas: safeNum(r.faturas_pagas, 0),
-        faturas_pendentes: safeNum(r.faturas_pendentes, 0),
+      // 3) RPC do ranking mensal
+      const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
       });
-    }
 
-    // 4) Monta rows finais (inclui vendedores sem movimento)
-    const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
-      const r = porVendedor.get(vend.id);
+      if (rpcError) throw rpcError;
 
-      const base = r ? safeNum(r.base_sem_iva, 0) : 0;
-      const numFaturas = r ? safeNum(r.num_faturas, 0) : 0;
-      const clientesUnicos = r ? safeNum(r.clientes_unicos, 0) : 0;
-      const frascos = r ? safeNum(r.frascos, 0) : 0;
-
-      const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
-      const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
-
-      const faixaAtual = getFaixa(base, cfg);
-      const comissao = calcularComissaoProgressivaLocal(base, cfg);
-      const percentualMeta = calcularPercentualMetaLocal(base, cfg);
-
-      const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
-      const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
-
-      return {
-        vendedor_id: vend.id,
-        vendedor_nome: vend.nome,
-        base_sem_iva: base,
-        comissao_calculada: comissao,
-        faixa_atual: faixaAtual,
-        percentual_meta: percentualMeta,
-        falta_para_3000: falta3000,
-        falta_para_7000: falta7000,
-        num_faturas: numFaturas,
-        clientes_unicos: clientesUnicos,
-        frascos,
-        ticket_medio: ticketMedio,
-        preco_medio_frasco: precoMedioFrasco,
-        faturas_pagas: r ? safeNum(r.faturas_pagas, 0) : 0,
-        faturas_pendentes: r ? safeNum(r.faturas_pendentes, 0) : 0,
+      type RpcRow = {
+        vendedor_id: string;
+        vendedor_nome: string;
+        base_sem_iva: number;
+        num_faturas: number;
+        clientes_unicos: number;
+        frascos: number;
+        faturas_pagas: number;
+        faturas_pendentes: number;
       };
-    });
 
-    setRows(rowsOut);
-  } catch (e: any) {
-    console.error(e);
-    setErro(e?.message || 'Erro ao carregar comissões');
-  } finally {
-    setLoading(false);
+      const porVendedor = new Map<string, RpcRow>();
+      for (const r of (rpcData || []) as RpcRow[]) {
+        porVendedor.set(r.vendedor_id, {
+          ...r,
+          base_sem_iva: safeNum(r.base_sem_iva, 0),
+          num_faturas: safeNum(r.num_faturas, 0),
+          clientes_unicos: safeNum(r.clientes_unicos, 0),
+          frascos: safeNum(r.frascos, 0),
+          faturas_pagas: safeNum(r.faturas_pagas, 0),
+          faturas_pendentes: safeNum(r.faturas_pendentes, 0),
+        });
+      }
+
+      // 4) Monta rows finais (inclui vendedores sem movimento)
+      const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
+        const r = porVendedor.get(vend.id);
+
+        const base = r ? safeNum(r.base_sem_iva, 0) : 0;
+        const numFaturas = r ? safeNum(r.num_faturas, 0) : 0;
+        const clientesUnicos = r ? safeNum(r.clientes_unicos, 0) : 0;
+        const frascos = r ? safeNum(r.frascos, 0) : 0;
+
+        const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
+        const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
+
+        const faixaAtual = getFaixa(base, cfg);
+        const comissao = calcularComissaoProgressivaLocal(base, cfg);
+        const percentualMeta = calcularPercentualMetaLocal(base, cfg);
+
+        const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
+        const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
+
+        return {
+          vendedor_id: vend.id,
+          vendedor_nome: vend.nome,
+          base_sem_iva: base,
+          comissao_calculada: comissao,
+          faixa_atual: faixaAtual,
+          percentual_meta: percentualMeta,
+          falta_para_3000: falta3000,
+          falta_para_7000: falta7000,
+          num_faturas: numFaturas,
+          clientes_unicos: clientesUnicos,
+          frascos,
+          ticket_medio: ticketMedio,
+          preco_medio_frasco: precoMedioFrasco,
+          faturas_pagas: r ? safeNum(r.faturas_pagas, 0) : 0,
+          faturas_pendentes: r ? safeNum(r.faturas_pendentes, 0) : 0,
+        };
+      });
+
+      setRows(rowsOut);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao carregar comissões');
+    } finally {
+      setLoading(false);
+    }
   }
-}
 
   useEffect(() => {
     carregar();
@@ -395,44 +358,43 @@ async function carregar() {
   }
 
   // =====================================================
-  // DETALHE VENDEDOR
+  // DETALHE VENDEDOR (RPC)
   // =====================================================
 
   async function abrirDetalhe(vendedorId: string, vendedorNome: string) {
-  setDetalheAberto(true);
-  setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
-  setDetalheLoading(true);
-  setDetalheErro(null);
-  setDetalheFaturas([]);
+    setDetalheAberto(true);
+    setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
+    setDetalheLoading(true);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
 
-  try {
-  const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
-    p_vendedor_id: vendedorId,
-    p_ano: anoSelecionado,
-    p_mes: mesSelecionado,
-  });
+    try {
+      const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
+        p_vendedor_id: vendedorId,
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
 
-  if (error) throw error;
+      if (error) throw error;
 
-  setDetalheFaturas(
-    (data || []).map((r: any) => ({
-      id: r.fatura_id,
-      numero: r.numero,
-      data_emissao: r.data_emissao,
-      estado: r.estado,
-      tipo: r.tipo,
-      cliente_nome: r.cliente_nome || '—',
-      base_sem_iva: safeNum(r.base_sem_iva, 0),
-    }))
-  );
-} catch (e: any) {
-  console.error(e);
-  setDetalheErro(e?.message || 'Erro ao carregar detalhe');
-} finally {
-  setDetalheLoading(false);
-}
-
-
+      setDetalheFaturas(
+        (data || []).map((r: any) => ({
+          id: r.fatura_id,
+          numero: r.numero,
+          data_emissao: r.data_emissao,
+          estado: r.estado,
+          tipo: r.tipo,
+          cliente_nome: r.cliente_nome || '—',
+          base_sem_iva: safeNum(r.base_sem_iva, 0),
+        }))
+      );
+    } catch (e: any) {
+      console.error(e);
+      setDetalheErro(e?.message || 'Erro ao carregar detalhe');
+    } finally {
+      setDetalheLoading(false);
+    }
+  }
 
   // =====================================================
   // RENDER
@@ -634,8 +596,8 @@ async function carregar() {
                       {config && (
                         <span className="text-xs text-gray-500">
                           Falta p/ {formatInt(config.faixa1_limite)}:{' '}
-                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/{' '}
-                          {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
+                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ {formatInt(config.faixa2_limite)}
+                          : {formatCurrencyEUR(r.falta_para_7000)}
                         </span>
                       )}
                     </div>
@@ -795,9 +757,7 @@ async function carregar() {
                     <tbody className="divide-y divide-gray-100">
                       {detalheFaturas.map((f) => (
                         <tr key={f.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">
-                            {f.numero}
-                          </td>
+                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">{f.numero}</td>
                           <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
                           <td className="py-3 px-4 text-sm text-gray-800">
                             {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
@@ -813,8 +773,8 @@ async function carregar() {
                                 f.estado === 'PAGA'
                                   ? 'bg-green-100 text-green-800'
                                   : f.estado === 'PENDENTE'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : 'bg-gray-100 text-gray-800'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-gray-100 text-gray-800'
                               }`}
                             >
                               {f.estado}
@@ -936,5 +896,9 @@ function ThRight({
 }
 
 function ThCenter({ children }: { children: ReactNode }) {
-  return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
+  return (
+    <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">
+      {children}
+    </th>
+  );
 }
