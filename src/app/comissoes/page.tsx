@@ -189,6 +189,25 @@ export default function ComissoesPage() {
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
   const [detalheFaturas, setDetalheFaturas] = useState<
+
+useEffect(() => {
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape') fecharDetalhe();
+  }
+
+  if (detalheAberto) {
+    document.addEventListener('keydown', onKeyDown);
+    // trava scroll do body, mas o modal continua scrollável
+    document.body.style.overflow = 'hidden';
+  }
+
+  return () => {
+    document.removeEventListener('keydown', onKeyDown);
+    document.body.style.overflow = '';
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [detalheAberto]);
+   
     Array<{
       id: string;
       numero: string;
@@ -764,105 +783,112 @@ export default function ComissoesPage() {
 
       {/* Modal detalhe */}
       {detalheAberto && detalheVendedor && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden">
-            <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
-                <p className="text-sm text-white/80">
-                  {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={fecharDetalhe}
-                className="p-2 rounded-lg hover:bg-white/10"
-                aria-label="Fechar"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6">
-              {detalheLoading && (
-                <div className="flex items-center gap-3 text-gray-700">
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  Carregando detalhe...
-                </div>
-              )}
-
-              {detalheErro && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
-                  {detalheErro}
-                </div>
-              )}
-
-              {!detalheLoading && !detalheErro && (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Fatura</th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Cliente</th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Data</th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Tipo</th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Estado</th>
-                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Base (sem IVA)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {detalheFaturas.map((f) => (
-                        <tr key={f.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">{f.numero}</td>
-                          <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
-                          <td className="py-3 px-4 text-sm text-gray-800">
-                            {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
-                          </td>
-                          <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
-                              {f.tipo || 'FATURA'}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span
-                              className={`px-2 py-1 rounded-full ${
-                                f.estado === 'PAGA'
-                                  ? 'bg-green-100 text-green-800'
-                                  : f.estado === 'PENDENTE'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : 'bg-gray-100 text-gray-800'
-                              }`}
-                            >
-                              {f.estado}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
-                            {formatCurrencyEUR(f.base_sem_iva)}
-                          </td>
-                        </tr>
-                      ))}
-                      {detalheFaturas.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-10 text-center text-gray-600">
-                            Sem faturas neste período para este vendedor.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <div className="mt-4 text-xs text-gray-500">
-                Observação: esta visão é “por emissão” (data_emissao). Se quiser caixa, use data_pagamento em outra aba.
-              </div>
-            </div>
-          </div>
+  <div
+    className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+    onMouseDown={(e) => {
+      // fecha ao clicar fora do modal
+      if (e.target === e.currentTarget) fecharDetalhe();
+    }}
+    role="dialog"
+    aria-modal="true"
+  >
+    <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
+        <div>
+          <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
+          <p className="text-sm text-white/80">
+            {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
+          </p>
         </div>
-      )}
+        <button
+          type="button"
+          onClick={fecharDetalhe}
+          className="p-2 rounded-lg hover:bg-white/10"
+          aria-label="Fechar"
+        >
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+
+      {/* corpo scrollável */}
+      <div className="p-6 overflow-y-auto">
+        {detalheLoading && (
+          <div className="flex items-center gap-3 text-gray-700">
+            <RefreshCw className="w-5 h-5 animate-spin" />
+            Carregando detalhe...
+          </div>
+        )}
+
+        {detalheErro && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
+            {detalheErro}
+          </div>
+        )}
+
+        {!detalheLoading && !detalheErro && (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                <tr>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Fatura</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Cliente</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Data</th>
+                  <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Tipo</th>
+                  <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Estado</th>
+                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Base (sem IVA)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {detalheFaturas.map((f) => (
+                  <tr key={f.id} className="hover:bg-gray-50">
+                    <td className="py-3 px-4 text-sm font-semibold text-gray-900">{f.numero}</td>
+                    <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
+                    <td className="py-3 px-4 text-sm text-gray-800">
+                      {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
+                    </td>
+                    <td className="py-3 px-4 text-center text-xs font-semibold">
+                      <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
+                        {f.tipo || 'FATURA'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center text-xs font-semibold">
+                      <span
+                        className={`px-2 py-1 rounded-full ${
+                          f.estado === 'PAGA'
+                            ? 'bg-green-100 text-green-800'
+                            : f.estado === 'PENDENTE'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        {f.estado}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(f.base_sem_iva)}
+                    </td>
+                  </tr>
+                ))}
+                {detalheFaturas.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-10 text-center text-gray-600">
+                      Sem faturas neste período para este vendedor.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="mt-4 text-xs text-gray-500">
+          Dica: fecha com <strong>ESC</strong> ou clicando fora do modal.
+        </div>
+      </div>
     </div>
-  );
-}
+  </div>
+)}
+
 
 // =====================================================
 // COMPONENTES AUXILIARES
