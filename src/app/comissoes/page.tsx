@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   TrendingUp,
   DollarSign,
@@ -15,8 +15,6 @@ import {
 import { supabase } from '@/lib/supabase';
 import {
   buscarConfiguracaoFinanceira,
-  calcularComissaoProgressiva,
-  calcularPercentualMeta,
   type ConfiguracaoFinanceira,
 } from '@/lib/configuracoes-financeiras';
 
@@ -61,11 +59,12 @@ type RowComissao = {
   vendedor_id: string;
   vendedor_nome: string;
 
-  base_sem_iva: number; // comissão por emissão (faturas emitidas), sem IVA
+  base_sem_iva: number;
   comissao_calculada: number;
 
   faixa_atual: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3';
   percentual_meta: number;
+
   falta_para_3000: number;
   falta_para_7000: number;
 
@@ -76,7 +75,6 @@ type RowComissao = {
   ticket_medio: number;
   preco_medio_frasco: number;
 
-  // Qualidade / controle
   faturas_pagas: number;
   faturas_pendentes: number;
 };
@@ -111,13 +109,11 @@ function formatInt(n: number) {
 }
 
 function startOfMonthISO(ano: number, mes: number) {
-  // mes: 1-12
   const d = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
-  return d.toISOString(); // timestamptz boundary
+  return d.toISOString();
 }
 
 function endOfMonthISOExclusive(ano: number, mes: number) {
-  // exclusive boundary: first day of next month
   const d = new Date(Date.UTC(ano, mes, 1, 0, 0, 0));
   return d.toISOString();
 }
@@ -126,10 +122,43 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function safeNum(v: unknown, fallback = 0) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function getFaixa(baseSemIva: number, config: ConfiguracaoFinanceira) {
   if (baseSemIva <= config.faixa1_limite) return 'FAIXA_1' as const;
   if (baseSemIva <= config.faixa2_limite) return 'FAIXA_2' as const;
   return 'FAIXA_3' as const;
+}
+
+function calcularComissaoProgressivaLocal(total: number, config: ConfiguracaoFinanceira) {
+  const t = Math.max(0, safeNum(total, 0));
+
+  const f1 = Math.max(0, safeNum(config.faixa1_limite, 3000));
+  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000)); // garante f2 >= f1
+
+  const p1 = safeNum(config.comissao_faixa1, 5) / 100;
+  const p2 = safeNum(config.comissao_faixa2, 8) / 100;
+  const p3 = safeNum(config.comissao_faixa3, 10) / 100;
+
+  const base1 = Math.min(t, f1);
+  const base2 = Math.min(Math.max(0, t - f1), Math.max(0, f2 - f1));
+  const base3 = Math.max(0, t - f2);
+
+  const c1 = base1 * p1;
+  const c2 = base2 * p2;
+  const c3 = base3 * p3;
+
+  return Number((c1 + c2 + c3).toFixed(2));
+}
+
+function calcularPercentualMetaLocal(total: number, config: ConfiguracaoFinanceira) {
+  const meta = safeNum(config.meta_mensal, 0);
+  if (meta <= 0) return 0;
+  const pct = (safeNum(total, 0) / meta) * 100;
+  return clamp(Number(pct.toFixed(2)), 0, 200);
 }
 
 // =====================================================
@@ -137,7 +166,6 @@ function getFaixa(baseSemIva: number, config: ConfiguracaoFinanceira) {
 // =====================================================
 
 export default function ComissoesPage() {
-  // Seletor mês/ano
   const hoje = new Date();
   const [mesAno, setMesAno] = useState(() => {
     const y = hoje.getFullYear();
@@ -148,20 +176,14 @@ export default function ComissoesPage() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
-  // Dados base
   const [config, setConfig] = useState<ConfiguracaoFinanceira | null>(null);
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [rows, setRows] = useState<RowComissao[]>([]);
 
-  // Controle de escopo e governança
-  const [incluirCanceladas, setIncluirCanceladas] = useState(false);
-  const [incluirNotasCredito, setIncluirNotasCredito] = useState(false);
-
-  // Ordenação
   const [sortKey, setSortKey] = useState<SortKey>('base_sem_iva');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  // Modal de detalhe
+  // Modal detalhe
   const [detalheAberto, setDetalheAberto] = useState(false);
   const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
@@ -201,45 +223,33 @@ export default function ComissoesPage() {
     setErro(null);
 
     try {
-      // 1) Config
       const cfg = await buscarConfiguracaoFinanceira();
       setConfig(cfg);
 
-      // 2) Vendedores
       const { data: vendedoresData, error: vendedoresError } = await supabase
         .from('vendedores')
         .select('id, nome')
         .order('nome', { ascending: true });
 
       if (vendedoresError) throw vendedoresError;
+
       const vendedoresList = (vendedoresData || []) as Vendedor[];
       setVendedores(vendedoresList);
 
-      // 3) Faturas emitidas no mês (base de comissão por emissão)
-      // Regra recomendada:
-      // - tipo='FATURA' entra positivo
-      // - tipo='NOTA_CREDITO' (opcional) entra negativo
-      // - CANCELADA (opcional) entra ou não entra
-      const tiposIncluidos = incluirNotasCredito ? ['FATURA', 'NOTA_CREDITO'] : ['FATURA'];
-
-      let faturasQuery = supabase
+      // Faturas emitidas (obrigatório): tipo FATURA e não CANCELADA
+      const { data: faturasData, error: faturasError } = await supabase
         .from('faturas')
         .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, subtotal, total_sem_iva')
-        .in('tipo', tiposIncluidos)
+        .eq('tipo', 'FATURA')
+        .neq('estado', 'CANCELADA')
         .gte('data_emissao', periodo.inicio)
         .lt('data_emissao', periodo.fimExclusivo);
 
-      if (!incluirCanceladas) {
-        faturasQuery = faturasQuery.neq('estado', 'CANCELADA');
-      }
-
-      const { data: faturasData, error: faturasError } = await faturasQuery;
       if (faturasError) throw faturasError;
 
       const faturas = (faturasData || []) as FaturaRow[];
       const vendaIds = Array.from(new Set(faturas.map((f) => f.venda_id).filter(Boolean)));
 
-      // Se não há faturas no mês, a tela deve mostrar zeros sem travar
       if (vendaIds.length === 0) {
         setRows(
           vendedoresList.map((v) => ({
@@ -260,19 +270,17 @@ export default function ComissoesPage() {
             faturas_pendentes: 0,
           }))
         );
-        setLoading(false);
         return;
       }
 
-      // 4) Vendas ligadas às faturas (para obter vendedor_id)
       const { data: vendasData, error: vendasError } = await supabase
         .from('vendas')
         .select('id, vendedor_id, cliente_id')
         .in('id', vendaIds);
 
       if (vendasError) throw vendasError;
-      const vendas = (vendasData || []) as VendaRow[];
 
+      const vendas = (vendasData || []) as VendaRow[];
       const vendaToVendedor = new Map<string, string>();
       const vendaToCliente = new Map<string, string>();
 
@@ -281,25 +289,24 @@ export default function ComissoesPage() {
         vendaToCliente.set(v.id, v.cliente_id);
       }
 
-      // 5) Itens (para frascos)
       const { data: itensData, error: itensError } = await supabase
         .from('venda_itens')
         .select('venda_id, quantidade')
         .in('venda_id', vendaIds);
 
       if (itensError) throw itensError;
-      const itens = (itensData || []) as VendaItemRow[];
 
+      const itens = (itensData || []) as VendaItemRow[];
       const frascosPorVenda = new Map<string, number>();
+
       for (const it of itens) {
-        frascosPorVenda.set(it.venda_id, (frascosPorVenda.get(it.venda_id) || 0) + (it.quantidade || 0));
+        frascosPorVenda.set(
+          it.venda_id,
+          (frascosPorVenda.get(it.venda_id) || 0) + safeNum(it.quantidade, 0)
+        );
       }
 
-      // 6) Agregação por vendedor
-      // Importante: histórico mostrou que houve duplicidade de FATURA por venda em meses passados.
-      // Para não inflar frascos, nós:
-      // - base e nº faturas: contabiliza por fatura (correto para emissão)
-      // - frascos: contabiliza por venda_id (deduplicado) dentro do mês por vendedor
+      // Agregação por vendedor
       const agg = new Map<
         string,
         {
@@ -312,15 +319,11 @@ export default function ComissoesPage() {
         }
       >();
 
-      const baseSemIvaDaFatura = (f: FaturaRow) => {
-        const base = Number(f.total_sem_iva ?? f.subtotal ?? 0);
-        if (f.tipo === 'NOTA_CREDITO') return -Math.abs(base);
-        return base;
-      };
+      const baseSemIvaDaFatura = (f: FaturaRow) => safeNum(f.total_sem_iva ?? f.subtotal ?? 0);
 
       for (const f of faturas) {
         const vendedorId = vendaToVendedor.get(f.venda_id);
-        if (!vendedorId) continue; // venda sem vendedor (deve ser exceção, mas não pode quebrar o painel)
+        if (!vendedorId) continue;
 
         if (!agg.has(vendedorId)) {
           agg.set(vendedorId, {
@@ -338,17 +341,15 @@ export default function ComissoesPage() {
         a.numFaturas += 1;
         a.vendasSet.add(f.venda_id);
 
-        // cliente: preferir fatura.cliente_id; fallback para venda.cliente_id
         a.clientes.add(f.cliente_id || vendaToCliente.get(f.venda_id) || '');
 
         if (f.estado === 'PAGA') a.pagas += 1;
         if (f.estado === 'PENDENTE') a.pendentes += 1;
       }
 
-      // 7) Montar rows para todos os vendedores (inclusive os com zero no mês)
       const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
         const a = agg.get(vend.id);
-        const base = a ? a.base : 0;
+        const base = a ? safeNum(a.base, 0) : 0;
 
         const frascos = a
           ? Array.from(a.vendasSet).reduce((sum, vendaId) => sum + (frascosPorVenda.get(vendaId) || 0), 0)
@@ -360,12 +361,12 @@ export default function ComissoesPage() {
         const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
         const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
 
-        const faixaAtual = cfg ? getFaixa(base, cfg) : ('FAIXA_1' as const);
-        const comissao = cfg ? calcularComissaoProgressiva(base, cfg) : 0;
-        const percentualMeta = cfg ? calcularPercentualMeta(base, cfg) : 0;
+        const faixaAtual = getFaixa(base, cfg);
+        const comissao = calcularComissaoProgressivaLocal(base, cfg);
+        const percentualMeta = calcularPercentualMetaLocal(base, cfg);
 
-        const falta3000 = cfg ? clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite) : 0;
-        const falta7000 = cfg ? clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite) : 0;
+        const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
+        const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
 
         return {
           vendedor_id: vend.id,
@@ -373,7 +374,7 @@ export default function ComissoesPage() {
           base_sem_iva: base,
           comissao_calculada: comissao,
           faixa_atual: faixaAtual,
-          percentual_meta,
+          percentual_meta: percentualMeta,
           falta_para_3000: falta3000,
           falta_para_7000: falta7000,
           num_faturas: numFaturas,
@@ -398,7 +399,7 @@ export default function ComissoesPage() {
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesAno, incluirCanceladas, incluirNotasCredito]);
+  }, [mesAno]);
 
   // =====================================================
   // STATS
@@ -466,21 +467,14 @@ export default function ComissoesPage() {
     setDetalheFaturas([]);
 
     try {
-      const tiposIncluidos = incluirNotasCredito ? ['FATURA', 'NOTA_CREDITO'] : ['FATURA'];
-
-      // 1) Pegar faturas do mês
-      let faturasQuery = supabase
+      const { data: faturasData, error: faturasError } = await supabase
         .from('faturas')
         .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, subtotal, total_sem_iva')
-        .in('tipo', tiposIncluidos)
+        .eq('tipo', 'FATURA')
+        .neq('estado', 'CANCELADA')
         .gte('data_emissao', periodo.inicio)
         .lt('data_emissao', periodo.fimExclusivo);
 
-      if (!incluirCanceladas) {
-        faturasQuery = faturasQuery.neq('estado', 'CANCELADA');
-      }
-
-      const { data: faturasData, error: faturasError } = await faturasQuery;
       if (faturasError) throw faturasError;
 
       const faturas = (faturasData || []) as FaturaRow[];
@@ -488,11 +482,9 @@ export default function ComissoesPage() {
 
       if (vendaIds.length === 0) {
         setDetalheFaturas([]);
-        setDetalheLoading(false);
         return;
       }
 
-      // 2) Filtrar vendas do vendedor
       const { data: vendasData, error: vendasError } = await supabase
         .from('vendas')
         .select('id, vendedor_id, cliente_id')
@@ -500,12 +492,12 @@ export default function ComissoesPage() {
         .eq('vendedor_id', vendedorId);
 
       if (vendasError) throw vendasError;
+
       const vendas = (vendasData || []) as VendaRow[];
       const vendasSet = new Set(vendas.map((v) => v.id));
 
       const faturasDoVendedor = faturas.filter((f) => vendasSet.has(f.venda_id));
 
-      // 3) Buscar nomes de clientes
       const clienteIds = Array.from(new Set(faturasDoVendedor.map((f) => f.cliente_id).filter(Boolean)));
       let clientesMap = new Map<string, string>();
 
@@ -516,15 +508,12 @@ export default function ComissoesPage() {
           .in('id', clienteIds);
 
         if (clientesError) throw clientesError;
+
         const clientes = (clientesData || []) as ClienteRow[];
         clientesMap = new Map(clientes.map((c) => [c.id, c.nome]));
       }
 
-      const baseSemIvaDaFatura = (f: FaturaRow) => {
-        const base = Number(f.total_sem_iva ?? f.subtotal ?? 0);
-        if (f.tipo === 'NOTA_CREDITO') return -Math.abs(base);
-        return base;
-      };
+      const baseSemIvaDaFatura = (f: FaturaRow) => safeNum(f.total_sem_iva ?? f.subtotal ?? 0);
 
       setDetalheFaturas(
         faturasDoVendedor
@@ -596,9 +585,10 @@ export default function ComissoesPage() {
   };
 
   const faixaLabel = (faixa: RowComissao['faixa_atual']) => {
-    if (faixa === 'FAIXA_1') return '5%';
-    if (faixa === 'FAIXA_2') return '8%';
-    return '10%';
+    if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
+    if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
+    if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
+    return `${safeNum(config.comissao_faixa3, 10)}%`;
   };
 
   return (
@@ -609,7 +599,7 @@ export default function ComissoesPage() {
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Comissões e Performance</h1>
             <p className="text-gray-600 text-sm sm:text-base">
-              Comissão por <strong>emissão de faturas</strong> (base sem IVA), com faixas progressivas.
+              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA), com faixas progressivas.
             </p>
           </div>
 
@@ -632,33 +622,6 @@ export default function ComissoesPage() {
               <RefreshCw className="w-5 h-5" />
               Atualizar
             </button>
-          </div>
-        </div>
-
-        {/* Governance toggles */}
-        <div className="mt-4 bg-white rounded-xl shadow-lg p-4 flex flex-col sm:flex-row sm:items-center gap-4">
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={incluirCanceladas}
-              onChange={(e) => setIncluirCanceladas(e.target.checked)}
-              className="h-4 w-4"
-            />
-            Incluir <strong>CANCELADAS</strong> (não recomendado)
-          </label>
-
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={incluirNotasCredito}
-              onChange={(e) => setIncluirNotasCredito(e.target.checked)}
-              className="h-4 w-4"
-            />
-            Considerar <strong>NOTAS DE CRÉDITO</strong> (abate na base)
-          </label>
-
-          <div className="text-xs text-gray-500">
-            Se você não controla notas de crédito aqui, você pode premiar volume “falso”.
           </div>
         </div>
       </div>
@@ -724,7 +687,7 @@ export default function ComissoesPage() {
                       </span>
                       {config && (
                         <span className="text-xs text-gray-500">
-                          Falta p/ 3.000: {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ 7.000: {formatCurrencyEUR(r.falta_para_7000)}
+                          Falta p/ {formatInt(config.faixa1_limite)}: {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
                         </span>
                       )}
                     </div>
@@ -769,7 +732,7 @@ export default function ComissoesPage() {
                       <span className="text-sm font-semibold text-gray-900">{Math.round(r.percentual_meta)}%</span>
                       {config && (
                         <span className="text-xs text-gray-500">
-                          Meta: {formatCurrencyEUR(config.meta_mensal)}
+                          Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
                         </span>
                       )}
                     </div>
@@ -807,7 +770,7 @@ export default function ComissoesPage() {
               <div>
                 <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
                 <p className="text-sm text-white/80">
-                  {mesAno} • faturas emitidas (base sem IVA) • filtros aplicados
+                  {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
                 </p>
               </div>
               <button
@@ -891,8 +854,7 @@ export default function ComissoesPage() {
               )}
 
               <div className="mt-4 text-xs text-gray-500">
-                Observação: esta visão é “por emissão”. Se você quiser governança de caixa, crie uma segunda aba filtrando por{' '}
-                <strong>data_pagamento</strong>.
+                Observação: esta visão é “por emissão” (data_emissao). Se quiser caixa, use data_pagamento em outra aba.
               </div>
             </div>
           </div>
@@ -903,7 +865,7 @@ export default function ComissoesPage() {
 }
 
 // =====================================================
-// COMPONENTES AUXILIARES (inline, para copiar e colar)
+// COMPONENTES AUXILIARES
 // =====================================================
 
 function CalendarIcon() {
@@ -917,7 +879,7 @@ function StatCard({
 }: {
   title: string;
   value: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }) {
   return (
     <div className="bg-white rounded-xl shadow-lg p-4">
@@ -936,7 +898,7 @@ function Th({
   active,
   dir,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   active?: boolean;
   dir?: 'asc' | 'desc';
@@ -963,7 +925,7 @@ function ThRight({
   active,
   dir,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   active?: boolean;
   dir?: 'asc' | 'desc';
@@ -984,6 +946,6 @@ function ThRight({
   );
 }
 
-function ThCenter({ children }: { children: React.ReactNode }) {
+function ThCenter({ children }: { children: ReactNode }) {
   return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
 }
