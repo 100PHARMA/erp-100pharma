@@ -63,13 +63,24 @@ type SortKey =
 
 type SortDir = 'asc' | 'desc';
 
-type DetalheRow = {
-  id: string;
+type RpcRankingRow = {
+  vendedor_id: string;
+  vendedor_nome: string;
+  base_sem_iva: number;
+  num_faturas: number;
+  clientes_unicos: number;
+  frascos: number;
+  faturas_pagas: number;
+  faturas_pendentes: number;
+};
+
+type RpcDetalheRow = {
+  fatura_id: string;
   numero: string;
   data_emissao: string;
+  tipo: string;
   estado: string;
-  tipo: string | null;
-  cliente_nome: string;
+  cliente_nome: string | null;
   base_sem_iva: number;
 };
 
@@ -109,7 +120,7 @@ function calcularComissaoProgressivaLocal(total: number, config: ConfiguracaoFin
   const t = Math.max(0, safeNum(total, 0));
 
   const f1 = Math.max(0, safeNum(config.faixa1_limite, 3000));
-  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000));
+  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000)); // garante f2 >= f1
 
   const p1 = safeNum(config.comissao_faixa1, 5) / 100;
   const p2 = safeNum(config.comissao_faixa2, 8) / 100;
@@ -149,7 +160,6 @@ export default function ComissoesPage() {
   const [erro, setErro] = useState<string | null>(null);
 
   const [config, setConfig] = useState<ConfiguracaoFinanceira | null>(null);
-  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [rows, setRows] = useState<RowComissao[]>([]);
 
   const [sortKey, setSortKey] = useState<SortKey>('base_sem_iva');
@@ -160,24 +170,19 @@ export default function ComissoesPage() {
   const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
-  const [detalheFaturas, setDetalheFaturas] = useState<DetalheRow[]>([]);
+  const [detalheFaturas, setDetalheFaturas] = useState<
+    Array<{
+      id: string;
+      numero: string;
+      data_emissao: string;
+      estado: string;
+      tipo: string;
+      cliente_nome: string;
+      base_sem_iva: number;
+    }>
+  >([]);
 
-  const { anoSelecionado, mesSelecionado } = useMemo(() => {
-    const [anoStr, mesStr] = mesAno.split('-');
-    return {
-      anoSelecionado: Number(anoStr),
-      mesSelecionado: Number(mesStr),
-    };
-  }, [mesAno]);
-
-  function fecharDetalhe() {
-    setDetalheAberto(false);
-    setDetalheVendedor(null);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
-  }
-
-  // ESC + trava scroll do body quando o modal abre
+  // ESC + trava scroll quando modal aberto
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') fecharDetalhe();
@@ -195,8 +200,16 @@ export default function ComissoesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detalheAberto]);
 
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    const [anoStr, mesStr] = mesAno.split('-');
+    return {
+      anoSelecionado: Number(anoStr),
+      mesSelecionado: Number(mesStr),
+    };
+  }, [mesAno]);
+
   // =====================================================
-  // CARREGAMENTO
+  // CARREGAMENTO (RPC-ONLY)
   // =====================================================
 
   async function carregar() {
@@ -208,18 +221,7 @@ export default function ComissoesPage() {
       const cfg = await buscarConfiguracaoFinanceira();
       setConfig(cfg);
 
-      // 2) Vendedores
-      const { data: vendedoresData, error: vendedoresError } = await supabase
-        .from('vendedores')
-        .select('id, nome')
-        .order('nome', { ascending: true });
-
-      if (vendedoresError) throw vendedoresError;
-
-      const vendedoresList = (vendedoresData || []) as Vendedor[];
-      setVendedores(vendedoresList);
-
-      // 3) RPC do ranking mensal
+      // 2) Ranking do mês via RPC (já inclui vendedores zerados porque a RPC faz LEFT JOIN em vendedores)
       const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
         p_ano: anoSelecionado,
         p_mes: mesSelecionado,
@@ -227,38 +229,13 @@ export default function ComissoesPage() {
 
       if (rpcError) throw rpcError;
 
-      type RpcRow = {
-        vendedor_id: string;
-        vendedor_nome: string;
-        base_sem_iva: number;
-        num_faturas: number;
-        clientes_unicos: number;
-        frascos: number;
-        faturas_pagas: number;
-        faturas_pendentes: number;
-      };
+      const ranking = (rpcData || []) as RpcRankingRow[];
 
-      const porVendedor = new Map<string, RpcRow>();
-      for (const r of (rpcData || []) as RpcRow[]) {
-        porVendedor.set(r.vendedor_id, {
-          ...r,
-          base_sem_iva: safeNum(r.base_sem_iva, 0),
-          num_faturas: safeNum(r.num_faturas, 0),
-          clientes_unicos: safeNum(r.clientes_unicos, 0),
-          frascos: safeNum(r.frascos, 0),
-          faturas_pagas: safeNum(r.faturas_pagas, 0),
-          faturas_pendentes: safeNum(r.faturas_pendentes, 0),
-        });
-      }
-
-      // 4) Monta rows finais (inclui vendedores sem movimento)
-      const rowsOut: RowComissao[] = vendedoresList.map((vend) => {
-        const r = porVendedor.get(vend.id);
-
-        const base = r ? safeNum(r.base_sem_iva, 0) : 0;
-        const numFaturas = r ? safeNum(r.num_faturas, 0) : 0;
-        const clientesUnicos = r ? safeNum(r.clientes_unicos, 0) : 0;
-        const frascos = r ? safeNum(r.frascos, 0) : 0;
+      const rowsOut: RowComissao[] = ranking.map((r) => {
+        const base = safeNum(r.base_sem_iva, 0);
+        const numFaturas = safeNum(r.num_faturas, 0);
+        const clientesUnicos = safeNum(r.clientes_unicos, 0);
+        const frascos = safeNum(r.frascos, 0);
 
         const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
         const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
@@ -271,8 +248,8 @@ export default function ComissoesPage() {
         const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
 
         return {
-          vendedor_id: vend.id,
-          vendedor_nome: vend.nome,
+          vendedor_id: r.vendedor_id,
+          vendedor_nome: r.vendedor_nome,
           base_sem_iva: base,
           comissao_calculada: comissao,
           faixa_atual: faixaAtual,
@@ -284,8 +261,8 @@ export default function ComissoesPage() {
           frascos,
           ticket_medio: ticketMedio,
           preco_medio_frasco: precoMedioFrasco,
-          faturas_pagas: r ? safeNum(r.faturas_pagas, 0) : 0,
-          faturas_pendentes: r ? safeNum(r.faturas_pendentes, 0) : 0,
+          faturas_pagas: safeNum(r.faturas_pagas, 0),
+          faturas_pendentes: safeNum(r.faturas_pendentes, 0),
         };
       });
 
@@ -358,7 +335,7 @@ export default function ComissoesPage() {
   }
 
   // =====================================================
-  // DETALHE VENDEDOR (RPC)
+  // DETALHE VENDEDOR (RPC-ONLY)
   // =====================================================
 
   async function abrirDetalhe(vendedorId: string, vendedorNome: string) {
@@ -377,13 +354,15 @@ export default function ComissoesPage() {
 
       if (error) throw error;
 
+      const detalhe = (data || []) as RpcDetalheRow[];
+
       setDetalheFaturas(
-        (data || []).map((r: any) => ({
+        detalhe.map((r) => ({
           id: r.fatura_id,
           numero: r.numero,
           data_emissao: r.data_emissao,
           estado: r.estado,
-          tipo: r.tipo,
+          tipo: r.tipo || 'FATURA',
           cliente_nome: r.cliente_nome || '—',
           base_sem_iva: safeNum(r.base_sem_iva, 0),
         }))
@@ -394,6 +373,13 @@ export default function ComissoesPage() {
     } finally {
       setDetalheLoading(false);
     }
+  }
+
+  function fecharDetalhe() {
+    setDetalheAberto(false);
+    setDetalheVendedor(null);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
   }
 
   // =====================================================
@@ -450,12 +436,9 @@ export default function ComissoesPage() {
       <div className="mb-6">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
-              Comissões e Performance
-            </h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Comissões e Performance</h1>
             <p className="text-gray-600 text-sm sm:text-base">
-              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA),
-              com faixas progressivas.
+              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA), com faixas progressivas.
             </p>
           </div>
 
@@ -484,36 +467,12 @@ export default function ComissoesPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard
-          title="Base (sem IVA)"
-          value={formatCurrencyEUR(stats.totalBase)}
-          icon={<TrendingUp className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Comissão"
-          value={formatCurrencyEUR(stats.totalComissao)}
-          icon={<DollarSign className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Frascos"
-          value={formatInt(stats.totalFrascos)}
-          icon={<Package className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Faturas"
-          value={formatInt(stats.totalFaturas)}
-          icon={<Receipt className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Ticket médio"
-          value={formatCurrencyEUR(stats.ticketMedioGeral)}
-          icon={<Users className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Pagas / Pendentes"
-          value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`}
-          icon={<Target className="w-5 h-5" />}
-        />
+        <StatCard title="Base (sem IVA)" value={formatCurrencyEUR(stats.totalBase)} icon={<TrendingUp className="w-5 h-5" />} />
+        <StatCard title="Comissão" value={formatCurrencyEUR(stats.totalComissao)} icon={<DollarSign className="w-5 h-5" />} />
+        <StatCard title="Frascos" value={formatInt(stats.totalFrascos)} icon={<Package className="w-5 h-5" />} />
+        <StatCard title="Faturas" value={formatInt(stats.totalFaturas)} icon={<Receipt className="w-5 h-5" />} />
+        <StatCard title="Ticket médio" value={formatCurrencyEUR(stats.ticketMedioGeral)} icon={<Users className="w-5 h-5" />} />
+        <StatCard title="Pagas / Pendentes" value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`} icon={<Target className="w-5 h-5" />} />
       </div>
 
       {/* Tabela */}
@@ -522,61 +481,29 @@ export default function ComissoesPage() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <Th
-                  onClick={() => toggleSort('vendedor_nome')}
-                  active={sortKey === 'vendedor_nome'}
-                  dir={sortDir}
-                >
+                <Th onClick={() => toggleSort('vendedor_nome')} active={sortKey === 'vendedor_nome'} dir={sortDir}>
                   Vendedor
                 </Th>
-                <ThRight
-                  onClick={() => toggleSort('base_sem_iva')}
-                  active={sortKey === 'base_sem_iva'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('base_sem_iva')} active={sortKey === 'base_sem_iva'} dir={sortDir}>
                   Base (sem IVA)
                 </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('comissao_calculada')}
-                  active={sortKey === 'comissao_calculada'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('comissao_calculada')} active={sortKey === 'comissao_calculada'} dir={sortDir}>
                   Comissão
                 </ThRight>
                 <ThCenter>Faixa</ThCenter>
-                <ThRight
-                  onClick={() => toggleSort('num_faturas')}
-                  active={sortKey === 'num_faturas'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('num_faturas')} active={sortKey === 'num_faturas'} dir={sortDir}>
                   Nº faturas
                 </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('clientes_unicos')}
-                  active={sortKey === 'clientes_unicos'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('clientes_unicos')} active={sortKey === 'clientes_unicos'} dir={sortDir}>
                   Clientes únicos
                 </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('frascos')}
-                  active={sortKey === 'frascos'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('frascos')} active={sortKey === 'frascos'} dir={sortDir}>
                   Frascos
                 </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('ticket_medio')}
-                  active={sortKey === 'ticket_medio'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('ticket_medio')} active={sortKey === 'ticket_medio'} dir={sortDir}>
                   Ticket médio
                 </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('preco_medio_frasco')}
-                  active={sortKey === 'preco_medio_frasco'}
-                  dir={sortDir}
-                >
+                <ThRight onClick={() => toggleSort('preco_medio_frasco')} active={sortKey === 'preco_medio_frasco'} dir={sortDir}>
                   €/frasco (médio)
                 </ThRight>
                 <ThRight>Meta</ThRight>
@@ -595,32 +522,22 @@ export default function ComissoesPage() {
                       </span>
                       {config && (
                         <span className="text-xs text-gray-500">
-                          Falta p/ {formatInt(config.faixa1_limite)}:{' '}
-                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ {formatInt(config.faixa2_limite)}
-                          : {formatCurrencyEUR(r.falta_para_7000)}
+                          Falta p/ {formatInt(config.faixa1_limite)}: {formatCurrencyEUR(r.falta_para_3000)} • Falta p/ {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
                         </span>
                       )}
                     </div>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatCurrencyEUR(r.base_sem_iva)}
-                    </span>
+                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.base_sem_iva)}</span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatCurrencyEUR(r.comissao_calculada)}
-                    </span>
+                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.comissao_calculada)}</span>
                   </td>
 
                   <td className="py-4 px-4 text-center">
-                    <span
-                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(
-                        r.faixa_atual
-                      )}`}
-                    >
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(r.faixa_atual)}`}>
                       {faixaLabel(r.faixa_atual)}
                     </span>
                   </td>
@@ -638,26 +555,18 @@ export default function ComissoesPage() {
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">
-                      {formatCurrencyEUR(r.ticket_medio)}
-                    </span>
+                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.ticket_medio)}</span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">
-                      {formatCurrencyEUR(r.preco_medio_frasco)}
-                    </span>
+                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.preco_medio_frasco)}</span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
                     <div className="flex flex-col items-end">
-                      <span className="text-sm font-semibold text-gray-900">
-                        {Math.round(r.percentual_meta)}%
-                      </span>
+                      <span className="text-sm font-semibold text-gray-900">{Math.round(r.percentual_meta)}%</span>
                       {config && (
-                        <span className="text-xs text-gray-500">
-                          Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
-                        </span>
+                        <span className="text-xs text-gray-500">Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}</span>
                       )}
                     </div>
                   </td>
@@ -734,24 +643,12 @@ export default function ComissoesPage() {
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                       <tr>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Fatura
-                        </th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Cliente
-                        </th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Data
-                        </th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
-                          Tipo
-                        </th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
-                          Estado
-                        </th>
-                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">
-                          Base (sem IVA)
-                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Fatura</th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Cliente</th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Data</th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Tipo</th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Estado</th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Base (sem IVA)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -763,9 +660,7 @@ export default function ComissoesPage() {
                             {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
                           </td>
                           <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
-                              {f.tipo || 'FATURA'}
-                            </span>
+                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">{f.tipo || 'FATURA'}</span>
                           </td>
                           <td className="py-3 px-4 text-center text-xs font-semibold">
                             <span
@@ -773,8 +668,8 @@ export default function ComissoesPage() {
                                 f.estado === 'PAGA'
                                   ? 'bg-green-100 text-green-800'
                                   : f.estado === 'PENDENTE'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : 'bg-gray-100 text-gray-800'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-gray-100 text-gray-800'
                               }`}
                             >
                               {f.estado}
@@ -814,11 +709,7 @@ export default function ComissoesPage() {
 // =====================================================
 
 function CalendarIcon() {
-  return (
-    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">
-      📅
-    </span>
-  );
+  return <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">📅</span>;
 }
 
 function StatCard({
@@ -896,9 +787,5 @@ function ThRight({
 }
 
 function ThCenter({ children }: { children: ReactNode }) {
-  return (
-    <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">
-      {children}
-    </th>
-  );
+  return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
 }
