@@ -165,6 +165,27 @@ function calcularPercentualMetaLocal(total: number, config: ConfiguracaoFinancei
   return clamp(Number(pct.toFixed(2)), 0, 200);
 }
 
+function faixaPercentLabel(
+  faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3',
+  row: any,
+  mesFechado: boolean,
+  config: ConfiguracaoFinanceira | null
+) {
+  // MÊS FECHADO → usa percentuais congelados no snapshot
+  if (mesFechado) {
+    if (faixa === 'FAIXA_1') return `${row.comissao_faixa1}%`;
+    if (faixa === 'FAIXA_2') return `${row.comissao_faixa2}%`;
+    return `${row.comissao_faixa3}%`;
+  }
+
+  // MÊS ABERTO → usa configuração atual (como antes)
+  if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
+  if (faixa === 'FAIXA_1') return `${config.comissao_faixa1}%`;
+  if (faixa === 'FAIXA_2') return `${config.comissao_faixa2}%`;
+  return `${config.comissao_faixa3}%`;
+}
+
+
 // =====================================================
 // COMPONENTE
 // =====================================================
