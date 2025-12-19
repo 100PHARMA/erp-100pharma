@@ -1,254 +1,480 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { Target, TrendingUp, Users, Calendar, Award } from 'lucide-react';
-import { metasMock } from '@/lib/data';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Target,
+  TrendingUp,
+  Users,
+  MapPin,
+  RefreshCw,
+  AlertCircle,
+  Calendar,
+} from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+
+type MetasEmpresaRow = {
+  meta_vendas_sem_iva: number;
+  meta_novas_farmacias: number;
+  meta_visitas: number;
+};
+
+type MetasVendedorRow = {
+  vendedor_id: string;
+  vendedor_nome: string;
+
+  meta_vendas_sem_iva: number;
+  meta_novas_farmacias: number;
+  meta_visitas: number;
+
+  realizado_vendas_sem_iva: number;
+  realizado_novas_farmacias: number;
+  realizado_visitas: number;
+};
+
+function safeNum(v: unknown, fallback = 0) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function formatCurrencyEUR(valor: number) {
+  return (
+    valor.toLocaleString('pt-PT', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }) + '€'
+  );
+}
+
+function formatInt(n: number) {
+  return n.toLocaleString('pt-PT');
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function pct(realizado: number, meta: number) {
+  if (!meta || meta <= 0) return 0;
+  return clamp((realizado / meta) * 100, 0, 200);
+}
+
+function ProgressBar({ value }: { value: number }) {
+  const v = clamp(value, 0, 200);
+  return (
+    <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+      <div
+        className="h-3 rounded-full transition-all"
+        style={{ width: `${v}%` }}
+      />
+    </div>
+  );
+}
 
 export default function MetasPage() {
-  const [mesAno, setMesAno] = useState('2024-03');
+  const hoje = new Date();
+  const [mesAno, setMesAno] = useState(() => {
+    const y = hoje.getFullYear();
+    const m = String(hoje.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  });
 
-  const stats = useMemo(() => {
-    const totalMetaVendas = metasMock.reduce((acc, m) => acc + (Number(m.metaVendas) || 0), 0);
-    const totalRealizadoVendas = metasMock.reduce((acc, m) => acc + (Number(m.realizadoVendas) || 0), 0);
-    const percentualGeral = totalMetaVendas > 0 ? (totalRealizadoVendas / totalMetaVendas) * 100 : 0;
-    const vendedoresAcimaMeta = metasMock.filter((m) => (Number(m.percentualVendas) || 0) >= 100).length;
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
-    return { 
-      totalMetaVendas: Number(totalMetaVendas) || 0, 
-      totalRealizadoVendas: Number(totalRealizadoVendas) || 0, 
-      percentualGeral: Number(percentualGeral) || 0, 
-      vendedoresAcimaMeta: Number(vendedoresAcimaMeta) || 0 
+  const [empresaMeta, setEmpresaMeta] = useState<MetasEmpresaRow>({
+    meta_vendas_sem_iva: 0,
+    meta_novas_farmacias: 0,
+    meta_visitas: 0,
+  });
+
+  const [rows, setRows] = useState<MetasVendedorRow[]>([]);
+
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    const [anoStr, mesStr] = mesAno.split('-');
+    return {
+      anoSelecionado: Number(anoStr),
+      mesSelecionado: Number(mesStr),
     };
-  }, []);
+  }, [mesAno]);
 
-  // Função auxiliar para calcular percentual de forma segura
-  const calcularPercentual = (realizado: number, meta: number): number => {
-    const r = Number(realizado) || 0;
-    const m = Number(meta) || 0;
-    if (m === 0) return 0;
-    const percentual = (r / m) * 100;
-    return Number.isFinite(percentual) ? percentual : 0;
-  };
+  async function carregar() {
+    setLoading(true);
+    setErro(null);
 
-  // Função auxiliar para formatar número de forma segura
-  const formatarNumero = (valor: any): string => {
-    const num = Number(valor);
-    return Number.isFinite(num) ? num.toFixed(0) : '0';
-  };
+    try {
+      // 1) Metas empresa (global)
+      const { data: empData, error: empErr } = await supabase.rpc(
+        'relatorio_metas_empresa_mes',
+        { p_ano: anoSelecionado, p_mes: mesSelecionado }
+      );
 
-  // Função auxiliar para formatar moeda de forma segura
-  const formatarMoeda = (valor: any): string => {
-    const num = Number(valor);
-    return Number.isFinite(num) ? num.toLocaleString('pt-PT') : '0';
-  };
+      if (empErr) throw empErr;
+
+      const empRow = (Array.isArray(empData) ? empData[0] : empData) as any;
+
+      setEmpresaMeta({
+        meta_vendas_sem_iva: safeNum(empRow?.meta_vendas_sem_iva, 0),
+        meta_novas_farmacias: safeNum(empRow?.meta_novas_farmacias, 0),
+        meta_visitas: safeNum(empRow?.meta_visitas, 0),
+      });
+
+      // 2) Metas por vendedor (todos os vendedores via LEFT JOIN)
+      const { data: vendData, error: vendErr } = await supabase.rpc(
+        'relatorio_metas_mes',
+        { p_ano: anoSelecionado, p_mes: mesSelecionado }
+      );
+
+      if (vendErr) throw vendErr;
+
+      const list = (vendData || []) as any[];
+
+      const parsed: MetasVendedorRow[] = list.map((r) => ({
+        vendedor_id: r.vendedor_id,
+        vendedor_nome: r.vendedor_nome ?? '—',
+
+        meta_vendas_sem_iva: safeNum(r.meta_vendas_sem_iva, 0),
+        meta_novas_farmacias: safeNum(r.meta_novas_farmacias, 0),
+        meta_visitas: safeNum(r.meta_visitas, 0),
+
+        realizado_vendas_sem_iva: safeNum(r.realizado_vendas_sem_iva, 0),
+        realizado_novas_farmacias: safeNum(r.realizado_novas_farmacias, 0),
+        realizado_visitas: safeNum(r.realizado_visitas, 0),
+      }));
+
+      // ordena por % de vendas (desc), depois por realizado_vendas (desc)
+      parsed.sort((a, b) => {
+        const pa = pct(a.realizado_vendas_sem_iva, a.meta_vendas_sem_iva);
+        const pb = pct(b.realizado_vendas_sem_iva, b.meta_vendas_sem_iva);
+        if (pb !== pa) return pb - pa;
+        return b.realizado_vendas_sem_iva - a.realizado_vendas_sem_iva;
+      });
+
+      setRows(parsed);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao carregar metas');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    carregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesAno]);
+
+  const resumo = useMemo(() => {
+    const metaTotalVendas = rows.reduce((acc, r) => acc + r.meta_vendas_sem_iva, 0);
+    const realTotalVendas = rows.reduce((acc, r) => acc + r.realizado_vendas_sem_iva, 0);
+
+    const metaTotalNovas = rows.reduce((acc, r) => acc + r.meta_novas_farmacias, 0);
+    const realTotalNovas = rows.reduce((acc, r) => acc + r.realizado_novas_farmacias, 0);
+
+    const metaTotalVisitas = rows.reduce((acc, r) => acc + r.meta_visitas, 0);
+    const realTotalVisitas = rows.reduce((acc, r) => acc + r.realizado_visitas, 0);
+
+    // “Acima da meta”: considera somente quem tem meta > 0 (senão vira ruído)
+    const acimaDaMeta = rows.filter((r) => r.meta_vendas_sem_iva > 0 && r.realizado_vendas_sem_iva >= r.meta_vendas_sem_iva).length;
+
+    // prioridade: usar meta global da empresa, se existir (se for 0, cai para soma das metas dos vendedores)
+    const metaEmpresaVendas = empresaMeta.meta_vendas_sem_iva > 0 ? empresaMeta.meta_vendas_sem_iva : metaTotalVendas;
+    const metaEmpresaNovas = empresaMeta.meta_novas_farmacias > 0 ? empresaMeta.meta_novas_farmacias : metaTotalNovas;
+    const metaEmpresaVisitas = empresaMeta.meta_visitas > 0 ? empresaMeta.meta_visitas : metaTotalVisitas;
+
+    const atingVendas = pct(realTotalVendas, metaEmpresaVendas);
+    const atingNovas = pct(realTotalNovas, metaEmpresaNovas);
+    const atingVisitas = pct(realTotalVisitas, metaEmpresaVisitas);
+
+    // um “atingimento geral” simples: média ponderada por metas (quando meta=0, ignora)
+    const pesos = [
+      metaEmpresaVendas > 0 ? 1 : 0,
+      metaEmpresaNovas > 0 ? 1 : 0,
+      metaEmpresaVisitas > 0 ? 1 : 0,
+    ];
+    const somaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
+    const atingGeral = (atingVendas * pesos[0] + atingNovas * pesos[1] + atingVisitas * pesos[2]) / somaPesos;
+
+    return {
+      metaEmpresaVendas,
+      realTotalVendas,
+      atingVendas,
+
+      metaEmpresaNovas,
+      realTotalNovas,
+      atingNovas,
+
+      metaEmpresaVisitas,
+      realTotalVisitas,
+      atingVisitas,
+
+      atingGeral,
+      acimaDaMeta,
+    };
+  }, [rows, empresaMeta]);
+
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center gap-3 text-gray-700">
+            <RefreshCw className="w-5 h-5 animate-spin" />
+            Carregando metas...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (erro) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-red-600 mt-0.5" />
+            <div>
+              <p className="text-red-600 font-semibold">Erro ao carregar</p>
+              <p className="text-gray-700 mt-1">{erro}</p>
+              <button
+                type="button"
+                onClick={carregar}
+                className="mt-4 bg-gray-900 text-white px-4 py-2 rounded-lg font-semibold"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
       {/* Header */}
-      <div className="mb-8">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
-              Metas
-            </h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Metas</h1>
             <p className="text-gray-600 text-sm sm:text-base">
-              Acompanhamento de metas e desempenho da equipa
+              Acompanhamento por vendedor com base em <strong>faturas emitidas</strong>, visitas e novas farmácias
+              (primeira compra da vida do cliente no mês).
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <Calendar className="w-5 h-5 text-gray-400" />
-            <input
-              type="month"
-              value={mesAno}
-              onChange={(e) => setMesAno(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2 bg-white rounded-xl shadow-lg px-4 py-3">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">
+                <Calendar className="w-5 h-5 text-gray-700" />
+              </span>
+              <input
+                type="month"
+                value={mesAno}
+                onChange={(e) => setMesAno(e.target.value)}
+                className="px-2 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={carregar}
+              className="bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
+            >
+              <RefreshCw className="w-5 h-5" />
+              Atualizar
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="bg-blue-100 p-2 rounded-lg">
-              <Target className="w-5 h-5 text-blue-600" />
-            </div>
-            <span className="text-sm text-gray-600">Meta Total</span>
-          </div>
-          <p className="text-2xl sm:text-3xl font-bold text-gray-900">
-            {formatarMoeda(stats.totalMetaVendas)}€
-          </p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="bg-green-100 p-2 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-green-600" />
-            </div>
-            <span className="text-sm text-gray-600">Realizado</span>
-          </div>
-          <p className="text-2xl sm:text-3xl font-bold text-green-600">
-            {formatarMoeda(stats.totalRealizadoVendas)}€
-          </p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="bg-purple-100 p-2 rounded-lg">
-              <Award className="w-5 h-5 text-purple-600" />
-            </div>
-            <span className="text-sm text-gray-600">Atingimento</span>
-          </div>
-          <p className="text-2xl sm:text-3xl font-bold text-purple-600">
-            {formatarNumero(stats.percentualGeral)}%
-          </p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="bg-orange-100 p-2 rounded-lg">
-              <Users className="w-5 h-5 text-orange-600" />
-            </div>
-            <span className="text-sm text-gray-600">Acima da Meta</span>
-          </div>
-          <p className="text-2xl sm:text-3xl font-bold text-orange-600">
-            {formatarNumero(stats.vendedoresAcimaMeta)}
-          </p>
-        </div>
+      {/* Cards (empresa) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <Card
+          title="Meta Total (Vendas)"
+          value={formatCurrencyEUR(resumo.metaEmpresaVendas)}
+          icon={<Target className="w-5 h-5" />}
+          sub={`${formatCurrencyEUR(resumo.realTotalVendas)} realizado`}
+        />
+        <Card
+          title="Atingimento (Vendas)"
+          value={`${Math.round(resumo.atingVendas)}%`}
+          icon={<TrendingUp className="w-5 h-5" />}
+          sub="base: faturas emitidas"
+        />
+        <Card
+          title="Atingimento (Geral)"
+          value={`${Math.round(resumo.atingGeral)}%`}
+          icon={<Users className="w-5 h-5" />}
+          sub="média (vendas/novas/visitas)"
+        />
+        <Card
+          title="Acima da Meta (Vendas)"
+          value={formatInt(resumo.acimaDaMeta)}
+          icon={<Target className="w-5 h-5" />}
+          sub="vendedores com meta > 0"
+        />
       </div>
 
-      {/* Metas por Vendedor */}
-      <div className="space-y-6">
-        {metasMock.map((meta) => {
-          // Calcular percentuais de forma segura
-          const percentualVendas = calcularPercentual(meta.realizadoVendas, meta.metaVendas);
-          const percentualFarmacias = calcularPercentual(meta.realizadoNovasFarmacias, meta.metaNovasFarmacias);
-          const percentualVisitas = calcularPercentual(meta.realizadoVisitas, meta.metaVisitas);
+      {/* Lista por vendedor */}
+      <div className="space-y-4">
+        {rows.map((r) => {
+          const pVendas = pct(r.realizado_vendas_sem_iva, r.meta_vendas_sem_iva);
+          const pNovas = pct(r.realizado_novas_farmacias, r.meta_novas_farmacias);
+          const pVisitas = pct(r.realizado_visitas, r.meta_visitas);
+
+          // atingimento geral do vendedor (média simples ignorando metas=0)
+          const w = [
+            r.meta_vendas_sem_iva > 0 ? 1 : 0,
+            r.meta_novas_farmacias > 0 ? 1 : 0,
+            r.meta_visitas > 0 ? 1 : 0,
+          ];
+          const sw = w.reduce((a, b) => a + b, 0) || 1;
+          const atingVendedor = (pVendas * w[0] + pNovas * w[1] + pVisitas * w[2]) / sw;
 
           return (
-            <div
-              key={meta.id}
-              className="bg-white rounded-xl shadow-lg p-4 sm:p-6 hover:shadow-xl transition-all duration-300"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between mb-6">
+            <div key={r.vendedor_id} className="bg-white rounded-2xl shadow-lg p-6">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-3 rounded-xl">
-                    <Users className="w-6 h-6 text-white" />
+                  <div className="h-12 w-12 rounded-2xl bg-blue-600 flex items-center justify-center text-white">
+                    <Users className="w-6 h-6" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-gray-900 text-lg">{meta.vendedorNome || 'N/A'}</h3>
-                    <p className="text-sm text-gray-500">
-                      {meta.mesAno || 'N/A'}
-                    </p>
+                    <div className="text-lg font-bold text-gray-900">{r.vendedor_nome}</div>
+                    <div className="text-sm text-gray-500">
+                      {mesAno} • Atingimento geral:{' '}
+                      <span className="font-semibold text-gray-900">{Math.round(atingVendedor)}%</span>
+                    </div>
                   </div>
                 </div>
+
                 <div className="text-right">
-                  <p className="text-sm text-gray-600">Atingimento Geral</p>
-                  <p
-                    className={`text-2xl font-bold ${
-                      percentualVendas >= 100
-                        ? 'text-green-600'
-                        : percentualVendas >= 80
-                        ? 'text-blue-600'
-                        : 'text-orange-600'
-                    }`}
-                  >
-                    {formatarNumero(percentualVendas)}%
-                  </p>
+                  <div className="text-sm text-gray-500">Vendas</div>
+                  <div className="text-base font-bold text-gray-900">
+                    {formatCurrencyEUR(r.realizado_vendas_sem_iva)}{' '}
+                    <span className="text-gray-400 font-semibold">
+                      / {formatCurrencyEUR(r.meta_vendas_sem_iva)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Vendas */}
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-gray-600" />
-                    <span className="text-sm font-medium text-gray-700">Vendas</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatarMoeda(meta.realizadoVendas)}€
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {' '}
-                      / {formatarMoeda(meta.metaVendas)}€
-                    </span>
-                  </div>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                  <div
-                    className={`h-3 rounded-full transition-all duration-500 ${
-                      percentualVendas >= 100
-                        ? 'bg-gradient-to-r from-green-500 to-emerald-600'
-                        : percentualVendas >= 80
-                        ? 'bg-gradient-to-r from-blue-500 to-indigo-600'
-                        : 'bg-gradient-to-r from-orange-500 to-red-600'
-                    }`}
-                    style={{ width: `${Math.min(percentualVendas, 100)}%` }}
-                  />
-                </div>
+              <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+                {/* Vendas */}
+                <Metric
+                  label="Vendas (sem IVA)"
+                  icon={<TrendingUp className="w-5 h-5" />}
+                  pctValue={pVendas}
+                  left={formatCurrencyEUR(r.realizado_vendas_sem_iva)}
+                  right={formatCurrencyEUR(r.meta_vendas_sem_iva)}
+                />
+
+                {/* Novas farmácias */}
+                <Metric
+                  label="Novas farmácias"
+                  icon={<Users className="w-5 h-5" />}
+                  pctValue={pNovas}
+                  left={formatInt(r.realizado_novas_farmacias)}
+                  right={formatInt(r.meta_novas_farmacias)}
+                />
+
+                {/* Visitas */}
+                <Metric
+                  label="Visitas"
+                  icon={<MapPin className="w-5 h-5" />}
+                  pctValue={pVisitas}
+                  left={formatInt(r.realizado_visitas)}
+                  right={formatInt(r.meta_visitas)}
+                />
               </div>
 
-              {/* Novas Farmácias */}
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Users className="w-4 h-4 text-gray-600" />
-                    <span className="text-sm font-medium text-gray-700">Novas Farmácias</span>
+              {/* barras */}
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+                    <span>Vendas</span>
+                    <span className="font-semibold text-gray-900">{Math.round(pVendas)}%</span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatarNumero(meta.realizadoNovasFarmacias)}
-                    </span>
-                    <span className="text-xs text-gray-500"> / {formatarNumero(meta.metaNovasFarmacias)}</span>
-                  </div>
+                  <ProgressBar value={pVendas} />
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                  <div
-                    className={`h-3 rounded-full transition-all duration-500 ${
-                      percentualFarmacias >= 100
-                        ? 'bg-gradient-to-r from-green-500 to-emerald-600'
-                        : percentualFarmacias >= 80
-                        ? 'bg-gradient-to-r from-blue-500 to-indigo-600'
-                        : 'bg-gradient-to-r from-orange-500 to-red-600'
-                    }`}
-                    style={{ width: `${Math.min(percentualFarmacias, 100)}%` }}
-                  />
-                </div>
-              </div>
 
-              {/* Visitas */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Target className="w-4 h-4 text-gray-600" />
-                    <span className="text-sm font-medium text-gray-700">Visitas</span>
+                <div>
+                  <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+                    <span>Novas farmácias</span>
+                    <span className="font-semibold text-gray-900">{Math.round(pNovas)}%</span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatarNumero(meta.realizadoVisitas)}
-                    </span>
-                    <span className="text-xs text-gray-500"> / {formatarNumero(meta.metaVisitas)}</span>
-                  </div>
+                  <ProgressBar value={pNovas} />
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                  <div
-                    className={`h-3 rounded-full transition-all duration-500 ${
-                      percentualVisitas >= 100
-                        ? 'bg-gradient-to-r from-green-500 to-emerald-600'
-                        : percentualVisitas >= 80
-                        ? 'bg-gradient-to-r from-blue-500 to-indigo-600'
-                        : 'bg-gradient-to-r from-orange-500 to-red-600'
-                    }`}
-                    style={{ width: `${Math.min(percentualVisitas, 100)}%` }}
-                  />
+
+                <div>
+                  <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+                    <span>Visitas</span>
+                    <span className="font-semibold text-gray-900">{Math.round(pVisitas)}%</span>
+                  </div>
+                  <ProgressBar value={pVisitas} />
                 </div>
               </div>
             </div>
           );
         })}
+
+        {rows.length === 0 && (
+          <div className="bg-white rounded-xl shadow-lg p-10 text-center text-gray-600">
+            Nenhum vendedor encontrado.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Card({
+  title,
+  value,
+  sub,
+  icon,
+}: {
+  title: string;
+  value: string;
+  sub?: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-xl shadow-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-gray-600">{title}</span>
+        <div className="text-gray-700">{icon}</div>
+      </div>
+      <div className="text-xl sm:text-2xl font-bold text-gray-900">{value}</div>
+      {sub && <div className="text-xs text-gray-500 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  icon,
+  pctValue,
+  left,
+  right,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  pctValue: number;
+  left: string;
+  right: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-100 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 text-gray-700">
+          <span className="inline-flex">{icon}</span>
+          <span className="text-sm font-semibold">{label}</span>
+        </div>
+        <span className="text-sm font-bold text-gray-900">{Math.round(pctValue)}%</span>
+      </div>
+
+      <div className="flex items-end justify-between">
+        <div className="text-base font-bold text-gray-900">{left}</div>
+        <div className="text-sm text-gray-400 font-semibold">/ {right}</div>
       </div>
     </div>
   );
