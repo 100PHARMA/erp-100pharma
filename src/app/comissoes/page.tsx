@@ -797,7 +797,7 @@ export default function ComissoesPage() {
                         r.faixa_atual
                       )}`}
                     >
-                      {faixaLabel(r.faixa_atual)}
+                      {faixaPercentLabel(r.faixa_atual, r, mesFechado, config)}
                     </span>
                   </td>
 
