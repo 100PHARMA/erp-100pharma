@@ -69,10 +69,14 @@ type RpcRankingRow = {
   faturas_pendentes: number;
 };
 
-type SnapshotRow = RpcRankingRow & {
-  comissao_calculada: number;
-  faixa: string;
-  percentual_meta: number;
+type RpcDetalheRow = {
+  fatura_id: string;
+  numero: string;
+  data_emissao: string;
+  tipo: string;
+  estado: string;
+  cliente_nome: string | null;
+  base_sem_iva: number;
 };
 
 // =====================================================
@@ -102,30 +106,37 @@ function safeNum(v: unknown, fallback = 0) {
 }
 
 function getFaixa(baseSemIva: number, config: ConfiguracaoFinanceira) {
-  if (baseSemIva <= config.faixa1_limite) return 'FAIXA_1';
-  if (baseSemIva <= config.faixa2_limite) return 'FAIXA_2';
-  return 'FAIXA_3';
+  if (baseSemIva <= config.faixa1_limite) return 'FAIXA_1' as const;
+  if (baseSemIva <= config.faixa2_limite) return 'FAIXA_2' as const;
+  return 'FAIXA_3' as const;
 }
 
 function calcularComissaoProgressivaLocal(total: number, config: ConfiguracaoFinanceira) {
-  const t = Math.max(0, safeNum(total));
-  const f1 = safeNum(config.faixa1_limite);
-  const f2 = safeNum(config.faixa2_limite);
+  const t = Math.max(0, safeNum(total, 0));
 
-  const p1 = safeNum(config.comissao_faixa1) / 100;
-  const p2 = safeNum(config.comissao_faixa2) / 100;
-  const p3 = safeNum(config.comissao_faixa3) / 100;
+  const f1 = Math.max(0, safeNum(config.faixa1_limite, 3000));
+  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000)); // garante f2 >= f1
 
-  const c1 = Math.min(t, f1) * p1;
-  const c2 = Math.min(Math.max(t - f1, 0), f2 - f1) * p2;
-  const c3 = Math.max(t - f2, 0) * p3;
+  const p1 = safeNum(config.comissao_faixa1, 5) / 100;
+  const p2 = safeNum(config.comissao_faixa2, 8) / 100;
+  const p3 = safeNum(config.comissao_faixa3, 10) / 100;
+
+  const base1 = Math.min(t, f1);
+  const base2 = Math.min(Math.max(0, t - f1), Math.max(0, f2 - f1));
+  const base3 = Math.max(0, t - f2);
+
+  const c1 = base1 * p1;
+  const c2 = base2 * p2;
+  const c3 = base3 * p3;
 
   return Number((c1 + c2 + c3).toFixed(2));
 }
 
 function calcularPercentualMetaLocal(total: number, config: ConfiguracaoFinanceira) {
-  if (config.meta_mensal <= 0) return 0;
-  return clamp((total / config.meta_mensal) * 100, 0, 200);
+  const meta = safeNum(config.meta_mensal, 0);
+  if (meta <= 0) return 0;
+  const pct = (safeNum(total, 0) / meta) * 100;
+  return clamp(Number(pct.toFixed(2)), 0, 200);
 }
 
 // =====================================================
@@ -149,33 +160,60 @@ export default function ComissoesPage() {
   const [sortKey, setSortKey] = useState<SortKey>('base_sem_iva');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const [mesFechado, setMesFechado] = useState(false);
-
+  // Modal detalhe
   const [detalheAberto, setDetalheAberto] = useState(false);
-  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
+  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(
+    null
+  );
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
-  const [detalheFaturas, setDetalheFaturas] = useState<any[]>([]);
+  const [detalheFaturas, setDetalheFaturas] = useState<
+    Array<{
+      id: string;
+      numero: string;
+      data_emissao: string;
+      estado: string;
+      tipo: string;
+      cliente_nome: string;
+      base_sem_iva: number;
+    }>
+  >([]);
 
-  const [anoSelecionado, mesSelecionado] = mesAno.split('-').map(Number);
-
-  // =====================================================
-  // SNAPSHOT
-  // =====================================================
-
-  async function buscarSnapshotMes() {
-    const { data, error } = await supabase
-      .from('comissoes_mensais')
-      .select('*')
-      .eq('ano', anoSelecionado)
-      .eq('mes', mesSelecionado);
-
-    if (error) throw error;
-    return (data ?? []) as SnapshotRow[];
+  function fecharDetalhe() {
+    setDetalheAberto(false);
+    setDetalheVendedor(null);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
   }
 
+  // ESC + trava scroll quando modal aberto
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') fecharDetalhe();
+    }
+
+    if (detalheAberto) {
+      document.addEventListener('keydown', onKeyDown);
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = '';
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detalheAberto]);
+
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    const [anoStr, mesStr] = mesAno.split('-');
+    return {
+      anoSelecionado: Number(anoStr),
+      mesSelecionado: Number(mesStr),
+    };
+  }, [mesAno]);
+
   // =====================================================
-  // CARREGAR
+  // CARREGAMENTO (RPC-ONLY)
   // =====================================================
 
   async function carregar() {
@@ -183,60 +221,59 @@ export default function ComissoesPage() {
     setErro(null);
 
     try {
+      // 1) Config (faixas + meta)
       const cfg = await buscarConfiguracaoFinanceira();
       setConfig(cfg);
 
-      const snapshot = await buscarSnapshotMes();
+      // 2) Ranking do mês via RPC
+      const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
 
-      let fonte: RpcRankingRow[] = [];
+      if (rpcError) throw rpcError;
 
-      if (snapshot.length > 0) {
-        setMesFechado(true);
-        fonte = snapshot;
-      } else {
-        setMesFechado(false);
-        const { data, error } = await supabase.rpc('relatorio_comissoes_mes', {
-          p_ano: anoSelecionado,
-          p_mes: mesSelecionado,
-        });
-        if (error) throw error;
-        fonte = data ?? [];
-      }
+      const ranking = (rpcData || []) as RpcRankingRow[];
 
-      const rowsOut = fonte.map((r: any) => {
-        const base = safeNum(r.base_sem_iva);
-        const faixa = getFaixa(base, cfg);
-        const comissao = mesFechado
-          ? safeNum(r.comissao_calculada)
-          : calcularComissaoProgressivaLocal(base, cfg);
+      const rowsOut: RowComissao[] = ranking.map((r) => {
+        const base = safeNum(r.base_sem_iva, 0);
+        const numFaturas = safeNum(r.num_faturas, 0);
+        const clientesUnicos = safeNum(r.clientes_unicos, 0);
+        const frascos = safeNum(r.frascos, 0);
 
-        const percentualMeta = mesFechado
-          ? safeNum(r.percentual_meta)
-          : calcularPercentualMetaLocal(base, cfg);
+        const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
+        const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
+
+        const faixaAtual = getFaixa(base, cfg);
+        const comissao = calcularComissaoProgressivaLocal(base, cfg);
+        const percentualMeta = calcularPercentualMetaLocal(base, cfg);
+
+        const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
+        const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
 
         return {
           vendedor_id: r.vendedor_id,
           vendedor_nome: r.vendedor_nome,
           base_sem_iva: base,
           comissao_calculada: comissao,
-          faixa_atual: faixa,
+          faixa_atual: faixaAtual,
           percentual_meta: percentualMeta,
-          falta_para_3000: clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite),
-          falta_para_7000: clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite),
-          num_faturas: safeNum(r.num_faturas),
-          clientes_unicos: safeNum(r.clientes_unicos),
-          frascos: safeNum(r.frascos),
-          ticket_medio: r.num_faturas > 0 ? base / r.num_faturas : 0,
-          preco_medio_frasco: r.frascos > 0 ? base / r.frascos : 0,
-          faturas_pagas: safeNum(r.faturas_pagas),
-          faturas_pendentes: safeNum(r.faturas_pendentes),
+          falta_para_3000: falta3000,
+          falta_para_7000: falta7000,
+          num_faturas: numFaturas,
+          clientes_unicos: clientesUnicos,
+          frascos,
+          ticket_medio: ticketMedio,
+          preco_medio_frasco: precoMedioFrasco,
+          faturas_pagas: safeNum(r.faturas_pagas, 0),
+          faturas_pendentes: safeNum(r.faturas_pendentes, 0),
         };
       });
 
       setRows(rowsOut);
     } catch (e: any) {
       console.error(e);
-      setErro(e.message);
+      setErro(e?.message || 'Erro ao carregar comissões');
     } finally {
       setLoading(false);
     }
@@ -244,28 +281,33 @@ export default function ComissoesPage() {
 
   useEffect(() => {
     carregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesAno]);
 
   // =====================================================
-  // FECHAR MÊS
+  // STATS
   // =====================================================
 
-  async function fecharMes() {
-    if (!confirm(`Deseja FECHAR o mês ${mesAno}? Esta ação é irreversível.`)) return;
+  const stats = useMemo(() => {
+    const totalBase = rows.reduce((acc, r) => acc + r.base_sem_iva, 0);
+    const totalComissao = rows.reduce((acc, r) => acc + r.comissao_calculada, 0);
+    const totalFrascos = rows.reduce((acc, r) => acc + r.frascos, 0);
+    const totalFaturas = rows.reduce((acc, r) => acc + r.num_faturas, 0);
+    const ticketMedioGeral = totalFaturas > 0 ? totalBase / totalFaturas : 0;
 
-    const { error } = await supabase.rpc('fechar_comissoes_mes', {
-      p_ano: anoSelecionado,
-      p_mes: mesSelecionado,
-    });
+    const totalPendentes = rows.reduce((acc, r) => acc + r.faturas_pendentes, 0);
+    const totalPagas = rows.reduce((acc, r) => acc + r.faturas_pagas, 0);
 
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    alert('Mês fechado com sucesso.');
-    carregar();
-  }
+    return {
+      totalBase,
+      totalComissao,
+      totalFrascos,
+      totalFaturas,
+      ticketMedioGeral,
+      totalPendentes,
+      totalPagas,
+    };
+  }, [rows]);
 
   // =====================================================
   // SORT
@@ -275,13 +317,67 @@ export default function ComissoesPage() {
     const copy = [...rows];
     copy.sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
+
       if (sortKey === 'vendedor_nome') {
         return a.vendedor_nome.localeCompare(b.vendedor_nome) * dir;
       }
-      return ((a as any)[sortKey] - (b as any)[sortKey]) * dir;
+
+      const av = (a as any)[sortKey] as number;
+      const bv = (b as any)[sortKey] as number;
+      return (av - bv) * dir;
     });
     return copy;
   }, [rows, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  }
+
+  // =====================================================
+  // DETALHE VENDEDOR (RPC-ONLY)
+  // =====================================================
+
+  async function abrirDetalhe(vendedorId: string, vendedorNome: string) {
+    setDetalheAberto(true);
+    setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
+    setDetalheLoading(true);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
+
+    try {
+      const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
+        p_vendedor_id: vendedorId,
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
+
+      if (error) throw error;
+
+      const detalhe = (data || []) as RpcDetalheRow[];
+
+      setDetalheFaturas(
+        detalhe.map((r) => ({
+          id: r.fatura_id,
+          numero: r.numero,
+          data_emissao: r.data_emissao,
+          estado: r.estado,
+          tipo: r.tipo || 'FATURA',
+          cliente_nome: r.cliente_nome || '—',
+          base_sem_iva: safeNum(r.base_sem_iva, 0),
+        }))
+      );
+    } catch (e: any) {
+      console.error(e);
+      setDetalheErro(e?.message || 'Erro ao carregar detalhe');
+    } finally {
+      setDetalheLoading(false);
+    }
+  }
 
   // =====================================================
   // RENDER
@@ -289,47 +385,494 @@ export default function ComissoesPage() {
 
   if (loading) {
     return (
-      <div className="p-8 flex items-center gap-3">
-        <RefreshCw className="animate-spin" /> Carregando…
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center gap-3">
+            <RefreshCw className="w-5 h-5 animate-spin" />
+            <p className="text-gray-700 font-medium">Carregando comissões e performance...</p>
+          </div>
+        </div>
       </div>
     );
   }
 
   if (erro) {
-    return <div className="p-8 text-red-600">{erro}</div>;
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <p className="text-red-600 font-semibold mb-2">Erro ao carregar</p>
+          <p className="text-gray-700 mb-4">{erro}</p>
+          <button
+            type="button"
+            onClick={carregar}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
   }
 
+  const faixaBadge = (faixa: RowComissao['faixa_atual']) => {
+    if (faixa === 'FAIXA_1') return 'bg-blue-100 text-blue-800';
+    if (faixa === 'FAIXA_2') return 'bg-yellow-100 text-yellow-800';
+    return 'bg-green-100 text-green-800';
+  };
+
+  const faixaLabel = (faixa: RowComissao['faixa_atual']) => {
+    if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
+    if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
+    if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
+    return `${safeNum(config.comissao_faixa3, 10)}%`;
+  };
+
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">Comissões</h1>
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      {/* Header */}
+      <div className="mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
+              Comissões e Performance
+            </h1>
+            <p className="text-gray-600 text-sm sm:text-base">
+              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA),
+              com faixas progressivas.
+            </p>
+          </div>
 
-        <div className="flex gap-3">
-          <input
-            type="month"
-            value={mesAno}
-            onChange={(e) => setMesAno(e.target.value)}
-            className="border rounded px-3 py-2"
-          />
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2 bg-white rounded-xl shadow-lg px-4 py-3">
+              <CalendarIcon />
+              <input
+                type="month"
+                value={mesAno}
+                onChange={(e) => setMesAno(e.target.value)}
+                className="px-2 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
 
-          {!mesFechado && (
             <button
-              onClick={fecharMes}
-              className="bg-red-600 text-white px-4 py-2 rounded font-semibold"
+              type="button"
+              onClick={carregar}
+              className="bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
             >
-              Fechar mês
+              <RefreshCw className="w-5 h-5" />
+              Atualizar
             </button>
-          )}
+          </div>
         </div>
       </div>
 
-      <pre className="text-xs bg-gray-100 p-3 rounded">
-        {mesFechado ? 'MÊS FECHADO (snapshot)' : 'MÊS ABERTO (dinâmico)'}
-      </pre>
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
+        <StatCard
+          title="Base (sem IVA)"
+          value={formatCurrencyEUR(stats.totalBase)}
+          icon={<TrendingUp className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Comissão"
+          value={formatCurrencyEUR(stats.totalComissao)}
+          icon={<DollarSign className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Frascos"
+          value={formatInt(stats.totalFrascos)}
+          icon={<Package className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Faturas"
+          value={formatInt(stats.totalFaturas)}
+          icon={<Receipt className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Ticket médio"
+          value={formatCurrencyEUR(stats.ticketMedioGeral)}
+          icon={<Users className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Pagas / Pendentes"
+          value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`}
+          icon={<Target className="w-5 h-5" />}
+        />
+      </div>
 
-      {/* TABELA (igual à sua, mantida) */}
-      {/* … o resto da tabela permanece exatamente como estava … */}
+      {/* Tabela */}
+      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <Th
+                  onClick={() => toggleSort('vendedor_nome')}
+                  active={sortKey === 'vendedor_nome'}
+                  dir={sortDir}
+                >
+                  Vendedor
+                </Th>
+                <ThRight
+                  onClick={() => toggleSort('base_sem_iva')}
+                  active={sortKey === 'base_sem_iva'}
+                  dir={sortDir}
+                >
+                  Base (sem IVA)
+                </ThRight>
+                <ThRight
+                  onClick={() => toggleSort('comissao_calculada')}
+                  active={sortKey === 'comissao_calculada'}
+                  dir={sortDir}
+                >
+                  Comissão
+                </ThRight>
+                <ThCenter>Faixa</ThCenter>
+                <ThRight
+                  onClick={() => toggleSort('num_faturas')}
+                  active={sortKey === 'num_faturas'}
+                  dir={sortDir}
+                >
+                  Nº faturas
+                </ThRight>
+                <ThRight
+                  onClick={() => toggleSort('clientes_unicos')}
+                  active={sortKey === 'clientes_unicos'}
+                  dir={sortDir}
+                >
+                  Clientes únicos
+                </ThRight>
+                <ThRight onClick={() => toggleSort('frascos')} active={sortKey === 'frascos'} dir={sortDir}>
+                  Frascos
+                </ThRight>
+                <ThRight
+                  onClick={() => toggleSort('ticket_medio')}
+                  active={sortKey === 'ticket_medio'}
+                  dir={sortDir}
+                >
+                  Ticket médio
+                </ThRight>
+                <ThRight
+                  onClick={() => toggleSort('preco_medio_frasco')}
+                  active={sortKey === 'preco_medio_frasco'}
+                  dir={sortDir}
+                >
+                  €/frasco (médio)
+                </ThRight>
+                <ThRight>Meta</ThRight>
+                <ThCenter>Ações</ThCenter>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-gray-100">
+              {sortedRows.map((r) => (
+                <tr key={r.vendedor_id} className="hover:bg-gray-50 transition-colors">
+                  <td className="py-4 px-4 sm:px-6">
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-gray-900">{r.vendedor_nome}</span>
+                      <span className="text-xs text-gray-500">
+                        Pagas: {r.faturas_pagas} • Pendentes: {r.faturas_pendentes}
+                      </span>
+                      {config && (
+                        <span className="text-xs text-gray-500">
+                          Falta p/ {formatInt(config.faixa1_limite)}: {formatCurrencyEUR(r.falta_para_3000)} • Falta
+                          p/ {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.base_sem_iva)}
+                    </span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.comissao_calculada)}
+                    </span>
+                  </td>
+
+                  <td className="py-4 px-4 text-center">
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(
+                        r.faixa_atual
+                      )}`}
+                    >
+                      {faixaLabel(r.faixa_atual)}
+                    </span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm text-gray-900">{formatInt(r.num_faturas)}</span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm text-gray-900">{formatInt(r.clientes_unicos)}</span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm text-gray-900">{formatInt(r.frascos)}</span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.ticket_medio)}</span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.preco_medio_frasco)}
+                    </span>
+                  </td>
+
+                  <td className="py-4 px-4 text-right">
+                    <div className="flex flex-col items-end">
+                      <span className="text-sm font-semibold text-gray-900">
+                        {Math.round(r.percentual_meta)}%
+                      </span>
+                      {config && (
+                        <span className="text-xs text-gray-500">
+                          Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="py-4 px-4 text-center">
+                    <button
+                      type="button"
+                      onClick={() => abrirDetalhe(r.vendedor_id, r.vendedor_nome)}
+                      className="inline-flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Ver
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {sortedRows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="py-10 text-center text-gray-600">
+                    Nenhum dado encontrado para o período selecionado.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal detalhe */}
+      {detalheAberto && detalheVendedor && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) fecharDetalhe();
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
+                <p className="text-sm text-white/80">
+                  {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharDetalhe}
+                className="p-2 rounded-lg hover:bg-white/10"
+                aria-label="Fechar"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto">
+              {detalheLoading && (
+                <div className="flex items-center gap-3 text-gray-700">
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  Carregando detalhe...
+                </div>
+              )}
+
+              {detalheErro && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
+                  {detalheErro}
+                </div>
+              )}
+
+              {!detalheLoading && !detalheErro && (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                      <tr>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Fatura
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Cliente
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Data
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Tipo
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Estado
+                        </th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">
+                          Base (sem IVA)
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {detalheFaturas.map((f) => (
+                        <tr key={f.id} className="hover:bg-gray-50">
+                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">
+                            {f.numero}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
+                          <td className="py-3 px-4 text-sm text-gray-800">
+                            {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
+                          </td>
+                          <td className="py-3 px-4 text-center text-xs font-semibold">
+                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
+                              {f.tipo || 'FATURA'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center text-xs font-semibold">
+                            <span
+                              className={`px-2 py-1 rounded-full ${
+                                f.estado === 'PAGA'
+                                  ? 'bg-green-100 text-green-800'
+                                  : f.estado === 'PENDENTE'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-gray-100 text-gray-800'
+                              }`}
+                            >
+                              {f.estado}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
+                            {formatCurrencyEUR(f.base_sem_iva)}
+                          </td>
+                        </tr>
+                      ))}
+
+                      {detalheFaturas.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-10 text-center text-gray-600">
+                            Sem faturas neste período para este vendedor.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="mt-4 text-xs text-gray-500">
+                Dica: fecha com <strong>ESC</strong> ou clicando fora do modal.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+// =====================================================
+// COMPONENTES AUXILIARES
+// =====================================================
+
+function CalendarIcon() {
+  return (
+    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">
+      📅
+    </span>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string;
+  value: string;
+  icon: ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-xl shadow-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-gray-600">{title}</span>
+        <div className="text-gray-700">{icon}</div>
+      </div>
+      <div className="text-xl sm:text-2xl font-bold text-gray-900">{value}</div>
+    </div>
+  );
+}
+
+function Th({
+  children,
+  onClick,
+  active,
+  dir,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  active?: boolean;
+  dir?: 'asc' | 'desc';
+}) {
+  return (
+    <th
+      className={`text-left py-4 px-4 sm:px-6 text-sm font-semibold text-gray-700 ${
+        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
+      }`}
+      onClick={onClick}
+      title={onClick ? 'Ordenar' : undefined}
+    >
+      <div className="flex items-center gap-2">
+        {children}
+        {active && <span className="text-xs text-gray-500">{dir === 'asc' ? '▲' : '▼'}</span>}
+      </div>
+    </th>
+  );
+}
+
+function ThRight({
+  children,
+  onClick,
+  active,
+  dir,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  active?: boolean;
+  dir?: 'asc' | 'desc';
+}) {
+  return (
+    <th
+      className={`text-right py-4 px-4 text-sm font-semibold text-gray-700 ${
+        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
+      }`}
+      onClick={onClick}
+      title={onClick ? 'Ordenar' : undefined}
+    >
+      <div className="flex items-center justify-end gap-2">
+        {children}
+        {active && <span className="text-xs text-gray-500">{dir === 'asc' ? '▲' : '▼'}</span>}
+      </div>
+    </th>
+  );
+}
+
+function ThCenter({ children }: { children: ReactNode }) {
+  return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
+}
