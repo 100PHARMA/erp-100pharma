@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Settings,
   Building2,
@@ -11,7 +11,6 @@ import {
   Save,
   AlertCircle,
   Target,
-  Users,
   RefreshCw,
 } from 'lucide-react';
 
@@ -32,31 +31,16 @@ import {
   listarVendedores,
   listarMetasMensaisDoMes,
   upsertMetaMensal,
-  type VendedorMetaMensalRow,
   type VendedorRow,
+  type VendedorMetaMensalRow,
 } from '@/lib/vendedor-metas-mensais';
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
-function monthInputValueFrom(ano: number, mes: number) {
-  return `${ano}-${pad2(mes)}`;
-}
-
-function parseMonthInput(value: string): { ano: number; mes: number } | null {
-  // value esperado: YYYY-MM
-  if (!value || value.length < 7) return null;
-  const [y, m] = value.split('-');
-  const ano = Number(y);
-  const mes = Number(m);
-  if (!ano || !mes || mes < 1 || mes > 12) return null;
-  return { ano, mes };
-}
-
-function clampPercent(n: number) {
-  if (Number.isNaN(n)) return 0;
-  return Math.max(0, Math.min(100, n));
+function toMonthInputValue(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 }
 
 export default function ConfiguracoesPage() {
@@ -70,9 +54,9 @@ export default function ConfiguracoesPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState(false);
 
-  // ----------------------------
-  // FORM: Configurações Financeiras (globais)
-  // ----------------------------
+  // =========================
+  // FORM CONFIG (GLOBAL)
+  // =========================
   const [formConfig, setFormConfig] = useState({
     // Meta e Faixas
     meta_mensal: 0,
@@ -97,23 +81,6 @@ export default function ConfiguracoesPage() {
     limite_farmacias_vendedor: 0,
   });
 
-  // ----------------------------
-  // UI: Metas mensais por vendedor (vendedor_metas_mensais)
-  // ----------------------------
-  const now = useMemo(() => new Date(), []);
-  const [metasMesAno, setMetasMesAno] = useState(() => {
-    const ano = now.getFullYear();
-    const mes = now.getMonth() + 1;
-    return { ano, mes };
-  });
-
-  const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
-  const [metasByVendedor, setMetasByVendedor] = useState<Record<string, VendedorMetaMensalRow>>({});
-  const [carregandoMetas, setCarregandoMetas] = useState(false);
-  const [salvandoMetas, setSalvandoMetas] = useState(false);
-  const [erroMetas, setErroMetas] = useState<string | null>(null);
-  const [sucessoMetas, setSucessoMetas] = useState(false);
-
   const tabs = [
     { id: 'empresa' as const, label: 'Empresa', icon: Building2 },
     { id: 'fiscal' as const, label: 'Fiscal', icon: FileText },
@@ -122,7 +89,28 @@ export default function ConfiguracoesPage() {
     { id: 'config-financeira' as const, label: 'Configurações Financeiras', icon: Settings },
   ];
 
-  // Carregar configuração financeira ao montar o componente ou trocar para abas relevantes
+  // =========================
+  // METAS MENSAIS POR VENDEDOR
+  // (somente meta_mensal)
+  // =========================
+  const [mesMetas, setMesMetas] = useState<Date>(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    return { anoSelecionado: mesMetas.getFullYear(), mesSelecionado: mesMetas.getMonth() + 1 };
+  }, [mesMetas]);
+
+  const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
+  const [metasDoMes, setMetasDoMes] = useState<VendedorMetaMensalRow[]>([]);
+  const [draftMetas, setDraftMetas] = useState<Record<string, number | null>>({});
+  const [carregandoMetas, setCarregandoMetas] = useState(false);
+  const [salvandoMetas, setSalvandoMetas] = useState(false);
+  const [sucessoMetas, setSucessoMetas] = useState(false);
+  const [erroMetas, setErroMetas] = useState<string | null>(null);
+
+  // Carregar config quando entrar nas abas que dependem dela
   useEffect(() => {
     if (activeTab === 'config-financeira' || activeTab === 'financeiro' || activeTab === 'comissoes') {
       carregarConfiguracao();
@@ -130,13 +118,13 @@ export default function ConfiguracoesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Sempre que entrar na aba de config financeira: carregar vendedores + metas do mês selecionado
+  // Carregar metas mensais por vendedor quando entrar na aba config-financeira
   useEffect(() => {
     if (activeTab === 'config-financeira') {
-      carregarVendedoresEMetas();
+      carregarMetasMensais();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, metasMesAno.ano, metasMesAno.mes]);
+  }, [activeTab, anoSelecionado, mesSelecionado]);
 
   const carregarConfiguracao = async () => {
     try {
@@ -166,7 +154,7 @@ export default function ConfiguracoesPage() {
       });
     } catch (error: any) {
       console.error('Erro ao carregar configuração:', error);
-      setErro('Erro ao carregar configurações: ' + error.message);
+      setErro('Erro ao carregar configurações: ' + (error?.message ?? ''));
     } finally {
       setCarregando(false);
     }
@@ -178,10 +166,10 @@ export default function ConfiguracoesPage() {
       setErro(null);
       setSucesso(false);
 
-      // Validações básicas
       if (formConfig.meta_mensal < 0) throw new Error('Meta mensal não pode ser negativa');
-      if (formConfig.faixa1_limite < 0 || formConfig.faixa2_limite < 0)
+      if (formConfig.faixa1_limite < 0 || formConfig.faixa2_limite < 0) {
         throw new Error('Limites de faixas não podem ser negativos');
+      }
       if (
         formConfig.faixa2_limite > 0 &&
         formConfig.faixa1_limite > 0 &&
@@ -190,159 +178,91 @@ export default function ConfiguracoesPage() {
         throw new Error('Limite da Faixa 2 deve ser maior que o limite da Faixa 1');
       }
 
-      // INSERT (histórico)
       await criarConfiguracaoFinanceira(formConfig);
 
       setSucesso(true);
       setTimeout(() => setSucesso(false), 3000);
 
       await carregarConfiguracao();
-
-      // Importante: se você quiser que os defaults na UI de metas por vendedor
-      // reflitam imediatamente, basta forçar um refresh da tabela:
-      if (activeTab === 'config-financeira') {
-        await carregarVendedoresEMetas();
-      }
     } catch (error: any) {
       console.error('Erro ao salvar configuração:', error);
-      setErro(error.message || 'Erro ao salvar configurações');
+      setErro(error?.message || 'Erro ao salvar configurações');
     } finally {
       setSalvando(false);
     }
   };
 
-  const carregarVendedoresEMetas = async () => {
+  const carregarMetasMensais = async () => {
     try {
       setCarregandoMetas(true);
       setErroMetas(null);
+      setSucessoMetas(false);
 
-      // 1) vendedores
-      const vs = await listarVendedores();
-      setVendedores(vs);
+      const [vends, metas] = await Promise.all([
+        listarVendedores(),
+        listarMetasMensaisDoMes(anoSelecionado, mesSelecionado),
+      ]);
 
-      // 2) metas do mês
-      const metas = await listarMetasMensaisDoMes(metasMesAno.ano, metasMesAno.mes);
+      setVendedores(vends);
+      setMetasDoMes(metas);
 
-      const map: Record<string, VendedorMetaMensalRow> = {};
-      for (const m of metas) {
-        map[m.vendedor_id] = m;
+      // popular draft apenas com meta_mensal
+      const map: Record<string, number | null> = {};
+      for (const v of vends) {
+        const row = metas.find((m) => m.vendedor_id === v.id);
+        map[v.id] = row?.meta_mensal ?? null; // null => fallback global
       }
-
-      setMetasByVendedor(map);
+      setDraftMetas(map);
     } catch (e: any) {
-      console.error('Erro ao carregar vendedores/metas:', e);
-      setErroMetas(e?.message ?? 'Erro ao carregar metas mensais');
+      console.error('Erro ao carregar metas mensais:', e);
+      setErroMetas(e?.message || 'Erro ao carregar metas mensais');
     } finally {
       setCarregandoMetas(false);
     }
   };
 
-  const getRowForVendedor = (vendedorId: string): VendedorMetaMensalRow => {
-    const existing = metasByVendedor[vendedorId];
-    if (existing) return existing;
-
-    // Sem meta cadastrada: usar defaults globais (A)
-    return {
-      vendedor_id: vendedorId,
-      ano: metasMesAno.ano,
-      mes: metasMesAno.mes,
-      meta_mensal: formConfig.meta_mensal ?? 0,
-
-      faixa1_limite: formConfig.faixa1_limite ?? 0,
-      faixa1_percent: formConfig.comissao_faixa1 ?? 0,
-
-      faixa2_limite: formConfig.faixa2_limite ?? 0,
-      faixa2_percent: formConfig.comissao_faixa2 ?? 0,
-
-      // faixa3_limite pode ficar null (sem limite), mas guardamos mesmo assim se quiser
-      faixa3_limite: null,
-      faixa3_percent: formConfig.comissao_faixa3 ?? 0,
-    };
-  };
-
-  const updateMetaRow = (vendedorId: string, patch: Partial<VendedorMetaMensalRow>) => {
-    setMetasByVendedor((prev) => {
-      const base = getRowForVendedor(vendedorId);
-      const next: VendedorMetaMensalRow = {
-        ...base,
-        ...patch,
-        vendedor_id: vendedorId,
-        ano: metasMesAno.ano,
-        mes: metasMesAno.mes,
-      };
-      return { ...prev, [vendedorId]: next };
-    });
-  };
-
-  const validarLinhaMeta = (row: VendedorMetaMensalRow) => {
-    const meta = Number(row.meta_mensal ?? 0);
-    const f1 = Number(row.faixa1_limite ?? 0);
-    const f2 = Number(row.faixa2_limite ?? 0);
-    const p1 = Number(row.faixa1_percent ?? 0);
-    const p2 = Number(row.faixa2_percent ?? 0);
-    const p3 = Number(row.faixa3_percent ?? 0);
-
-    if (meta < 0) return 'Meta mensal não pode ser negativa';
-    if (f1 < 0 || f2 < 0) return 'Limites não podem ser negativos';
-    if (f1 > 0 && f2 > 0 && f2 <= f1) return 'Faixa 2 deve ser maior que Faixa 1';
-    if (p1 < 0 || p2 < 0 || p3 < 0) return 'Percentuais não podem ser negativos';
-    if (p1 > 100 || p2 > 100 || p3 > 100) return 'Percentuais não podem passar de 100%';
-    return null;
-  };
-
-  const salvarMetasDoMes = async () => {
+  const salvarMetasMensais = async () => {
     try {
       setSalvandoMetas(true);
       setErroMetas(null);
       setSucessoMetas(false);
 
-      if (vendedores.length === 0) throw new Error('Nenhum vendedor encontrado.');
+      // regra: salvar um registro por vendedor (upsert),
+      // mas somente meta_mensal é relevante para o teu modelo.
+      // Faixas ficam NULL (usa o global).
+      for (const v of vendedores) {
+        const meta = draftMetas[v.id] ?? null;
 
-      // montar payload de TODOS os vendedores (mesmo sem meta cadastrada)
-      const payloads: VendedorMetaMensalRow[] = vendedores.map((v) => {
-        const r = getRowForVendedor(v.id);
-
-        // normalizar números
-        const normalized: VendedorMetaMensalRow = {
-          ...r,
+        const payload: VendedorMetaMensalRow = {
           vendedor_id: v.id,
-          ano: metasMesAno.ano,
-          mes: metasMesAno.mes,
-          meta_mensal: Number(r.meta_mensal ?? 0),
+          ano: anoSelecionado,
+          mes: mesSelecionado,
+          meta_mensal: meta,
 
-          faixa1_limite: Number(r.faixa1_limite ?? 0),
-          faixa1_percent: clampPercent(Number(r.faixa1_percent ?? 0)),
-
-          faixa2_limite: Number(r.faixa2_limite ?? 0),
-          faixa2_percent: clampPercent(Number(r.faixa2_percent ?? 0)),
-
-          faixa3_limite: r.faixa3_limite === null ? null : Number(r.faixa3_limite ?? 0),
-          faixa3_percent: clampPercent(Number(r.faixa3_percent ?? 0)),
+          faixa1_limite: null,
+          faixa1_percent: null,
+          faixa2_limite: null,
+          faixa2_percent: null,
+          faixa3_limite: null,
+          faixa3_percent: null,
         };
 
-        const err = validarLinhaMeta(normalized);
-        if (err) {
-          throw new Error(`Vendedor "${v.nome}": ${err}`);
-        }
-
-        return normalized;
-      });
-
-      // Upsert por vendedor (simples e seguro)
-      await Promise.all(payloads.map((p) => upsertMetaMensal(p)));
+        await upsertMetaMensal(payload);
+      }
 
       setSucessoMetas(true);
       setTimeout(() => setSucessoMetas(false), 3000);
 
-      // Recarregar para refletir ids e dados do banco
-      await carregarVendedoresEMetas();
+      await carregarMetasMensais();
     } catch (e: any) {
-      console.error('Erro ao salvar metas:', e);
-      setErroMetas(e?.message ?? 'Erro ao salvar metas mensais');
+      console.error('Erro ao salvar metas mensais:', e);
+      setErroMetas(e?.message || 'Erro ao salvar metas mensais');
     } finally {
       setSalvandoMetas(false);
     }
   };
+
+  const metaGlobal = formConfig.meta_mensal || 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -476,7 +396,6 @@ export default function ConfiguracoesPage() {
           <div>
             <h2 className="text-xl font-bold text-gray-900 mb-6">Configurações Fiscais</h2>
 
-            {/* Tabela IVA */}
             <div className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Taxas de IVA</h3>
               <div className="overflow-x-auto">
@@ -511,7 +430,6 @@ export default function ConfiguracoesPage() {
               </div>
             </div>
 
-            {/* Séries de Fatura */}
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Séries de Fatura</h3>
               <div className="space-y-4">
@@ -552,29 +470,29 @@ export default function ConfiguracoesPage() {
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Custo de Aquisição Padrão (€)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Custo de Aquisição Padrão (€)
+                    </label>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={formConfig.custo_aquisicao_padrao}
-                      onChange={(e) =>
-                        setFormConfig({ ...formConfig, custo_aquisicao_padrao: Number(e.target.value) })
-                      }
+                      onChange={(e) => setFormConfig({ ...formConfig, custo_aquisicao_padrao: Number(e.target.value) })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Custo Variável Padrão (€)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Custo Variável Padrão (€)
+                    </label>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={formConfig.custo_variavel_padrao}
-                      onChange={(e) =>
-                        setFormConfig({ ...formConfig, custo_variavel_padrao: Number(e.target.value) })
-                      }
+                      onChange={(e) => setFormConfig({ ...formConfig, custo_variavel_padrao: Number(e.target.value) })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -598,23 +516,21 @@ export default function ConfiguracoesPage() {
                       step="0.01"
                       min="0"
                       value={formConfig.custo_fixo_mensal}
-                      onChange={(e) =>
-                        setFormConfig({ ...formConfig, custo_fixo_mensal: Number(e.target.value) })
-                      }
+                      onChange={(e) => setFormConfig({ ...formConfig, custo_fixo_mensal: Number(e.target.value) })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Capital de Giro Ideal (€)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Capital de Giro Ideal (€)
+                    </label>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={formConfig.capital_giro_ideal}
-                      onChange={(e) =>
-                        setFormConfig({ ...formConfig, capital_giro_ideal: Number(e.target.value) })
-                      }
+                      onChange={(e) => setFormConfig({ ...formConfig, capital_giro_ideal: Number(e.target.value) })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -660,29 +576,29 @@ export default function ConfiguracoesPage() {
                   <h2 className="text-xl font-bold text-gray-900 mb-6">Comissões Avançadas</h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Comissão Farmácia Nova (€)</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Comissão Farmácia Nova (€)
+                      </label>
                       <input
                         type="number"
                         step="0.01"
                         min="0"
                         value={formConfig.comissao_farmacia_nova}
-                        onChange={(e) =>
-                          setFormConfig({ ...formConfig, comissao_farmacia_nova: Number(e.target.value) })
-                        }
+                        onChange={(e) => setFormConfig({ ...formConfig, comissao_farmacia_nova: Number(e.target.value) })}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Comissão Farmácia Ativa (€)</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Comissão Farmácia Ativa (€)
+                      </label>
                       <input
                         type="number"
                         step="0.01"
                         min="0"
                         value={formConfig.comissao_farmacia_ativa}
-                        onChange={(e) =>
-                          setFormConfig({ ...formConfig, comissao_farmacia_ativa: Number(e.target.value) })
-                        }
+                        onChange={(e) => setFormConfig({ ...formConfig, comissao_farmacia_ativa: Number(e.target.value) })}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
@@ -697,26 +613,22 @@ export default function ConfiguracoesPage() {
                         min="0"
                         value={formConfig.teto_mensal_farmacia_ativa}
                         onChange={(e) =>
-                          setFormConfig({
-                            ...formConfig,
-                            teto_mensal_farmacia_ativa: Number(e.target.value),
-                          })
+                          setFormConfig({ ...formConfig, teto_mensal_farmacia_ativa: Number(e.target.value) })
                         }
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Limite Farmácias por Vendedor</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Limite Farmácias por Vendedor
+                      </label>
                       <input
                         type="number"
                         min="0"
                         value={formConfig.limite_farmacias_vendedor}
                         onChange={(e) =>
-                          setFormConfig({
-                            ...formConfig,
-                            limite_farmacias_vendedor: Number(e.target.value),
-                          })
+                          setFormConfig({ ...formConfig, limite_farmacias_vendedor: Number(e.target.value) })
                         }
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
@@ -788,11 +700,11 @@ export default function ConfiguracoesPage() {
             <div className="mb-6">
               <h2 className="text-xl font-bold text-gray-900 mb-2">Configurações Financeiras</h2>
               <p className="text-sm text-gray-600">
-                Configure os parâmetros globais e as metas mensais por vendedor. Comissões, metas e incentivos usarão estes valores.
+                Configure parâmetros globais do sistema. Metas por vendedor (mensais) sobrescrevem apenas a meta global.
               </p>
             </div>
 
-            {/* Feedback (globais) */}
+            {/* Feedback GLOBAL */}
             {erro && (
               <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -824,9 +736,9 @@ export default function ConfiguracoesPage() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Meta global */}
+                {/* Meta Mensal Global */}
                 <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-blue-900 mb-4">Meta Mensal Global (padrão)</h3>
+                  <h3 className="text-lg font-bold text-blue-900 mb-4">Meta Mensal Global (fallback)</h3>
                   <div>
                     <label className="block text-sm font-medium text-blue-800 mb-2">Meta Mensal (€)</label>
                     <input
@@ -838,14 +750,14 @@ export default function ConfiguracoesPage() {
                       className="w-full px-4 py-3 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg font-semibold"
                     />
                     <p className="text-xs text-blue-700 mt-2">
-                      Meta padrão (fallback). Se um vendedor não tiver meta cadastrada no mês, a página “Metas” pode usar este valor.
+                      Usada quando o vendedor não tem meta mensal cadastrada no mês.
                     </p>
                   </div>
                 </div>
 
-                {/* Faixas globais */}
+                {/* Faixas de Comissão (GLOBAL) */}
                 <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-green-900 mb-4">Faixas de Comissão Progressiva (globais)</h3>
+                  <h3 className="text-lg font-bold text-green-900 mb-4">Faixas de Comissão Progressiva (global)</h3>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-white rounded-lg p-4 border-2 border-green-200">
                       <p className="text-sm font-bold text-green-800 mb-3">Faixa 1</p>
@@ -869,9 +781,7 @@ export default function ConfiguracoesPage() {
                             min="0"
                             max="100"
                             value={formConfig.comissao_faixa1}
-                            onChange={(e) =>
-                              setFormConfig({ ...formConfig, comissao_faixa1: Number(e.target.value) })
-                            }
+                            onChange={(e) => setFormConfig({ ...formConfig, comissao_faixa1: Number(e.target.value) })}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                           />
                         </div>
@@ -901,9 +811,7 @@ export default function ConfiguracoesPage() {
                             min="0"
                             max="100"
                             value={formConfig.comissao_faixa2}
-                            onChange={(e) =>
-                              setFormConfig({ ...formConfig, comissao_faixa2: Number(e.target.value) })
-                            }
+                            onChange={(e) => setFormConfig({ ...formConfig, comissao_faixa2: Number(e.target.value) })}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                           />
                         </div>
@@ -933,9 +841,7 @@ export default function ConfiguracoesPage() {
                             min="0"
                             max="100"
                             value={formConfig.comissao_faixa3}
-                            onChange={(e) =>
-                              setFormConfig({ ...formConfig, comissao_faixa3: Number(e.target.value) })
-                            }
+                            onChange={(e) => setFormConfig({ ...formConfig, comissao_faixa3: Number(e.target.value) })}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
@@ -945,7 +851,7 @@ export default function ConfiguracoesPage() {
                   </div>
                 </div>
 
-                {/* Incentivos */}
+                {/* Incentivos e Fundos */}
                 <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl p-6">
                   <h3 className="text-lg font-bold text-orange-900 mb-4">Incentivos e Fundos</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -958,9 +864,7 @@ export default function ConfiguracoesPage() {
                         step="0.01"
                         min="0"
                         value={formConfig.incentivo_podologista}
-                        onChange={(e) =>
-                          setFormConfig({ ...formConfig, incentivo_podologista: Number(e.target.value) })
-                        }
+                        onChange={(e) => setFormConfig({ ...formConfig, incentivo_podologista: Number(e.target.value) })}
                         className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-lg font-semibold"
                       />
                       <p className="text-xs text-orange-700 mt-2">Valor pago ao podologista por cada frasco vendido</p>
@@ -975,18 +879,18 @@ export default function ConfiguracoesPage() {
                         step="0.01"
                         min="0"
                         value={formConfig.fundo_farmaceutico}
-                        onChange={(e) =>
-                          setFormConfig({ ...formConfig, fundo_farmaceutico: Number(e.target.value) })
-                        }
+                        onChange={(e) => setFormConfig({ ...formConfig, fundo_farmaceutico: Number(e.target.value) })}
                         className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-lg font-semibold"
                       />
-                      <p className="text-xs text-orange-700 mt-2">Valor destinado ao fundo farmacêutico (Farmácia Campeã)</p>
+                      <p className="text-xs text-orange-700 mt-2">
+                        Valor destinado ao fundo farmacêutico (Campanha Farmácia Campeã)
+                      </p>
                     </div>
                   </div>
                 </div>
 
-                {/* BOTÃO salvar config global */}
-                <div className="flex gap-3 pt-4">
+                {/* BOTÃO SALVAR CONFIG GLOBAL */}
+                <div className="flex gap-3 pt-2">
                   <button
                     onClick={salvarConfiguracao}
                     disabled={salvando}
@@ -1000,233 +904,169 @@ export default function ConfiguracoesPage() {
                     ) : (
                       <>
                         <Save className="w-5 h-5" />
-                        <span>Guardar Configurações</span>
+                        <span>Guardar Configurações Globais</span>
                       </>
                     )}
                   </button>
                 </div>
 
-                {/* =======================
-                    METAS MENSAIS POR VENDEDOR (REAL)
-                   ======================= */}
-                <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                  <div className="p-6 bg-white">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="bg-indigo-600 p-2 rounded-xl">
-                          <Target className="w-5 h-5 text-white" />
-                        </div>
-                        <div>
-                          <h3 className="text-lg font-bold text-gray-900">Metas Mensais por Vendedor</h3>
-                          <p className="text-sm text-gray-600">
-                            Define metas e faixas por vendedor para o mês. Se não existir cadastro, o sistema usa os valores globais (fallback).
-                          </p>
-                        </div>
+                {/* METAS MENSAIS POR VENDEDOR (SOMENTE META) */}
+                <div className="bg-white border border-gray-200 rounded-xl p-6">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="bg-indigo-50 p-2 rounded-lg">
+                        <Target className="w-5 h-5 text-indigo-600" />
                       </div>
-
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                        <div className="flex items-center gap-2">
-                          <label className="text-sm font-medium text-gray-700">Mês:</label>
-                          <input
-                            type="month"
-                            value={monthInputValueFrom(metasMesAno.ano, metasMesAno.mes)}
-                            onChange={(e) => {
-                              const parsed = parseMonthInput(e.target.value);
-                              if (parsed) setMetasMesAno(parsed);
-                            }}
-                            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          />
-                        </div>
-
-                        <button
-                          onClick={carregarVendedoresEMetas}
-                          disabled={carregandoMetas}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition disabled:opacity-50"
-                        >
-                          <RefreshCw className={`w-4 h-4 ${carregandoMetas ? 'animate-spin' : ''}`} />
-                          Atualizar
-                        </button>
+                      <div>
+                        <h3 className="text-lg font-bold text-gray-900">Metas Mensais por Vendedor</h3>
+                        <p className="text-sm text-gray-600">
+                          Aqui você define apenas a <b>meta mensal</b> por vendedor para o mês. Faixas e percentuais são globais (acima).
+                        </p>
                       </div>
                     </div>
 
-                    {/* feedback metas */}
-                    {erroMetas && (
-                      <div className="mt-4 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
-                        <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-red-900">Erro nas metas</p>
-                          <p className="text-sm text-red-700">{erroMetas}</p>
-                        </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                        <span className="text-sm text-gray-600">Mês:</span>
+                        <input
+                          type="month"
+                          value={toMonthInputValue(mesMetas)}
+                          onChange={(e) => {
+                            const [y, m] = e.target.value.split('-').map(Number);
+                            if (!y || !m) return;
+                            setMesMetas(new Date(y, m - 1, 1));
+                          }}
+                          className="bg-transparent text-sm font-medium text-gray-900 outline-none"
+                        />
                       </div>
-                    )}
 
-                    {sucessoMetas && (
-                      <div className="mt-4 bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
-                        <div className="w-5 h-5 bg-green-600 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                          <span className="text-white text-xs">✓</span>
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-green-900">Metas salvas!</p>
-                          <p className="text-sm text-green-700">As metas do mês foram atualizadas com sucesso.</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* conteúdo metas */}
-                    {carregandoMetas ? (
-                      <div className="py-10 flex items-center justify-center">
-                        <div className="text-center">
-                          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mx-auto mb-3"></div>
-                          <p className="text-gray-600">Carregando metas...</p>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="mt-6 flex items-center gap-2 text-sm text-gray-600">
-                          <Users className="w-4 h-4" />
-                          <span>{vendedores.length} vendedores</span>
-                        </div>
-
-                        <div className="mt-4 overflow-x-auto">
-                          <table className="min-w-full">
-                            <thead className="bg-gray-50">
-                              <tr>
-                                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Vendedor</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Meta (€)</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">F1 Limite (€)</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">F1 %</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">F2 Limite (€)</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">F2 %</th>
-                                <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">F3 %</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {vendedores.map((v) => {
-                                const r = getRowForVendedor(v.id);
-                                const hasDb = Boolean(metasByVendedor[v.id]?.id);
-
-                                return (
-                                  <tr key={v.id} className="hover:bg-gray-50">
-                                    <td className="py-3 px-4">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-medium text-gray-900">{v.nome}</span>
-                                        <span
-                                          className={`text-xs px-2 py-1 rounded-full ${
-                                            hasDb ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'
-                                          }`}
-                                        >
-                                          {hasDb ? 'cadastrado' : 'fallback global'}
-                                        </span>
-                                      </div>
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="100"
-                                        value={Number(r.meta_mensal ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { meta_mensal: Number(e.target.value) })}
-                                        className="w-32 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="100"
-                                        value={Number(r.faixa1_limite ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { faixa1_limite: Number(e.target.value) })}
-                                        className="w-32 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max="100"
-                                        step="0.1"
-                                        value={Number(r.faixa1_percent ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { faixa1_percent: Number(e.target.value) })}
-                                        className="w-24 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="100"
-                                        value={Number(r.faixa2_limite ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { faixa2_limite: Number(e.target.value) })}
-                                        className="w-32 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max="100"
-                                        step="0.1"
-                                        value={Number(r.faixa2_percent ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { faixa2_percent: Number(e.target.value) })}
-                                        className="w-24 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-
-                                    <td className="py-3 px-4 text-right">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max="100"
-                                        step="0.1"
-                                        value={Number(r.faixa3_percent ?? 0)}
-                                        onChange={(e) => updateMetaRow(v.id, { faixa3_percent: Number(e.target.value) })}
-                                        className="w-24 text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-
-                        <div className="mt-6 flex flex-col sm:flex-row gap-3">
-                          <button
-                            onClick={salvarMetasDoMes}
-                            disabled={salvandoMetas || vendedores.length === 0}
-                            className="sm:w-auto w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {salvandoMetas ? (
-                              <>
-                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                <span>Salvando metas...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Save className="w-5 h-5" />
-                                <span>Guardar Metas do Mês</span>
-                              </>
-                            )}
-                          </button>
-
-                          <div className="text-sm text-gray-600 flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4" />
-                            <span>
-                              Requisito: a tabela deve ter constraint única para <b>(vendedor_id, ano, mes)</b> para o upsert funcionar corretamente.
-                            </span>
-                          </div>
-                        </div>
-                      </>
-                    )}
+                      <button
+                        onClick={carregarMetasMensais}
+                        disabled={carregandoMetas}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${carregandoMetas ? 'animate-spin' : ''}`} />
+                        Atualizar
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Feedback METAS */}
+                  {erroMetas && (
+                    <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-red-900">Erro</p>
+                        <p className="text-sm text-red-700">{erroMetas}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {sucessoMetas && (
+                    <div className="mb-4 bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+                      <div className="w-5 h-5 bg-green-600 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <span className="text-white text-xs">✓</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-green-900">Sucesso!</p>
+                        <p className="text-sm text-green-700">Metas do mês salvas com sucesso.</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {carregandoMetas ? (
+                    <div className="py-10 text-center">
+                      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mx-auto mb-3"></div>
+                      <p className="text-gray-600">Carregando metas...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[720px]">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Vendedor</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Meta do mês (€)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Origem</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {vendedores.map((v) => {
+                              const meta = draftMetas[v.id] ?? null;
+                              const isFallback = meta === null;
+                              return (
+                                <tr key={v.id}>
+                                  <td className="py-4 px-4">
+                                    <div className="font-medium text-gray-900">{v.nome}</div>
+                                  </td>
+
+                                  <td className="py-4 px-4">
+                                    <input
+                                      type="number"
+                                      step="100"
+                                      min="0"
+                                      placeholder={String(metaGlobal || 0)}
+                                      value={meta === null ? '' : meta}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setDraftMetas((prev) => ({
+                                          ...prev,
+                                          [v.id]: val === '' ? null : Number(val),
+                                        }));
+                                      }}
+                                      className="w-56 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      Deixe vazio para usar o fallback global ({metaGlobal.toLocaleString('pt-PT')}€).
+                                    </p>
+                                  </td>
+
+                                  <td className="py-4 px-4">
+                                    {isFallback ? (
+                                      <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
+                                        fallback global
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700">
+                                        meta do vendedor
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="mt-5 flex items-center justify-between gap-3">
+                        <div className="text-sm text-gray-600">
+                          {vendedores.length} vendedor(es). Metas por vendedor sobrescrevem apenas a meta global do mês.
+                        </div>
+
+                        <button
+                          onClick={salvarMetasMensais}
+                          disabled={salvandoMetas}
+                          className="flex items-center gap-2 px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-indigo-600 to-blue-600 hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {salvandoMetas ? (
+                            <>
+                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                              <span>Salvando...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-5 h-5" />
+                              <span>Guardar Metas do Mês</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Info global */}
+                {/* Informação Adicional */}
                 <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
@@ -1235,8 +1075,8 @@ export default function ConfiguracoesPage() {
                       <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
                         <li>Ao salvar configurações globais, um novo registro será criado (histórico mantido)</li>
                         <li>O sistema sempre usará o registro global mais recente</li>
-                        <li>Metas por vendedor sobrescrevem o fallback global para o mês</li>
-                        <li>As alterações impactam dashboards e cálculos (metas e comissões)</li>
+                        <li>Metas por vendedor (mensais) sobrescrevem apenas a meta global para o mês</li>
+                        <li>Faixas e percentuais de comissão permanecem globais</li>
                       </ul>
                     </div>
                   </div>
@@ -1246,7 +1086,7 @@ export default function ConfiguracoesPage() {
           </div>
         )}
 
-        {/* Save Button (aba empresa e fiscal - não conectadas ao Supabase ainda) */}
+        {/* Save Button (empresa e fiscal ainda sem supabase) */}
         {(activeTab === 'empresa' || activeTab === 'fiscal') && (
           <div className="mt-8 pt-6 border-t border-gray-200">
             <button className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105">
@@ -1259,4 +1099,3 @@ export default function ConfiguracoesPage() {
     </div>
   );
 }
-
