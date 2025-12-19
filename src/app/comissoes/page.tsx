@@ -45,6 +45,11 @@ type RowComissao = {
 
   faturas_pagas: number;
   faturas_pendentes: number;
+
+    // usado quando mês está FECHADO (vem do snapshot)
+  comissao_faixa1?: number;
+  comissao_faixa2?: number;
+  comissao_faixa3?: number;
 };
 
 type SortKey =
@@ -171,20 +176,24 @@ function faixaPercentLabel(
   mesFechado: boolean,
   config: ConfiguracaoFinanceira | null
 ) {
-  // MÊS FECHADO → usa percentuais congelados no snapshot
+  const snap1 = safeNum(row?.comissao_faixa1, NaN);
+  const snap2 = safeNum(row?.comissao_faixa2, NaN);
+  const snap3 = safeNum(row?.comissao_faixa3, NaN);
+
+  // MÊS FECHADO → tenta snapshot; se não existir, cai para config
   if (mesFechado) {
-    if (faixa === 'FAIXA_1') return `${row.comissao_faixa1}%`;
-    if (faixa === 'FAIXA_2') return `${row.comissao_faixa2}%`;
-    return `${row.comissao_faixa3}%`;
+    if (faixa === 'FAIXA_1' && Number.isFinite(snap1)) return `${snap1}%`;
+    if (faixa === 'FAIXA_2' && Number.isFinite(snap2)) return `${snap2}%`;
+    if (faixa === 'FAIXA_3' && Number.isFinite(snap3)) return `${snap3}%`;
+    // fallback (evita undefined%)
   }
 
-  // MÊS ABERTO → usa configuração atual (como antes)
+  // MÊS ABERTO (ou fallback)
   if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
-  if (faixa === 'FAIXA_1') return `${config.comissao_faixa1}%`;
-  if (faixa === 'FAIXA_2') return `${config.comissao_faixa2}%`;
-  return `${config.comissao_faixa3}%`;
+  if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
+  if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
+  return `${safeNum(config.comissao_faixa3, 10)}%`;
 }
-
 
 // =====================================================
 // COMPONENTE
