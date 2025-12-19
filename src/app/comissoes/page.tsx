@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Eye,
   X,
+  Lock,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
@@ -77,6 +78,31 @@ type RpcDetalheRow = {
   estado: string;
   cliente_nome: string | null;
   base_sem_iva: number;
+};
+
+type SnapshotRow = {
+  vendedor_id: string;
+  ano: number;
+  mes: number;
+  base_sem_iva: number;
+  comissao_calculada: number;
+  faixa_atual: string;
+  percentual_meta: number;
+  num_faturas: number;
+  clientes_unicos: number;
+  frascos: number;
+  faturas_pagas: number;
+  faturas_pendentes: number;
+
+  // config congelada
+  meta_mensal: number;
+  faixa1_limite: number;
+  faixa2_limite: number;
+  comissao_faixa1: number;
+  comissao_faixa2: number;
+  comissao_faixa3: number;
+
+  fechado_em: string;
 };
 
 // =====================================================
@@ -156,15 +182,15 @@ export default function ComissoesPage() {
 
   const [config, setConfig] = useState<ConfiguracaoFinanceira | null>(null);
   const [rows, setRows] = useState<RowComissao[]>([]);
+  const [mesFechado, setMesFechado] = useState(false);
+  const [fechadoEm, setFechadoEm] = useState<string | null>(null);
 
   const [sortKey, setSortKey] = useState<SortKey>('base_sem_iva');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   // Modal detalhe
   const [detalheAberto, setDetalheAberto] = useState(false);
-  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(
-    null
-  );
+  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
   const [detalheFaturas, setDetalheFaturas] = useState<
@@ -178,13 +204,6 @@ export default function ComissoesPage() {
       base_sem_iva: number;
     }>
   >([]);
-
-  function fecharDetalhe() {
-    setDetalheAberto(false);
-    setDetalheVendedor(null);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
-  }
 
   // ESC + trava scroll quando modal aberto
   useEffect(() => {
@@ -213,7 +232,7 @@ export default function ComissoesPage() {
   }, [mesAno]);
 
   // =====================================================
-  // CARREGAMENTO (RPC-ONLY)
+  // CARREGAMENTO (SNAPSHOT -> RPC)
   // =====================================================
 
   async function carregar() {
@@ -221,11 +240,84 @@ export default function ComissoesPage() {
     setErro(null);
 
     try {
-      // 1) Config (faixas + meta)
+      // 1) Config (usada para cálculo/labels quando ABERTO)
       const cfg = await buscarConfiguracaoFinanceira();
       setConfig(cfg);
 
-      // 2) Ranking do mês via RPC
+      // 2) Tenta snapshot (mês FECHADO)
+      const { data: snapData, error: snapError } = await supabase
+        .from('comissoes_mensais')
+        .select(
+          `
+          vendedor_id, ano, mes,
+          base_sem_iva, comissao_calculada, faixa_atual, percentual_meta,
+          num_faturas, clientes_unicos, frascos, faturas_pagas, faturas_pendentes,
+          meta_mensal, faixa1_limite, faixa2_limite,
+          comissao_faixa1, comissao_faixa2, comissao_faixa3,
+          fechado_em,
+          vendedores ( nome )
+        `
+        )
+        .eq('ano', anoSelecionado)
+        .eq('mes', mesSelecionado);
+
+      if (snapError) {
+        // Se der erro aqui, não “mascara”: isso é erro real de schema/permissão
+        throw snapError;
+      }
+
+      const snaps = (snapData || []) as any[];
+
+      if (snaps.length > 0) {
+        // FECHADO: usa snapshot
+        setMesFechado(true);
+        setFechadoEm(snaps[0]?.fechado_em || null);
+
+        const rowsOut: RowComissao[] = snaps.map((s) => {
+          const base = safeNum(s.base_sem_iva, 0);
+          const numFaturas = safeNum(s.num_faturas, 0);
+          const clientesUnicos = safeNum(s.clientes_unicos, 0);
+          const frascos = safeNum(s.frascos, 0);
+
+          const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
+          const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
+
+          return {
+            vendedor_id: s.vendedor_id,
+            vendedor_nome: s.vendedores?.nome || '—',
+            base_sem_iva: base,
+            comissao_calculada: safeNum(s.comissao_calculada, 0),
+            faixa_atual:
+              s.faixa_atual === 'FAIXA_2'
+                ? 'FAIXA_2'
+                : s.faixa_atual === 'FAIXA_3'
+                  ? 'FAIXA_3'
+                  : 'FAIXA_1',
+            percentual_meta: safeNum(s.percentual_meta, 0),
+
+            // “falta” não faz muito sentido no fechado, mas mantemos por consistência visual
+            falta_para_3000: 0,
+            falta_para_7000: 0,
+
+            num_faturas: numFaturas,
+            clientes_unicos: clientesUnicos,
+            frascos,
+            ticket_medio: ticketMedio,
+            preco_medio_frasco: precoMedioFrasco,
+
+            faturas_pagas: safeNum(s.faturas_pagas, 0),
+            faturas_pendentes: safeNum(s.faturas_pendentes, 0),
+          };
+        });
+
+        setRows(rowsOut);
+        return;
+      }
+
+      // 3) ABERTO: usa RPC relatorio_comissoes_mes
+      setMesFechado(false);
+      setFechadoEm(null);
+
       const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
         p_ano: anoSelecionado,
         p_mes: mesSelecionado,
@@ -283,6 +375,42 @@ export default function ComissoesPage() {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesAno]);
+
+  // =====================================================
+  // FECHAR MÊS
+  // =====================================================
+
+  async function fecharMes() {
+    if (mesFechado) return;
+
+    const ok = window.confirm(
+      `Tem certeza que deseja FECHAR o mês ${mesAno}?\n\nDepois de fechado, os valores ficam imutáveis (snapshot).`
+    );
+    if (!ok) return;
+
+    try {
+      setLoading(true);
+      setErro(null);
+
+      const { data, error } = await supabase.rpc('fechar_comissoes_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
+
+      if (error) throw error;
+
+      // Recarrega e agora deve cair no snapshot
+      await carregar();
+
+      // opcional: feedback simples
+      console.log('fechar_comissoes_mes inserted:', data);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao fechar mês');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // =====================================================
   // STATS
@@ -379,6 +507,13 @@ export default function ComissoesPage() {
     }
   }
 
+  function fecharDetalhe() {
+    setDetalheAberto(false);
+    setDetalheVendedor(null);
+    setDetalheErro(null);
+    setDetalheFaturas([]);
+  }
+
   // =====================================================
   // RENDER
   // =====================================================
@@ -421,6 +556,11 @@ export default function ComissoesPage() {
   };
 
   const faixaLabel = (faixa: RowComissao['faixa_atual']) => {
+    if (mesFechado) {
+      // no fechado, o rótulo já está “congelado” na faixa, então mostramos FAIXA_1/2/3
+      return faixa === 'FAIXA_1' ? 'FAIXA 1' : faixa === 'FAIXA_2' ? 'FAIXA 2' : 'FAIXA 3';
+    }
+
     if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
     if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
     if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
@@ -433,12 +573,33 @@ export default function ComissoesPage() {
       <div className="mb-6">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
-              Comissões e Performance
-            </h1>
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Comissões</h1>
+
+              <span
+                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
+                  mesFechado ? 'bg-gray-900 text-white' : 'bg-blue-100 text-blue-800'
+                }`}
+              >
+                {mesFechado ? (
+                  <>
+                    <Lock className="w-4 h-4" /> MÊS FECHADO
+                  </>
+                ) : (
+                  <>MÊS ABERTO</>
+                )}
+              </span>
+
+              {mesFechado && fechadoEm && (
+                <span className="text-xs text-gray-500">
+                  Fechado em {new Date(fechadoEm).toLocaleString('pt-PT')}
+                </span>
+              )}
+            </div>
+
             <p className="text-gray-600 text-sm sm:text-base">
-              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA),
-              com faixas progressivas.
+              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA), com
+              faixas progressivas.
             </p>
           </div>
 
@@ -452,6 +613,17 @@ export default function ComissoesPage() {
                 className="px-2 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+
+            {!mesFechado && (
+              <button
+                type="button"
+                onClick={fecharMes}
+                className="bg-red-600 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
+              >
+                <Lock className="w-5 h-5" />
+                Fechar mês
+              </button>
+            )}
 
             <button
               type="button"
@@ -541,7 +713,11 @@ export default function ComissoesPage() {
                 >
                   Clientes únicos
                 </ThRight>
-                <ThRight onClick={() => toggleSort('frascos')} active={sortKey === 'frascos'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('frascos')}
+                  active={sortKey === 'frascos'}
+                  dir={sortDir}
+                >
                   Frascos
                 </ThRight>
                 <ThRight
@@ -572,10 +748,11 @@ export default function ComissoesPage() {
                       <span className="text-xs text-gray-500">
                         Pagas: {r.faturas_pagas} • Pendentes: {r.faturas_pendentes}
                       </span>
-                      {config && (
+                      {!mesFechado && config && (
                         <span className="text-xs text-gray-500">
-                          Falta p/ {formatInt(config.faixa1_limite)}: {formatCurrencyEUR(r.falta_para_3000)} • Falta
-                          p/ {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
+                          Falta p/ {formatInt(config.faixa1_limite)}:{' '}
+                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/{' '}
+                          {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
                         </span>
                       )}
                     </div>
@@ -616,7 +793,9 @@ export default function ComissoesPage() {
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.ticket_medio)}</span>
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.ticket_medio)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
@@ -630,7 +809,7 @@ export default function ComissoesPage() {
                       <span className="text-sm font-semibold text-gray-900">
                         {Math.round(r.percentual_meta)}%
                       </span>
-                      {config && (
+                      {!mesFechado && config && (
                         <span className="text-xs text-gray-500">
                           Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
                         </span>
@@ -792,11 +971,7 @@ export default function ComissoesPage() {
 // =====================================================
 
 function CalendarIcon() {
-  return (
-    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">
-      📅
-    </span>
-  );
+  return <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">📅</span>;
 }
 
 function StatCard({
