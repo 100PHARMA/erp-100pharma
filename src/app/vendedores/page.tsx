@@ -868,7 +868,7 @@ export default function VendedoresPage() {
       const vendasPeriodo = faturas
         .map((f) => {
           const cliente = clientes.find((c) => c.id === f.cliente_id);
-          const baseSemIva = safeNum(f.total_sem_iva ?? f.subtotal ?? 0);
+          const baseSemIva = safeNum(f.total_sem_iva ?? 0);
 
           // frascos por venda_id (se houver)
           const frascosVenda =
