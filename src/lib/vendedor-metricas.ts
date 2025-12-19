@@ -5,18 +5,21 @@
 //
 // Depende de:
 // - public.vendedores
-// - public.faturas (tipo='FATURA', estado <> 'CANCELADA', data_emissao, total_sem_iva/subtotal, venda_id, cliente_id)
+// - public.faturas (tipo='FATURA', estado <> 'CANCELADA', data_emissao, total_sem_iva, venda_id, cliente_id)
 // - public.vendas (id, vendedor_id)
 // - public.venda_itens (venda_id, quantidade)
 // - public.vendedor_km (vendedor_id, data, km, valor)
 // - public.vendedor_visitas (vendedor_id, cliente_id, data_visita, estado)
-// - public.vendedor_metas_mensais (vendedor_id, ano, mes, meta_mensal, faixa*_limite, faixa*_percent)
+// - public.vendedor_metas_mensais (vendedor_id, ano, mes, meta_mensal, faixa*_limite, faixa*_percent OU faixa*_percentual)
 //
 // Observação importante:
 // - Comissão e Meta são calculadas sempre sobre BASE SEM IVA (faturas emitidas).
 
 import { supabase } from './supabase';
-import { buscarConfiguracaoFinanceira, type ConfiguracaoFinanceira } from './configuracoes-financeiras';
+import {
+  buscarConfiguracaoFinanceira,
+  type ConfiguracaoFinanceira,
+} from './configuracoes-financeiras';
 import type { VendedorMetaMensalRow } from './vendedor-metas-mensais';
 
 export type VendedorRow = {
@@ -83,14 +86,15 @@ function pad2(n: number) {
 function getMonthRange(ano: number, mes: number): Range {
   // mes: 1..12
   const inicio = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
-  const fimExclusivo = new Date(Date.UTC(mes === 12 ? ano + 1 : ano, mes === 12 ? 0 : mes, 1, 0, 0, 0));
-  // para tabelas date (inclusive), calculamos o último dia do mês:
+  const fimExclusivo = new Date(
+    Date.UTC(mes === 12 ? ano + 1 : ano, mes === 12 ? 0 : mes, 1, 0, 0, 0),
+  );
   const fimInclusive = new Date(Date.UTC(ano, mes, 0, 0, 0, 0));
 
   const inicioDate = `${ano}-${pad2(mes)}-01`;
-  const fimDate = `${fimInclusive.getUTCFullYear()}-${pad2(fimInclusive.getUTCMonth() + 1)}-${pad2(
-    fimInclusive.getUTCDate(),
-  )}`;
+  const fimDate = `${fimInclusive.getUTCFullYear()}-${pad2(
+    fimInclusive.getUTCMonth() + 1,
+  )}-${pad2(fimInclusive.getUTCDate())}`;
 
   return {
     inicioTsUtc: inicio.toISOString(),
@@ -105,13 +109,38 @@ function safeNum(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function calcComissaoProgressiva(base: number, regra: {
-  faixa1_limite: number;
-  faixa1_percent: number;
-  faixa2_limite: number;
-  faixa2_percent: number;
-  faixa3_percent: number;
-}): { comissao: number; faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3' } {
+function readPercent(metaRow: VendedorMetaMensalRow | undefined, key: string): number | null {
+  if (!metaRow) return null;
+  const anyRow = metaRow as any;
+
+  // Aceita tanto "..._percent" quanto "..._percentual" (defensivo)
+  const v1 = anyRow?.[key];
+  if (v1 !== null && v1 !== undefined) return safeNum(v1);
+
+  const altKey = key.replace('_percent', '_percentual');
+  const v2 = anyRow?.[altKey];
+  if (v2 !== null && v2 !== undefined) return safeNum(v2);
+
+  return null;
+}
+
+function readLimite(metaRow: VendedorMetaMensalRow | undefined, key: string): number | null {
+  if (!metaRow) return null;
+  const anyRow = metaRow as any;
+  const v = anyRow?.[key];
+  return v !== null && v !== undefined ? safeNum(v) : null;
+}
+
+function calcComissaoProgressiva(
+  base: number,
+  regra: {
+    faixa1_limite: number;
+    faixa1_percent: number;
+    faixa2_limite: number;
+    faixa2_percent: number;
+    faixa3_percent: number;
+  },
+): { comissao: number; faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3' } {
   const b = Math.max(0, safeNum(base));
   const f1 = Math.max(0, safeNum(regra.faixa1_limite));
   const f2 = Math.max(0, safeNum(regra.faixa2_limite));
@@ -119,8 +148,6 @@ function calcComissaoProgressiva(base: number, regra: {
   const p2 = Math.max(0, safeNum(regra.faixa2_percent));
   const p3 = Math.max(0, safeNum(regra.faixa3_percent));
 
-  // Proteções:
-  // - se faixa2_limite <= faixa1_limite, tratamos como “não configurado” e cai tudo em faixa1/3 conforme.
   const faixa2Valida = f2 > f1;
 
   if (b <= f1 || f1 === 0) {
@@ -133,10 +160,9 @@ function calcComissaoProgressiva(base: number, regra: {
     return { comissao: c1 + c2, faixa: 'FAIXA_2' };
   }
 
-  // faixa3
   const c1 = f1 * (p1 / 100);
   const c2 = faixa2Valida ? (f2 - f1) * (p2 / 100) : 0;
-  const excedenteBase = faixa2Valida ? (b - f2) : (b - f1);
+  const excedenteBase = faixa2Valida ? b - f2 : b - f1;
   const c3 = Math.max(0, excedenteBase) * (p3 / 100);
   return { comissao: c1 + c2 + c3, faixa: 'FAIXA_3' };
 }
@@ -149,46 +175,53 @@ function calcPercentualMeta(base: number, meta: number): number {
   return Math.min(Math.max(pct, 0), 200);
 }
 
-function pickRegraParaVendedor(metaRow: VendedorMetaMensalRow | undefined, cfg: ConfiguracaoFinanceira) {
-  // meta
-  const metaMensal = metaRow?.meta_mensal ?? null;
+function pickRegraParaVendedor(
+  metaRow: VendedorMetaMensalRow | undefined,
+  cfg: ConfiguracaoFinanceira,
+) {
+  const metaMensalRaw = (metaRow as any)?.meta_mensal;
+  const meta_mensal_usada =
+    metaMensalRaw !== null && metaMensalRaw !== undefined
+      ? safeNum(metaMensalRaw)
+      : safeNum(cfg.meta_mensal);
 
-  // faixas (vendor override se tiver preenchido; senão, global)
-  const faixa1_limite =
-    metaRow?.faixa1_limite !== null && metaRow?.faixa1_limite !== undefined
-      ? safeNum(metaRow.faixa1_limite)
-      : safeNum(cfg.faixa1_limite);
+  const faixa1_limite = (() => {
+    const v = readLimite(metaRow, 'faixa1_limite');
+    return v !== null ? v : safeNum(cfg.faixa1_limite);
+  })();
 
-  const faixa2_limite =
-    metaRow?.faixa2_limite !== null && metaRow?.faixa2_limite !== undefined
-      ? safeNum(metaRow.faixa2_limite)
-      : safeNum(cfg.faixa2_limite);
+  const faixa2_limite = (() => {
+    const v = readLimite(metaRow, 'faixa2_limite');
+    return v !== null ? v : safeNum(cfg.faixa2_limite);
+  })();
 
-  const faixa1_percent =
-    metaRow?.faixa1_percent !== null && metaRow?.faixa1_percent !== undefined
-      ? safeNum(metaRow.faixa1_percent)
-      : safeNum((cfg as any).comissao_faixa1 ?? cfg.comissao_faixa1);
+  const faixa1_percent = (() => {
+    const v = readPercent(metaRow, 'faixa1_percent');
+    return v !== null ? v : safeNum((cfg as any).comissao_faixa1 ?? cfg.comissao_faixa1);
+  })();
 
-  const faixa2_percent =
-    metaRow?.faixa2_percent !== null && metaRow?.faixa2_percent !== undefined
-      ? safeNum(metaRow.faixa2_percent)
-      : safeNum((cfg as any).comissao_faixa2 ?? cfg.comissao_faixa2);
+  const faixa2_percent = (() => {
+    const v = readPercent(metaRow, 'faixa2_percent');
+    return v !== null ? v : safeNum((cfg as any).comissao_faixa2 ?? cfg.comissao_faixa2);
+  })();
 
-  const faixa3_percent =
-    metaRow?.faixa3_percent !== null && metaRow?.faixa3_percent !== undefined
-      ? safeNum(metaRow.faixa3_percent)
-      : safeNum((cfg as any).comissao_faixa3 ?? cfg.comissao_faixa3);
+  const faixa3_percent = (() => {
+    const v = readPercent(metaRow, 'faixa3_percent');
+    return v !== null ? v : safeNum((cfg as any).comissao_faixa3 ?? cfg.comissao_faixa3);
+  })();
 
-  const meta_mensal_usada = metaMensal !== null && metaMensal !== undefined ? safeNum(metaMensal) : safeNum(cfg.meta_mensal);
+  const anyRow = metaRow as any;
 
-  // regra_origem: se houver pelo menos meta_mensal preenchida OU algum campo de faixa preenchido, consideramos VENDEDOR
   const temOverride =
-    (metaRow?.meta_mensal !== null && metaRow?.meta_mensal !== undefined) ||
-    (metaRow?.faixa1_limite !== null && metaRow?.faixa1_limite !== undefined) ||
-    (metaRow?.faixa2_limite !== null && metaRow?.faixa2_limite !== undefined) ||
-    (metaRow?.faixa1_percent !== null && metaRow?.faixa1_percent !== undefined) ||
-    (metaRow?.faixa2_percent !== null && metaRow?.faixa2_percent !== undefined) ||
-    (metaRow?.faixa3_percent !== null && metaRow?.faixa3_percent !== undefined);
+    (anyRow?.meta_mensal !== null && anyRow?.meta_mensal !== undefined) ||
+    (anyRow?.faixa1_limite !== null && anyRow?.faixa1_limite !== undefined) ||
+    (anyRow?.faixa2_limite !== null && anyRow?.faixa2_limite !== undefined) ||
+    (anyRow?.faixa1_percent !== null && anyRow?.faixa1_percent !== undefined) ||
+    (anyRow?.faixa2_percent !== null && anyRow?.faixa2_percent !== undefined) ||
+    (anyRow?.faixa3_percent !== null && anyRow?.faixa3_percent !== undefined) ||
+    (anyRow?.faixa1_percentual !== null && anyRow?.faixa1_percentual !== undefined) ||
+    (anyRow?.faixa2_percentual !== null && anyRow?.faixa2_percentual !== undefined) ||
+    (anyRow?.faixa3_percentual !== null && anyRow?.faixa3_percentual !== undefined);
 
   return {
     regra_origem: (temOverride ? 'VENDEDOR' : 'GLOBAL') as 'VENDEDOR' | 'GLOBAL',
@@ -205,7 +238,10 @@ function pickRegraParaVendedor(metaRow: VendedorMetaMensalRow | undefined, cfg: 
  * Carrega métricas mensais para TODOS os vendedores, mesmo sem meta cadastrada.
  * Comissão e meta sempre em € sem IVA (base por faturas emitidas).
  */
-export async function getVendedorMetricasMes(ano: number, mes: number): Promise<VendedorMetricasMes[]> {
+export async function getVendedorMetricasMes(
+  ano: number,
+  mes: number,
+): Promise<VendedorMetricasMes[]> {
   const periodo = getMonthRange(ano, mes);
 
   // 1) Config global mais recente
@@ -233,14 +269,15 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
   const metas = (metasData ?? []) as VendedorMetaMensalRow[];
   const metaByVendedor = new Map<string, VendedorMetaMensalRow>();
   for (const m of metas) {
-    if (m?.vendedor_id) metaByVendedor.set(m.vendedor_id, m);
+    if ((m as any)?.vendedor_id) metaByVendedor.set((m as any).vendedor_id, m);
   }
 
   // 4) Faturas emitidas no mês (base sem IVA) + vendedor via vendas
-  // Nota: depende de relacionamento faturas.venda_id -> vendas.id no Supabase
   const { data: faturasData, error: faturasErr } = await supabase
     .from('faturas')
-    .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+    .select(
+      'id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, vendas!inner(id, vendedor_id)',
+    )
     .eq('tipo', 'FATURA')
     .neq('estado', 'CANCELADA')
     .gte('data_emissao', periodo.inicioTsUtc)
@@ -250,7 +287,7 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
 
   const faturas = (faturasData ?? []) as any[];
 
-  // 4.1) Mapear faturas por vendedor + coletar venda_ids
+  // 4.1) Agregar por vendedor + coletar venda_ids
   const agg = new Map<
     string,
     {
@@ -270,7 +307,9 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
     const vendedorId = venda?.vendedor_id as string | undefined;
     if (!vendedorId) continue;
 
-    const base = safeNum(f?.total_sem_iva ?? f?.subtotal ?? 0);
+    // REGRA: SOMENTE total_sem_iva. Sem fallback para subtotal.
+    const base = safeNum(f?.total_sem_iva ?? 0);
+
     const clienteId = (f?.cliente_id as string | null) ?? null;
     const vendaId = (f?.venda_id as string | null) ?? null;
 
@@ -289,8 +328,9 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
     a.base_sem_iva += base;
     a.num_faturas += 1;
 
-    if (String(f?.estado).toUpperCase() === 'PAGA') a.faturas_pagas += 1;
-    if (String(f?.estado).toUpperCase() === 'PENDENTE') a.faturas_pendentes += 1;
+    const estado = String(f?.estado ?? '').toUpperCase();
+    if (estado === 'PAGA') a.faturas_pagas += 1;
+    if (estado === 'PENDENTE') a.faturas_pendentes += 1;
 
     if (clienteId) a.clientes.add(clienteId);
     if (vendaId) {
@@ -304,12 +344,12 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
   if (allVendaIds.size > 0) {
     const vendaIdList = Array.from(allVendaIds);
 
-    // Para não estourar limite de URL se tiver muitos ids, fazemos batching
     const BATCH = 500;
     frascosPorVenda = new Map<string, number>();
 
     for (let i = 0; i < vendaIdList.length; i += BATCH) {
       const chunk = vendaIdList.slice(i, i + BATCH);
+
       const { data: itensData, error: itensErr } = await supabase
         .from('venda_itens')
         .select('venda_id, quantidade')
@@ -365,6 +405,7 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
   for (const v of visitas) {
     const vid = v.vendedor_id as string | undefined;
     if (!vid) continue;
+
     const estado = String(v.estado ?? '').toUpperCase();
 
     if (!visitaAgg.has(vid)) {
@@ -377,14 +418,13 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
     else if (estado === 'CANCELADA') a.cancelada += 1;
   }
 
-  // 8) Montar resultado para TODOS os vendedores (mesmo sem movimento/meta)
+  // 8) Resultado para TODOS os vendedores
   const out: VendedorMetricasMes[] = vendedores.map((vend) => {
     const a = agg.get(vend.id);
     const base_sem_iva = safeNum(a?.base_sem_iva ?? 0);
     const num_faturas = safeNum(a?.num_faturas ?? 0);
     const clientes_unicos = a ? a.clientes.size : 0;
 
-    // frascos: soma dedup por venda_id
     let frascos = 0;
     if (a?.vendaIds?.size) {
       for (const vid of a.vendaIds) {
@@ -455,9 +495,7 @@ export async function getVendedorMetricasMes(ano: number, mes: number): Promise<
     };
   });
 
-  // Ordenar por base_sem_iva desc (ranking)
   out.sort((a, b) => b.base_sem_iva - a.base_sem_iva);
-
   return out;
 }
 
