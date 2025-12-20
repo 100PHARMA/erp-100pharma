@@ -6,6 +6,8 @@ import {
   UserCircle,
   Plus,
   Search,
+  Edit,
+  Trash2,
   Eye,
   Phone,
   Mail,
@@ -22,24 +24,21 @@ import {
   XCircle,
   Download,
   AlertCircle,
-  Edit,
-  Trash2,
 } from 'lucide-react';
-
 import { supabase } from '@/lib/supabase';
-import { gerarRelatorioVendedorPdf } from '@/lib/relatorio-vendedor-pdf';
-
 import { buscarConfiguracaoFinanceira, type ConfiguracaoFinanceira } from '@/lib/configuracoes-financeiras';
-import { getAnoMesAtualUtc, getVendedorMetricasMes, type VendedorMetricasMes } from '@/lib/vendedor-metricas';
-import type { VendedorMetaMensalRow } from '@/lib/vendedor-metas-mensais';
+import { gerarRelatorioVendedorPdf } from '@/lib/relatorio-vendedor-pdf';
+import {
+  getAnoMesAtualUtc,
+  getVendedorMetricasMes,
+  type VendedorMetricasMes,
+} from '@/lib/vendedor-metricas';
 
 // ======================================================================
-// TIPOS
+// TIPOS E INTERFACES
 // ======================================================================
 
-type StatusVisita = 'REALIZADA' | 'PENDENTE' | 'CANCELADA';
-
-interface VendedorBase {
+interface Vendedor {
   id: string;
   nome: string;
   email: string;
@@ -49,33 +48,15 @@ interface VendedorBase {
   ativo: boolean;
   created_at: string;
   updated_at: string;
-}
 
-interface VendedorComMetricas extends VendedorBase {
-  // Métricas do mês atual (BASE SEM IVA, por FATURAS emitidas)
-  baseSemIvaMes: number;
-  comissaoMes: number;
+  // Dados calculados (MÊS ATUAL | SEM IVA | Faturas emitidas)
+  vendasMes: number; // base_sem_iva
+  comissaoMes: number; // comissao_calculada
   frascosMes: number;
-  percentualMetaMes: number;
-  metaMensalUsada: number;
-  faixaAtual: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3';
-  faixaPercentAtual: number;
-
-  // Operacional
-  clientesAtivos: number; // carteira (vendedor_clientes.ativo)
-  clientesUnicosFaturadosMes: number; // via faturas
-  numFaturasMes: number;
+  percentualMeta: number;
+  clientesAtivos: number;
   kmRodadosMes: number;
   custoKmMes: number;
-
-  // Visitas
-  visitasMes: number;
-  visitasPendentesMes: number;
-  visitasRealizadasMes: number;
-  visitasCanceladasMes: number;
-
-  // Debug / origem da regra
-  regraOrigem: 'VENDEDOR' | 'GLOBAL';
 }
 
 interface Cliente {
@@ -106,31 +87,25 @@ interface Visita {
   vendedor_id: string;
   cliente_id: string;
   data_visita: string;
-  estado: StatusVisita | string;
+  estado: string;
   notas: string;
 }
 
-interface FaturaRow {
+type FaturaRow = {
   id: string;
-  numero: string | null;
+  numero: string;
   venda_id: string | null;
   cliente_id: string | null;
   tipo: string | null;
   estado: string | null;
-  data_emissao: string; // timestamptz ISO
-  total_sem_iva?: number | null;
-  subtotal?: number | null;
+  data_emissao: string; // timestamptz
+  total_sem_iva: number | null;
+  subtotal: number | null;
   vendas?: { id: string; vendedor_id: string } | null;
-}
-
-interface VendaItem {
-  id: string;
-  venda_id: string;
-  quantidade: number;
-}
+};
 
 // ======================================================================
-// HELPERS (cálculo local para relatório por período)
+// HELPERS
 // ======================================================================
 
 function safeNum(v: any): number {
@@ -138,25 +113,45 @@ function safeNum(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function pickFaixaPercent(
-  faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3',
-  regra: { faixa1_percent: number; faixa2_percent: number; faixa3_percent: number },
-): number {
-  if (faixa === 'FAIXA_1') return regra.faixa1_percent;
-  if (faixa === 'FAIXA_2') return regra.faixa2_percent;
-  return regra.faixa3_percent;
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
 }
 
-function calcComissaoProgressivaLocal(
-  base: number,
-  regra: {
-    faixa1_limite: number;
-    faixa1_percent: number;
-    faixa2_limite: number;
-    faixa2_percent: number;
-    faixa3_percent: number;
-  },
-): { comissao: number; faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3' } {
+function monthRangeUtc(ano: number, mes: number) {
+  // mes: 1..12
+  const inicio = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
+  const fimExclusivo = new Date(Date.UTC(mes === 12 ? ano + 1 : ano, mes === 12 ? 0 : mes, 1, 0, 0, 0));
+  const fimInclusiveDate = new Date(Date.UTC(ano, mes, 0, 0, 0, 0));
+
+  return {
+    inicioTsUtc: inicio.toISOString(),
+    fimTsUtc: fimExclusivo.toISOString(),
+    inicioDate: `${ano}-${pad2(mes)}-01`,
+    fimDate: `${fimInclusiveDate.getUTCFullYear()}-${pad2(fimInclusiveDate.getUTCMonth() + 1)}-${pad2(
+      fimInclusiveDate.getUTCDate(),
+    )}`,
+  };
+}
+
+function dayRangeUtcInclusive(inicioDate: string, fimDate: string) {
+  // entrada: YYYY-MM-DD
+  const [y1, m1, d1] = inicioDate.split('-').map(Number);
+  const [y2, m2, d2] = fimDate.split('-').map(Number);
+
+  const start = new Date(Date.UTC(y1, m1 - 1, d1, 0, 0, 0));
+  const endExclusive = new Date(Date.UTC(y2, m2 - 1, d2, 0, 0, 0));
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+
+  return { inicioTsUtc: start.toISOString(), fimTsUtc: endExclusive.toISOString() };
+}
+
+function calcComissaoProgressivaFromRegra(base: number, regra: {
+  faixa1_limite: number;
+  faixa1_percent: number;
+  faixa2_limite: number;
+  faixa2_percent: number;
+  faixa3_percent: number;
+}) {
   const b = Math.max(0, safeNum(base));
   const f1 = Math.max(0, safeNum(regra.faixa1_limite));
   const f2 = Math.max(0, safeNum(regra.faixa2_limite));
@@ -166,22 +161,22 @@ function calcComissaoProgressivaLocal(
 
   const faixa2Valida = f2 > f1;
 
-  if (b <= f1 || f1 === 0) return { comissao: b * (p1 / 100), faixa: 'FAIXA_1' };
+  if (b <= f1 || f1 === 0) return b * (p1 / 100);
 
   if (faixa2Valida && b <= f2) {
     const c1 = f1 * (p1 / 100);
     const c2 = (b - f1) * (p2 / 100);
-    return { comissao: c1 + c2, faixa: 'FAIXA_2' };
+    return c1 + c2;
   }
 
   const c1 = f1 * (p1 / 100);
   const c2 = faixa2Valida ? (f2 - f1) * (p2 / 100) : 0;
-  const excedenteBase = faixa2Valida ? b - f2 : b - f1;
+  const excedenteBase = faixa2Valida ? (b - f2) : (b - f1);
   const c3 = Math.max(0, excedenteBase) * (p3 / 100);
-  return { comissao: c1 + c2 + c3, faixa: 'FAIXA_3' };
+  return c1 + c2 + c3;
 }
 
-function calcPercentualMetaLocal(base: number, meta: number): number {
+function calcPercentualMeta(base: number, meta: number) {
   const b = Math.max(0, safeNum(base));
   const m = safeNum(meta);
   if (m <= 0) return 0;
@@ -189,87 +184,28 @@ function calcPercentualMetaLocal(base: number, meta: number): number {
   return Math.min(Math.max(pct, 0), 200);
 }
 
-function monthRangeUtc(ano: number, mes: number) {
-  // mes: 1..12
-  const inicio = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
-  const fimExclusivo = new Date(Date.UTC(mes === 12 ? ano + 1 : ano, mes === 12 ? 0 : mes, 1, 0, 0, 0));
-  const fimInclusive = new Date(Date.UTC(ano, mes, 0, 0, 0, 0));
-
-  const inicioDate = `${ano}-${String(mes).padStart(2, '0')}-01`;
-  const fimDate = `${fimInclusive.getUTCFullYear()}-${String(fimInclusive.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    fimInclusive.getUTCDate(),
-  ).padStart(2, '0')}`;
-
-  return { inicioTs: inicio.toISOString(), fimTs: fimExclusivo.toISOString(), inicioDate, fimDate };
-}
-
-async function fetchMetaMensalVendedor(ano: number, mes: number, vendedor_id: string): Promise<VendedorMetaMensalRow | null> {
-  const { data, error } = await supabase
-    .from('vendedor_metas_mensais')
-    .select('*')
-    .eq('ano', ano)
-    .eq('mes', mes)
-    .eq('vendedor_id', vendedor_id)
-    .maybeSingle();
-
-  if (error) throw error;
-  return (data ?? null) as any;
-}
-
-function pickRegra(cfg: ConfiguracaoFinanceira, metaRow: VendedorMetaMensalRow | null) {
-  const faixa1_limite =
-    metaRow?.faixa1_limite !== null && metaRow?.faixa1_limite !== undefined ? safeNum(metaRow.faixa1_limite) : safeNum(cfg.faixa1_limite);
-
-  const faixa2_limite =
-    metaRow?.faixa2_limite !== null && metaRow?.faixa2_limite !== undefined ? safeNum(metaRow.faixa2_limite) : safeNum(cfg.faixa2_limite);
-
-  const faixa1_percent =
-    metaRow?.faixa1_percent !== null && metaRow?.faixa1_percent !== undefined
-      ? safeNum(metaRow.faixa1_percent)
-      : safeNum((cfg as any).comissao_faixa1 ?? cfg.comissao_faixa1);
-
-  const faixa2_percent =
-    metaRow?.faixa2_percent !== null && metaRow?.faixa2_percent !== undefined
-      ? safeNum(metaRow.faixa2_percent)
-      : safeNum((cfg as any).comissao_faixa2 ?? cfg.comissao_faixa2);
-
-  const faixa3_percent =
-    metaRow?.faixa3_percent !== null && metaRow?.faixa3_percent !== undefined
-      ? safeNum(metaRow.faixa3_percent)
-      : safeNum((cfg as any).comissao_faixa3 ?? cfg.comissao_faixa3);
-
-  const meta_mensal_usada =
-    metaRow?.meta_mensal !== null && metaRow?.meta_mensal !== undefined ? safeNum(metaRow.meta_mensal) : safeNum(cfg.meta_mensal);
-
-  const temOverride =
-    (metaRow?.meta_mensal !== null && metaRow?.meta_mensal !== undefined) ||
-    (metaRow?.faixa1_limite !== null && metaRow?.faixa1_limite !== undefined) ||
-    (metaRow?.faixa2_limite !== null && metaRow?.faixa2_limite !== undefined) ||
-    (metaRow?.faixa1_percent !== null && metaRow?.faixa1_percent !== undefined) ||
-    (metaRow?.faixa2_percent !== null && metaRow?.faixa2_percent !== undefined) ||
-    (metaRow?.faixa3_percent !== null && metaRow?.faixa3_percent !== undefined);
-
-  return {
-    regraOrigem: (temOverride ? 'VENDEDOR' : 'GLOBAL') as 'VENDEDOR' | 'GLOBAL',
-    meta_mensal_usada,
-    faixa1_limite,
-    faixa2_limite,
-    faixa1_percent,
-    faixa2_percent,
-    faixa3_percent,
-  };
-}
-
 // ======================================================================
-// COMPONENTE
+// COMPONENTE PRINCIPAL
 // ======================================================================
 
 export default function VendedoresPage() {
-  const [vendedores, setVendedores] = useState<VendedorComMetricas[]>([]);
+  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [vendedorClientes, setVendedorClientes] = useState<VendedorCliente[]>([]);
   const [quilometragens, setQuilometragens] = useState<Quilometragem[]>([]);
   const [visitas, setVisitas] = useState<Visita[]>([]);
+
+  // Faturas do mês atual (emitidas, sem canceladas) para alimentar a aba "Vendas"
+  const [faturasMes, setFaturasMes] = useState<FaturaRow[]>([]);
+  const [frascosPorVendaMes, setFrascosPorVendaMes] = useState<Map<string, number>>(new Map());
+
+  const [configFinanceira, setConfigFinanceira] = useState<ConfiguracaoFinanceira | null>(null);
+  const [metricasMes, setMetricasMes] = useState<VendedorMetricasMes[]>([]);
+  const metricasByVendedorId = useMemo(() => {
+    const m = new Map<string, VendedorMetricasMes>();
+    for (const r of metricasMes) m.set(r.vendedor_id, r);
+    return m;
+  }, [metricasMes]);
 
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -283,20 +219,23 @@ export default function VendedoresPage() {
   const [modalEditarKm, setModalEditarKm] = useState(false);
   const [modalEditarVisita, setModalEditarVisita] = useState(false);
 
-  const [vendedorSelecionado, setVendedorSelecionado] = useState<VendedorComMetricas | null>(null);
+  const [vendedorSelecionado, setVendedorSelecionado] = useState<Vendedor | null>(null);
   const [kmSelecionada, setKmSelecionada] = useState<Quilometragem | null>(null);
   const [visitaSelecionada, setVisitaSelecionada] = useState<Visita | null>(null);
 
   const [abaAtiva, setAbaAtiva] = useState<'resumo' | 'carteira' | 'vendas' | 'km'>('resumo');
   const [buscaCliente, setBuscaCliente] = useState('');
 
-  // Período do relatório do vendedor (mantido, mas base SEM IVA via faturas)
-  const [tipoPeriodoRelatorio, setTipoPeriodoRelatorio] = useState<'MES_ATUAL' | 'ULTIMOS_30' | 'MES_ANTERIOR' | 'PERSONALIZADO'>('MES_ATUAL');
+  // Período do relatório do vendedor
+  const [tipoPeriodoRelatorio, setTipoPeriodoRelatorio] = useState<
+    'MES_ATUAL' | 'ULTIMOS_30' | 'MES_ANTERIOR' | 'PERSONALIZADO'
+  >('MES_ATUAL');
+
   const [dataInicioRelatorio, setDataInicioRelatorio] = useState<string>('');
   const [dataFimRelatorio, setDataFimRelatorio] = useState<string>('');
   const [mostrarModalPeriodo, setMostrarModalPeriodo] = useState(false);
 
-  // Formulários
+  // Estados para formulários
   const [novoVendedor, setNovoVendedor] = useState({
     nome: '',
     email: '',
@@ -313,12 +252,12 @@ export default function VendedoresPage() {
   const [novaVisita, setNovaVisita] = useState({
     cliente_id: '',
     data_visita: new Date().toISOString().split('T')[0],
-    estado: 'PENDENTE' as StatusVisita,
+    estado: 'PENDENTE',
     notas: '',
   });
 
   // ======================================================================
-  // INTERVALO DO RELATÓRIO (datas YYYY-MM-DD)
+  // INTERVALO DO RELATÓRIO (datas em UTC)
   // ======================================================================
 
   const calcularIntervaloRelatorio = () => {
@@ -339,12 +278,12 @@ export default function VendedoresPage() {
     let fim: Date;
 
     switch (tipoPeriodoRelatorio) {
-      case 'ULTIMOS_30':
+      case 'ULTIMOS_30': {
         fim = hoje;
         inicio = new Date(hoje);
         inicio.setDate(inicio.getDate() - 29);
         break;
-
+      }
       case 'MES_ANTERIOR': {
         const ano = hoje.getFullYear();
         const mesAnterior = hoje.getMonth() - 1;
@@ -352,7 +291,6 @@ export default function VendedoresPage() {
         fim = new Date(ano, mesAnterior + 1, 0);
         break;
       }
-
       case 'MES_ATUAL':
       default: {
         const ano = hoje.getFullYear();
@@ -367,7 +305,7 @@ export default function VendedoresPage() {
   };
 
   // ======================================================================
-  // CARREGAR DADOS (MÊS ATUAL - FATURAS EMITIDAS, BASE SEM IVA)
+  // CARREGAMENTO DE DADOS DO SUPABASE (FONTE ÚNICA = vendedor-metricas)
   // ======================================================================
 
   useEffect(() => {
@@ -380,14 +318,19 @@ export default function VendedoresPage() {
       setCarregando(true);
       setErro(null);
 
-      // 1) Carregar mês atual (UTC) e métricas consolidadas
+      // 0) Ano/mês atual (UTC)
       const { ano, mes } = getAnoMesAtualUtc();
+      const periodoMes = monthRangeUtc(ano, mes);
+
+      // 1) Config global (para telas e fallback)
+      const cfg = await buscarConfiguracaoFinanceira();
+      setConfigFinanceira(cfg);
+
+      // 2) Métricas do mês (SEM IVA, por faturas emitidas)
       const metricas = await getVendedorMetricasMes(ano, mes);
+      setMetricasMes(metricas);
 
-      const metricByVendedor = new Map<string, VendedorMetricasMes>();
-      metricas.forEach((m) => metricByVendedor.set(m.vendedor_id, m));
-
-      // 2) Carregar vendedores
+      // 3) Vendedores (dados cadastrais)
       const { data: vendedoresData, error: vendedoresError } = await supabase
         .from('vendedores')
         .select('*')
@@ -395,7 +338,7 @@ export default function VendedoresPage() {
 
       if (vendedoresError) throw vendedoresError;
 
-      // 3) Carregar clientes e relações (carteira)
+      // 4) Clientes
       const { data: clientesData, error: clientesError } = await supabase
         .from('clientes')
         .select('*')
@@ -403,10 +346,14 @@ export default function VendedoresPage() {
 
       if (clientesError) throw clientesError;
 
-      const { data: vendedorClientesData, error: vendedorClientesError } = await supabase.from('vendedor_clientes').select('*');
+      // 5) vendedor_clientes
+      const { data: vendedorClientesData, error: vendedorClientesError } = await supabase
+        .from('vendedor_clientes')
+        .select('*');
+
       if (vendedorClientesError) throw vendedorClientesError;
 
-      // 4) Quilometragens e visitas (para listagens e modais)
+      // 6) KM (mês e geral, para detalhe)
       const { data: quilometragensData, error: quilometragensError } = await supabase
         .from('vendedor_km')
         .select('*')
@@ -414,6 +361,7 @@ export default function VendedoresPage() {
 
       if (quilometragensError) throw quilometragensError;
 
+      // 7) Visitas (mês e geral, para detalhe)
       const { data: visitasData, error: visitasError } = await supabase
         .from('vendedor_visitas')
         .select('*')
@@ -421,46 +369,83 @@ export default function VendedoresPage() {
 
       if (visitasError) throw visitasError;
 
-      // 5) Montar vendedores com métricas (base SEM IVA)
-      const vendedoresComMetricas: VendedorComMetricas[] = (vendedoresData ?? []).map((v: any) => {
-        const m = metricByVendedor.get(v.id);
+      // 8) Faturas emitidas do mês atual (para lista "Vendas Recentes" no modal)
+      const { data: faturasData, error: faturasErr } = await supabase
+        .from('faturas')
+        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .eq('tipo', 'FATURA')
+        .neq('estado', 'CANCELADA')
+        .gte('data_emissao', periodoMes.inicioTsUtc)
+        .lt('data_emissao', periodoMes.fimTsUtc)
+        .order('data_emissao', { ascending: false });
 
-        const clientesAtivosCarteira = (vendedorClientesData ?? []).filter((vc: any) => vc.vendedor_id === v.id && vc.ativo).length;
+      if (faturasErr) throw faturasErr;
 
-        const faixaAtual = (m?.faixa_atual ?? 'FAIXA_1') as 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3';
-        const faixaPercentAtual =
-          faixaAtual === 'FAIXA_1' ? safeNum(m?.faixa1_percent) : faixaAtual === 'FAIXA_2' ? safeNum(m?.faixa2_percent) : safeNum(m?.faixa3_percent);
+      const faturas = (faturasData ?? []) as FaturaRow[];
+      setFaturasMes(faturas);
+
+      // 8.1) frascos por venda_id (mês) — para mostrar frascos por fatura
+      const vendaIds = Array.from(
+        new Set(
+          faturas
+            .map((f) => f.venda_id)
+            .filter((id): id is string => !!id),
+        ),
+      );
+
+      const frascosMap = new Map<string, number>();
+      if (vendaIds.length > 0) {
+        const BATCH = 500;
+        for (let i = 0; i < vendaIds.length; i += BATCH) {
+          const chunk = vendaIds.slice(i, i + BATCH);
+          const { data: itensData, error: itensErr } = await supabase
+            .from('venda_itens')
+            .select('venda_id, quantidade')
+            .in('venda_id', chunk);
+
+          if (itensErr) throw itensErr;
+
+          for (const it of itensData ?? []) {
+            const vid = it.venda_id as string;
+            const q = safeNum((it as any).quantidade);
+            frascosMap.set(vid, (frascosMap.get(vid) ?? 0) + q);
+          }
+        }
+      }
+      setFrascosPorVendaMes(frascosMap);
+
+      // 9) Merge: vendedores + métricas (fonte única)
+      const metricasById = new Map<string, VendedorMetricasMes>();
+      for (const r of metricas) metricasById.set(r.vendedor_id, r);
+
+      const vendedoresComMetricas = (vendedoresData || []).map((vendedor: any) => {
+        const m = metricasById.get(vendedor.id);
+
+        const vendasMes = safeNum(m?.base_sem_iva ?? 0);
+        const comissaoMes = safeNum(m?.comissao_calculada ?? 0);
+        const frascosMes = Math.trunc(safeNum(m?.frascos ?? 0));
+        const percentualMeta = safeNum(m?.percentual_meta ?? 0);
+        const clientesAtivos = Math.trunc(safeNum(m?.clientes_unicos ?? 0));
+        const kmRodadosMes = safeNum(m?.km_rodados ?? 0);
+        const custoKmMes = safeNum(m?.custo_km ?? 0);
 
         return {
-          ...v,
-          baseSemIvaMes: safeNum(m?.base_sem_iva ?? 0),
-          comissaoMes: safeNum(m?.comissao_calculada ?? 0),
-          frascosMes: safeNum(m?.frascos ?? 0),
-          percentualMetaMes: safeNum(m?.percentual_meta ?? 0),
-          metaMensalUsada: safeNum(m?.meta_mensal_usada ?? 0),
-          faixaAtual,
-          faixaPercentAtual: safeNum(faixaPercentAtual),
-
-          clientesAtivos: clientesAtivosCarteira,
-          clientesUnicosFaturadosMes: safeNum(m?.clientes_unicos ?? 0),
-          numFaturasMes: safeNum(m?.num_faturas ?? 0),
-          kmRodadosMes: safeNum(m?.km_rodados ?? 0),
-          custoKmMes: safeNum(m?.custo_km ?? 0),
-
-          visitasMes: safeNum(m?.visitas_total ?? 0),
-          visitasPendentesMes: safeNum(m?.visitas_pendentes ?? 0),
-          visitasRealizadasMes: safeNum(m?.visitas_realizadas ?? 0),
-          visitasCanceladasMes: safeNum(m?.visitas_canceladas ?? 0),
-
-          regraOrigem: (m?.regra_origem ?? 'GLOBAL') as 'VENDEDOR' | 'GLOBAL',
-        };
+          ...vendedor,
+          vendasMes,
+          comissaoMes,
+          frascosMes,
+          percentualMeta,
+          clientesAtivos,
+          kmRodadosMes,
+          custoKmMes,
+        } as Vendedor;
       });
 
       setVendedores(vendedoresComMetricas);
-      setClientes((clientesData ?? []) as any);
-      setVendedorClientes((vendedorClientesData ?? []) as any);
-      setQuilometragens((quilometragensData ?? []) as any);
-      setVisitas((visitasData ?? []) as any);
+      setClientes((clientesData || []) as any);
+      setVendedorClientes((vendedorClientesData || []) as any);
+      setQuilometragens((quilometragensData || []) as any);
+      setVisitas((visitasData || []) as any);
     } catch (error: any) {
       console.error('Erro ao carregar dados:', error);
 
@@ -490,13 +475,15 @@ export default function VendedoresPage() {
   // ======================================================================
 
   const vendedoresFiltrados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    if (!q) return vendedores;
     return vendedores.filter(
-      (v) => v.nome.toLowerCase().includes(busca.toLowerCase()) || v.email.toLowerCase().includes(busca.toLowerCase()),
+      (v) => v.nome.toLowerCase().includes(q) || (v.email || '').toLowerCase().includes(q),
     );
-  }, [vendedores, busca]);
+  }, [busca, vendedores]);
 
   // ======================================================================
-  // CRUD VENDEDOR
+  // FUNÇÕES DE MANIPULAÇÃO
   // ======================================================================
 
   const salvarNovoVendedor = async () => {
@@ -506,24 +493,27 @@ export default function VendedoresPage() {
     }
 
     try {
-      const { error } = await supabase
-        .from('vendedores')
-        .insert([
-          {
-            nome: novoVendedor.nome,
-            email: novoVendedor.email,
-            telefone: novoVendedor.telefone,
-            salario_base: novoVendedor.salario_base,
-            custo_km: novoVendedor.custo_km,
-            ativo: true,
-          },
-        ])
-        .select();
+      const { error } = await supabase.from('vendedores').insert([
+        {
+          nome: novoVendedor.nome,
+          email: novoVendedor.email,
+          telefone: novoVendedor.telefone,
+          salario_base: novoVendedor.salario_base,
+          custo_km: novoVendedor.custo_km,
+          ativo: true,
+        },
+      ]);
 
       if (error) throw error;
 
       setModalNovo(false);
-      setNovoVendedor({ nome: '', email: '', telefone: '', salario_base: 0, custo_km: 0.4 });
+      setNovoVendedor({
+        nome: '',
+        email: '',
+        telefone: '',
+        salario_base: 0,
+        custo_km: 0.4,
+      });
 
       await carregarDados();
       alert('Vendedor cadastrado com sucesso!');
@@ -548,15 +538,11 @@ export default function VendedoresPage() {
     }
   };
 
-  const abrirDetalhes = (vendedor: VendedorComMetricas) => {
+  const abrirDetalhes = (vendedor: Vendedor) => {
     setVendedorSelecionado(vendedor);
     setAbaAtiva('resumo');
     setModalDetalhes(true);
   };
-
-  // ======================================================================
-  // KM / VISITAS
-  // ======================================================================
 
   const abrirModalAdicionarKm = () => {
     setNovaKm({ data: new Date().toISOString().split('T')[0], km: 0 });
@@ -696,7 +682,7 @@ export default function VendedoresPage() {
     setNovaVisita({
       cliente_id: visita.cliente_id,
       data_visita: visita.data_visita,
-      estado: (visita.estado as any) ?? 'PENDENTE',
+      estado: visita.estado,
       notas: visita.notas,
     });
     setModalEditarVisita(true);
@@ -745,7 +731,7 @@ export default function VendedoresPage() {
   };
 
   // ======================================================================
-  // CARTEIRA (vendedor_clientes)
+  // CARTEIRA: ADICIONAR/REMOVER
   // ======================================================================
 
   const abrirModalAdicionarCliente = () => {
@@ -757,17 +743,15 @@ export default function VendedoresPage() {
     if (!vendedorSelecionado) return;
 
     try {
-      const { data: existente, error: existenteError } = await supabase
+      const { data: existente } = await supabase
         .from('vendedor_clientes')
         .select('*')
         .eq('vendedor_id', vendedorSelecionado.id)
         .eq('cliente_id', clienteId)
         .maybeSingle();
 
-      if (existenteError) throw existenteError;
-
-      if (existente) {
-        const { error } = await supabase.from('vendedor_clientes').update({ ativo: true }).eq('id', (existente as any).id);
+      if (existente?.id) {
+        const { error } = await supabase.from('vendedor_clientes').update({ ativo: true }).eq('id', existente.id);
         if (error) throw error;
       } else {
         const { error } = await supabase.from('vendedor_clientes').insert([
@@ -807,167 +791,7 @@ export default function VendedoresPage() {
   };
 
   // ======================================================================
-  // RELATÓRIO DO VENDEDOR (BASE SEM IVA, POR FATURAS EMITIDAS)
-  // ======================================================================
-
-  const gerarRelatorioMensal = async () => {
-    if (!vendedorSelecionado) return;
-
-    try {
-      const { dataInicio, dataFim } = calcularIntervaloRelatorio();
-
-      // Para comissão/meta por período: usamos as regras do mês da dataInicio.
-      // (Na prática, você está usando “mês atual”, então fica 100% consistente.)
-      const ano = Number(dataInicio.slice(0, 4));
-      const mes = Number(dataInicio.slice(5, 7));
-      const { inicioTs, fimTs, inicioDate, fimDate } = monthRangeUtc(ano, mes);
-
-      const cfg = await buscarConfiguracaoFinanceira();
-      const metaRow = await fetchMetaMensalVendedor(ano, mes, vendedorSelecionado.id);
-      const regra = pickRegra(cfg, metaRow);
-
-      // Faturas do período (join via vendas -> vendedor)
-      const inicioPeriodo = new Date(`${dataInicio}T00:00:00.000Z`).toISOString();
-      const fimPeriodoExclusivo = new Date(new Date(`${dataFim}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-      const { data: faturasData, error: faturasErr } = await supabase
-        .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
-        .eq('tipo', 'FATURA')
-        .neq('estado', 'CANCELADA')
-        .eq('vendas.vendedor_id', vendedorSelecionado.id)
-        .gte('data_emissao', inicioPeriodo)
-        .lt('data_emissao', fimPeriodoExclusivo);
-
-      if (faturasErr) throw faturasErr;
-
-      const faturas = (faturasData ?? []) as FaturaRow[];
-
-      const vendasIds = Array.from(
-        new Set(
-          faturas
-            .map((f) => f.venda_id)
-            .filter((x): x is string => Boolean(x)),
-        ),
-      );
-
-      // Itens para contar frascos (somente venda_ids do período)
-      let itens: VendaItem[] = [];
-      if (vendasIds.length > 0) {
-        const { data: itensData, error: itensErr } = await supabase
-          .from('venda_itens')
-          .select('id, venda_id, quantidade')
-          .in('venda_id', vendasIds);
-
-        if (itensErr) throw itensErr;
-        itens = (itensData ?? []) as any;
-      }
-
-      const frascosPeriodo = itens.reduce((sum, it) => sum + safeNum(it.quantidade), 0);
-
-      const vendasPeriodo = faturas
-        .map((f) => {
-          const cliente = clientes.find((c) => c.id === f.cliente_id);
-          const baseSemIva = safeNum(f.total_sem_iva ?? 0);
-
-          // frascos por venda_id (se houver)
-          const frascosVenda =
-            f.venda_id ? itens.filter((it) => it.venda_id === f.venda_id).reduce((s, it) => s + safeNum(it.quantidade), 0) : 0;
-
-          return {
-            id: f.id,
-            data: f.data_emissao,
-            cliente_nome: cliente?.nome || 'N/A',
-            total_sem_iva: baseSemIva,
-            frascos: frascosVenda,
-            numero: f.numero ?? '',
-            estado: f.estado ?? '',
-          };
-        })
-        .sort((a, b) => String(a.data).localeCompare(String(b.data)));
-
-      const baseSemIvaPeriodo = vendasPeriodo.reduce((sum, v) => sum + safeNum(v.total_sem_iva), 0);
-
-      // KM do período (data é date)
-      const quilometragensPeriodo = quilometragens.filter(
-        (km) => km.vendedor_id === vendedorSelecionado.id && km.data >= dataInicio && km.data <= dataFim,
-      );
-
-      const kmRodadosPeriodo = quilometragensPeriodo.reduce((sum, km) => sum + safeNum(km.km), 0);
-      const custoKmPeriodo = quilometragensPeriodo.reduce((sum, km) => sum + safeNum(km.valor), 0);
-
-      // Visitas do período
-      const visitasPeriodo = visitas
-        .filter((v) => v.vendedor_id === vendedorSelecionado.id && v.data_visita >= dataInicio && v.data_visita <= dataFim)
-        .map((v) => {
-          const cliente = clientes.find((c) => c.id === v.cliente_id);
-          return {
-            id: v.id,
-            data_visita: v.data_visita,
-            estado: v.estado,
-            notas: v.notas,
-            cliente_nome: cliente?.nome || 'N/A',
-          };
-        });
-
-      // Comissão e meta (SEM IVA)
-      const { comissao, faixa } = calcComissaoProgressivaLocal(baseSemIvaPeriodo, {
-        faixa1_limite: regra.faixa1_limite,
-        faixa1_percent: regra.faixa1_percent,
-        faixa2_limite: regra.faixa2_limite,
-        faixa2_percent: regra.faixa2_percent,
-        faixa3_percent: regra.faixa3_percent,
-      });
-
-      const percentualMetaPeriodo = calcPercentualMetaLocal(baseSemIvaPeriodo, regra.meta_mensal_usada);
-      const faixaPercent = pickFaixaPercent(faixa, regra);
-
-      const vendedorInfo = {
-        nome: vendedorSelecionado.nome,
-        email: vendedorSelecionado.email,
-        telefone: vendedorSelecionado.telefone,
-        ativo: vendedorSelecionado.ativo,
-      };
-
-      const resumo = {
-        // Mantém chaves antigas esperadas pelo PDF (sem IVA agora)
-        vendasMes: baseSemIvaPeriodo,
-        frascosMes: frascosPeriodo,
-        comissaoMes: comissao,
-        clientesAtivos: vendedorSelecionado.clientesAtivos,
-        kmRodadosMes: kmRodadosPeriodo,
-        custoKmMes: custoKmPeriodo,
-        percentualMeta: percentualMetaPeriodo,
-
-        // extras úteis
-        metaMensalUsada: regra.meta_mensal_usada,
-        faixaAtual: faixa,
-        faixaPercentAtual: faixaPercent,
-      };
-
-      await gerarRelatorioVendedorPdf({
-        vendedor: vendedorInfo,
-        intervalo: { dataInicio, dataFim },
-        resumo,
-        // mapeia “vendas” como “faturas emitidas”
-        vendas: vendasPeriodo.map((v) => ({
-          id: v.id,
-          data: v.data,
-          cliente_nome: v.cliente_nome,
-          total_com_iva: v.total_sem_iva, // o gerador pode estar nomeado assim; aqui vai SEM IVA por regra do projeto
-          frascos: v.frascos,
-        })),
-        quilometragens: quilometragensPeriodo,
-        visitas: visitasPeriodo,
-      });
-    } catch (error: any) {
-      console.error('Erro ao gerar relatório do vendedor:', error);
-      alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
-    }
-  };
-
-  // ======================================================================
-  // DERIVAÇÕES (selecionado)
+  // DADOS DO VENDEDOR SELECIONADO (DETALHES)
   // ======================================================================
 
   const clientesDoVendedor = useMemo(() => {
@@ -975,7 +799,7 @@ export default function VendedoresPage() {
     return vendedorClientes
       .filter((vc) => vc.vendedor_id === vendedorSelecionado.id && vc.ativo)
       .map((vc) => clientes.find((c) => c.id === vc.cliente_id))
-      .filter((c): c is Cliente => Boolean(c));
+      .filter((c): c is Cliente => !!c);
   }, [vendedorSelecionado, vendedorClientes, clientes]);
 
   const kmDoVendedor = useMemo(() => {
@@ -988,25 +812,213 @@ export default function VendedoresPage() {
     return visitas.filter((v) => v.vendedor_id === vendedorSelecionado.id);
   }, [vendedorSelecionado, visitas]);
 
+  const faturasDoVendedorMesAtual = useMemo(() => {
+    if (!vendedorSelecionado) return [];
+    return faturasMes.filter((f) => (f.vendas as any)?.vendedor_id === vendedorSelecionado.id);
+  }, [vendedorSelecionado, faturasMes]);
+
   const clientesJaNaCarteira = useMemo(() => {
     if (!vendedorSelecionado) return [];
-    return vendedorClientes.filter((vc) => vc.vendedor_id === vendedorSelecionado.id && vc.ativo).map((vc) => vc.cliente_id);
+    return vendedorClientes
+      .filter((vc) => vc.vendedor_id === vendedorSelecionado.id && vc.ativo)
+      .map((vc) => vc.cliente_id);
   }, [vendedorSelecionado, vendedorClientes]);
 
   const clientesDisponiveis = useMemo(() => {
+    const q = buscaCliente.trim().toLowerCase();
     return clientes
       .filter((c) => !clientesJaNaCarteira.includes(c.id))
-      .filter(
-        (c) =>
-          c.nome.toLowerCase().includes(buscaCliente.toLowerCase()) ||
-          (c.localidade && c.localidade.toLowerCase().includes(buscaCliente.toLowerCase())),
-      );
+      .filter((c) => c.nome.toLowerCase().includes(q) || (c.localidade || '').toLowerCase().includes(q));
   }, [clientes, clientesJaNaCarteira, buscaCliente]);
 
-  const valorCalculadoKm = vendedorSelecionado ? safeNum(novaKm.km) * safeNum(vendedorSelecionado.custo_km) : 0;
+  const valorCalculadoKm = vendedorSelecionado ? novaKm.km * safeNum(vendedorSelecionado.custo_km) : 0;
 
   // ======================================================================
-  // RENDER
+  // RELATÓRIO DO VENDEDOR (SEM IVA / FATURAS EMITIDAS)
+  // ======================================================================
+
+  const gerarRelatorioMensal = async () => {
+    if (!vendedorSelecionado) return;
+    if (!configFinanceira) {
+      alert('Configuração financeira não carregada. Tente recarregar a página.');
+      return;
+    }
+
+    try {
+      const { dataInicio, dataFim } = calcularIntervaloRelatorio();
+      const rangeTs = dayRangeUtcInclusive(dataInicio, dataFim);
+
+      // 1) Buscar faturas emitidas no período (SEM IVA)
+      const { data: faturasData, error: faturasErr } = await supabase
+        .from('faturas')
+        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .eq('tipo', 'FATURA')
+        .neq('estado', 'CANCELADA')
+        .eq('vendas.vendedor_id', vendedorSelecionado.id)
+        .gte('data_emissao', rangeTs.inicioTsUtc)
+        .lt('data_emissao', rangeTs.fimTsUtc)
+        .order('data_emissao', { ascending: true });
+
+      if (faturasErr) throw faturasErr;
+
+      const faturasPeriodo = (faturasData ?? []) as FaturaRow[];
+
+      // 2) Frascos por venda_id (período)
+      const vendaIds = Array.from(
+        new Set(
+          faturasPeriodo
+            .map((f) => f.venda_id)
+            .filter((id): id is string => !!id),
+        ),
+      );
+
+      const frascosMap = new Map<string, number>();
+      if (vendaIds.length > 0) {
+        const BATCH = 500;
+        for (let i = 0; i < vendaIds.length; i += BATCH) {
+          const chunk = vendaIds.slice(i, i + BATCH);
+          const { data: itensData, error: itensErr } = await supabase
+            .from('venda_itens')
+            .select('venda_id, quantidade')
+            .in('venda_id', chunk);
+
+          if (itensErr) throw itensErr;
+
+          for (const it of itensData ?? []) {
+            const vid = it.venda_id as string;
+            const q = safeNum((it as any).quantidade);
+            frascosMap.set(vid, (frascosMap.get(vid) ?? 0) + q);
+          }
+        }
+      }
+
+      const vendasPeriodo = faturasPeriodo.map((fat) => {
+        const cliente = clientes.find((c) => c.id === fat.cliente_id);
+        const frascos = fat.venda_id ? safeNum(frascosMap.get(fat.venda_id) ?? 0) : 0;
+        const base = safeNum(fat.total_sem_iva ?? fat.subtotal ?? 0);
+        return {
+          id: fat.id,
+          data: fat.data_emissao,
+          cliente_nome: cliente?.nome || 'N/A',
+          total_com_iva: base, // mantemos o campo que o PDF espera, mas aqui é SEM IVA
+          frascos,
+        };
+      });
+
+      const faturacaoPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.total_com_iva), 0);
+      const frascosPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.frascos), 0);
+
+      // 3) KM do período (tabela date)
+      const { data: kmData, error: kmErr } = await supabase
+        .from('vendedor_km')
+        .select('id, vendedor_id, data, km, valor')
+        .eq('vendedor_id', vendedorSelecionado.id)
+        .gte('data', dataInicio)
+        .lte('data', dataFim);
+
+      if (kmErr) throw kmErr;
+
+      const quilometragensPeriodo = (kmData ?? []) as Quilometragem[];
+      const kmRodadosPeriodo = quilometragensPeriodo.reduce((t, r) => t + safeNum(r.km), 0);
+      const custoKmPeriodo = quilometragensPeriodo.reduce((t, r) => t + safeNum(r.valor), 0);
+
+      // 4) Visitas do período (tabela date)
+      const { data: visitasData, error: visitasErr } = await supabase
+        .from('vendedor_visitas')
+        .select('id, vendedor_id, cliente_id, data_visita, estado, notas')
+        .eq('vendedor_id', vendedorSelecionado.id)
+        .gte('data_visita', dataInicio)
+        .lte('data_visita', dataFim)
+        .order('data_visita', { ascending: true });
+
+      if (visitasErr) throw visitasErr;
+
+      const visitasPeriodo = (visitasData ?? []).map((vis: any) => {
+        const cliente = clientes.find((c) => c.id === vis.cliente_id);
+        return {
+          id: vis.id,
+          data_visita: vis.data_visita,
+          estado: vis.estado,
+          notas: vis.notas,
+          cliente_nome: cliente?.nome || 'N/A',
+        };
+      });
+
+      // 5) Comissão/meta do período:
+      //    Preferimos a regra do mês atual (quando aplicável) para consistência com o dashboard.
+      let comissaoPeriodo = 0;
+      let percentualMetaPeriodo = 0;
+
+      const { ano: anoAtual, mes: mesAtual } = getAnoMesAtualUtc();
+      const m = metricasByVendedorId.get(vendedorSelecionado.id);
+
+      if (
+        (tipoPeriodoRelatorio === 'MES_ATUAL' && m && m.ano === anoAtual && m.mes === mesAtual) ||
+        (tipoPeriodoRelatorio === 'MES_ANTERIOR' && m) ||
+        (tipoPeriodoRelatorio === 'ULTIMOS_30' && m) ||
+        (tipoPeriodoRelatorio === 'PERSONALIZADO' && m && tipoPeriodoRelatorio !== 'PERSONALIZADO')
+      ) {
+        // Se existir métrica carregada, usamos a regra dela (faixas + meta usada) e recalculamos sobre o período.
+        comissaoPeriodo = calcComissaoProgressivaFromRegra(faturacaoPeriodo, {
+          faixa1_limite: m.faixa1_limite,
+          faixa1_percent: m.faixa1_percent,
+          faixa2_limite: m.faixa2_limite,
+          faixa2_percent: m.faixa2_percent,
+          faixa3_percent: m.faixa3_percent,
+        });
+        percentualMetaPeriodo = calcPercentualMeta(faturacaoPeriodo, m.meta_mensal_usada);
+      } else {
+        // Fallback global (aqui pode não refletir overrides mensais do vendedor em períodos “fora do mês atual”)
+        comissaoPeriodo = calcComissaoProgressivaFromRegra(faturacaoPeriodo, {
+          faixa1_limite: safeNum((configFinanceira as any).faixa1_limite),
+          faixa1_percent: safeNum((configFinanceira as any).comissao_faixa1 ?? (configFinanceira as any).comissao_faixa1),
+          faixa2_limite: safeNum((configFinanceira as any).faixa2_limite),
+          faixa2_percent: safeNum((configFinanceira as any).comissao_faixa2 ?? (configFinanceira as any).comissao_faixa2),
+          faixa3_percent: safeNum((configFinanceira as any).comissao_faixa3 ?? (configFinanceira as any).comissao_faixa3),
+        });
+        percentualMetaPeriodo = calcPercentualMeta(faturacaoPeriodo, safeNum((configFinanceira as any).meta_mensal));
+      }
+
+      const vendedorInfo = {
+        nome: vendedorSelecionado.nome,
+        email: vendedorSelecionado.email,
+        telefone: vendedorSelecionado.telefone,
+        ativo: vendedorSelecionado.ativo,
+      };
+
+      const resumo = {
+        vendasMes: faturacaoPeriodo, // SEM IVA
+        frascosMes: frascosPeriodo,
+        comissaoMes: comissaoPeriodo,
+        clientesAtivos: vendedorSelecionado.clientesAtivos,
+        kmRodadosMes: kmRodadosPeriodo,
+        custoKmMes: custoKmPeriodo,
+        percentualMeta: percentualMetaPeriodo,
+
+        vendasPeriodo: faturacaoPeriodo,
+        frascosPeriodo,
+        comissaoPeriodo,
+        kmRodadosPeriodo,
+        custoKmPeriodo,
+        percentualMetaPeriodo,
+      };
+
+      await gerarRelatorioVendedorPdf({
+        vendedor: vendedorInfo,
+        intervalo: { dataInicio, dataFim },
+        resumo,
+        vendas: vendasPeriodo,
+        quilometragens: quilometragensPeriodo,
+        visitas: visitasPeriodo,
+      });
+    } catch (error: any) {
+      console.error('Erro ao gerar relatório do vendedor:', error);
+      alert('Erro ao gerar relatório do vendedor: ' + (error.message || 'Erro desconhecido'));
+    }
+  };
+
+  // ======================================================================
+  // RENDERIZAÇÃO
   // ======================================================================
 
   if (carregando) {
@@ -1032,10 +1044,16 @@ export default function VendedoresPage() {
               <h3 className="text-lg font-semibold text-red-900 mb-2">Erro ao carregar dados</h3>
               <div className="text-red-700 mb-4 whitespace-pre-line">{erro}</div>
               <div className="flex gap-3">
-                <button onClick={carregarDados} className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
+                <button
+                  onClick={carregarDados}
+                  className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+                >
                   Tentar Novamente
                 </button>
-                <button onClick={() => (window.location.href = '/')} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors">
+                <button
+                  onClick={() => (window.location.href = '/')}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors"
+                >
                   Voltar ao Início
                 </button>
               </div>
@@ -1053,9 +1071,7 @@ export default function VendedoresPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Vendedores</h1>
-            <p className="text-gray-600">
-              Gestão da equipa comercial (métricas por <span className="font-medium">faturas emitidas</span>, sempre em € <span className="font-medium">sem IVA</span>)
-            </p>
+            <p className="text-gray-600">Gestão da equipa comercial (métricas por faturas emitidas, € sem IVA)</p>
           </div>
           <button
             onClick={() => setModalNovo(true)}
@@ -1081,7 +1097,7 @@ export default function VendedoresPage() {
         </div>
       </div>
 
-      {/* Cards */}
+      {/* Cards de Vendedores */}
       {vendedoresFiltrados.length === 0 ? (
         <div className="text-center py-12">
           <UserCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -1100,7 +1116,10 @@ export default function VendedoresPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {vendedoresFiltrados.map((vendedor) => (
-            <div key={vendedor.id} className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition-all duration-300">
+            <div
+              key={vendedor.id}
+              className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition-all duration-300"
+            >
               <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-6 text-white">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
@@ -1111,13 +1130,6 @@ export default function VendedoresPage() {
                       <h3 className="text-lg font-bold">{vendedor.nome}</h3>
                       <p className="text-xs opacity-90">{vendedor.ativo ? 'Ativo' : 'Inativo'}</p>
                     </div>
-                  </div>
-
-                  <div className="text-right">
-                    <p className="text-xs opacity-90">Faixa atual</p>
-                    <p className="text-sm font-bold">
-                      {vendedor.faixaPercentAtual.toFixed(1)}% <span className="text-xs opacity-80">({vendedor.faixaAtual.replace('_', ' ')})</span>
-                    </p>
                   </div>
                 </div>
               </div>
@@ -1147,45 +1159,41 @@ export default function VendedoresPage() {
                   </div>
                 </div>
 
-                {/* Métricas (BASE SEM IVA) */}
+                {/* Métricas (MÊS ATUAL / SEM IVA) */}
                 <div className="border-t pt-4 space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Faturação (Mês) sem IVA</span>
+                    <span className="text-sm text-gray-600">Faturas Emitidas (Mês)</span>
                     <span className="font-bold text-purple-600">
-                      {vendedor.baseSemIvaMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                      {vendedor.vendasMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}
+                      €
                     </span>
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Frascos (Mês)</span>
+                    <span className="text-sm text-gray-600">Frascos Vendidos</span>
                     <span className="font-bold text-blue-600">{vendedor.frascosMes}</span>
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Comissão (Mês)</span>
+                    <span className="text-sm text-gray-600">Comissão (progressiva)</span>
                     <span className="font-bold text-green-600">
-                      {vendedor.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                      {vendedor.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}
+                      €
                     </span>
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-sm text-gray-600">Meta Mensal</span>
-                      <span className="text-sm font-semibold text-gray-900">{vendedor.percentualMetaMes.toFixed(0)}%</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {vendedor.percentualMeta.toFixed(0)}%
+                      </span>
                     </div>
-
                     <div className="w-full bg-gray-200 rounded-full h-2">
                       <div
                         className="bg-gradient-to-r from-purple-600 to-pink-600 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${Math.min(vendedor.percentualMetaMes, 100)}%` }}
+                        style={{ width: `${Math.min(vendedor.percentualMeta, 100)}%` }}
                       />
-                    </div>
-
-                    <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                      <span>
-                        Meta usada: {vendedor.metaMensalUsada.toLocaleString('pt-PT', { minimumFractionDigits: 0 })}€
-                      </span>
-                      <span>Regra: {vendedor.regraOrigem}</span>
                     </div>
                   </div>
                 </div>
@@ -1199,11 +1207,12 @@ export default function VendedoresPage() {
                     <Eye className="w-4 h-4" />
                     Detalhes
                   </button>
-
                   <button
                     onClick={() => toggleStatus(vendedor.id)}
                     className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg transition-colors ${
-                      vendedor.ativo ? 'bg-orange-50 text-orange-600 hover:bg-orange-100' : 'bg-green-50 text-green-600 hover:bg-green-100'
+                      vendedor.ativo
+                        ? 'bg-orange-50 text-orange-600 hover:bg-orange-100'
+                        : 'bg-green-50 text-green-600 hover:bg-green-100'
                     }`}
                   >
                     {vendedor.ativo ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
@@ -1216,7 +1225,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL NOVO VENDEDOR */}
+      {/* Modal Novo Vendedor */}
       {modalNovo && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -1305,7 +1314,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL DETALHES */}
+      {/* Modal Detalhes do Vendedor */}
       {modalDetalhes && vendedorSelecionado && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto">
@@ -1315,7 +1324,10 @@ export default function VendedoresPage() {
                   <h2 className="text-2xl font-bold">{vendedorSelecionado.nome}</h2>
                   <p className="text-sm opacity-90">{vendedorSelecionado.email}</p>
                 </div>
-                <button onClick={() => setModalDetalhes(false)} className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors">
+                <button
+                  onClick={() => setModalDetalhes(false)}
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
                   ✕
                 </button>
               </div>
@@ -1327,7 +1339,7 @@ export default function VendedoresPage() {
                 {[
                   { id: 'resumo', label: 'Painel Resumo', icon: TrendingUp },
                   { id: 'carteira', label: 'Carteira de Clientes', icon: Users },
-                  { id: 'vendas', label: 'Faturas & Comissão', icon: DollarSign },
+                  { id: 'vendas', label: 'Faturas & Comissões', icon: DollarSign },
                   { id: 'km', label: 'Quilometragem & Visitas', icon: MapPin },
                 ].map((aba) => (
                   <button
@@ -1346,24 +1358,24 @@ export default function VendedoresPage() {
 
             {/* Conteúdo */}
             <div className="p-6">
-              {/* ABA RESUMO */}
+              {/* ABA: RESUMO */}
               {abaAtiva === 'resumo' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-blue-600 font-medium">Faturação (Mês) sem IVA</span>
+                        <span className="text-sm text-blue-600 font-medium">Faturas Emitidas (Mês)</span>
                         <TrendingUp className="w-5 h-5 text-blue-600" />
                       </div>
                       <p className="text-2xl font-bold text-blue-900">
-                        {vendedorSelecionado.baseSemIvaMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {vendedorSelecionado.vendasMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                       </p>
-                      <p className="text-xs text-blue-700 mt-1">{vendedorSelecionado.numFaturasMes} faturas emitidas</p>
+                      <p className="text-xs text-blue-700 mt-1">Base sem IVA</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-green-600 font-medium">Frascos (Mês)</span>
+                        <span className="text-sm text-green-600 font-medium">Frascos Vendidos</span>
                         <Package className="w-5 h-5 text-green-600" />
                       </div>
                       <p className="text-2xl font-bold text-green-900">{vendedorSelecionado.frascosMes}</p>
@@ -1371,11 +1383,10 @@ export default function VendedoresPage() {
 
                     <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-purple-600 font-medium">Clientes (Carteira)</span>
+                        <span className="text-sm text-purple-600 font-medium">Clientes Únicos (Mês)</span>
                         <Building2 className="w-5 h-5 text-purple-600" />
                       </div>
                       <p className="text-2xl font-bold text-purple-900">{vendedorSelecionado.clientesAtivos}</p>
-                      <p className="text-xs text-purple-700 mt-1">{vendedorSelecionado.clientesUnicosFaturadosMes} clientes faturados no mês</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-xl">
@@ -1383,8 +1394,7 @@ export default function VendedoresPage() {
                         <span className="text-sm text-pink-600 font-medium">Meta Mensal</span>
                         <Target className="w-5 h-5 text-pink-600" />
                       </div>
-                      <p className="text-2xl font-bold text-pink-900">{vendedorSelecionado.percentualMetaMes.toFixed(0)}%</p>
-                      <p className="text-xs text-pink-700 mt-1">Meta usada: {vendedorSelecionado.metaMensalUsada.toLocaleString('pt-PT')}€</p>
+                      <p className="text-2xl font-bold text-pink-900">{vendedorSelecionado.percentualMeta.toFixed(0)}%</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-6 rounded-xl">
@@ -1395,29 +1405,15 @@ export default function VendedoresPage() {
                       <p className="text-2xl font-bold text-emerald-900">
                         {vendedorSelecionado.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                       </p>
-                      <p className="text-xs text-emerald-600 mt-1">
-                        Faixa: {vendedorSelecionado.faixaPercentAtual.toFixed(1)}% ({vendedorSelecionado.faixaAtual.replace('_', ' ')}) • Regra: {vendedorSelecionado.regraOrigem}
-                      </p>
+                      <p className="text-xs text-emerald-600 mt-1">Progressiva, sem IVA</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-orange-600 font-medium">Km rodados (Mês)</span>
+                        <span className="text-sm text-orange-600 font-medium">Km rodados no mês</span>
                         <MapPin className="w-5 h-5 text-orange-600" />
                       </div>
                       <p className="text-2xl font-bold text-orange-900">{vendedorSelecionado.kmRodadosMes.toFixed(0)} km</p>
-                      <p className="text-xs text-orange-700 mt-1">Custo: {vendedorSelecionado.custoKmMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€</p>
-                    </div>
-
-                    <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 p-6 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-cyan-600 font-medium">Visitas (Mês)</span>
-                        <Calendar className="w-5 h-5 text-cyan-600" />
-                      </div>
-                      <p className="text-2xl font-bold text-cyan-900">{vendedorSelecionado.visitasMes}</p>
-                      <p className="text-xs text-cyan-700 mt-1">
-                        Realizadas: {vendedorSelecionado.visitasRealizadasMes} • Pendentes: {vendedorSelecionado.visitasPendentesMes} • Canceladas: {vendedorSelecionado.visitasCanceladasMes}
-                      </p>
                     </div>
                   </div>
 
@@ -1431,7 +1427,7 @@ export default function VendedoresPage() {
                 </div>
               )}
 
-              {/* ABA CARTEIRA */}
+              {/* ABA: CARTEIRA */}
               {abaAtiva === 'carteira' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -1456,7 +1452,10 @@ export default function VendedoresPage() {
                       </div>
                     ) : (
                       clientesDoVendedor.map((cliente) => (
-                        <div key={cliente.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <div
+                          key={cliente.id}
+                          className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                        >
                           <div className="flex items-center gap-3">
                             <Building2 className="w-5 h-5 text-gray-400" />
                             <div>
@@ -1464,7 +1463,6 @@ export default function VendedoresPage() {
                               <p className="text-sm text-gray-600">{cliente.localidade || 'N/A'}</p>
                             </div>
                           </div>
-
                           <div className="flex items-center gap-2">
                             <span
                               className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
@@ -1473,7 +1471,6 @@ export default function VendedoresPage() {
                             >
                               {cliente.ativo ? 'Ativo' : 'Inativo'}
                             </span>
-
                             <button
                               onClick={() => removerClienteDoVendedor(cliente.id)}
                               className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -1489,48 +1486,73 @@ export default function VendedoresPage() {
                 </div>
               )}
 
-              {/* ABA FATURAS & COMISSÃO (resumo apenas) */}
+              {/* ABA: FATURAS & COMISSÕES */}
               {abaAtiva === 'vendas' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl">
-                      <p className="text-sm text-green-600 font-medium mb-2">Comissão (Mês)</p>
+                      <p className="text-sm text-green-600 font-medium mb-2">Comissão do Mês</p>
                       <p className="text-2xl font-bold text-green-900">
                         {vendedorSelecionado.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                       </p>
-                      <p className="text-xs text-green-700 mt-1">
-                        Faixa atual: {vendedorSelecionado.faixaPercentAtual.toFixed(1)}% ({vendedorSelecionado.faixaAtual.replace('_', ' ')})
-                      </p>
+                      <p className="text-xs text-green-700 mt-1">Progressiva, base sem IVA</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-xl">
-                      <p className="text-sm text-blue-600 font-medium mb-2">Faturação (Mês) sem IVA</p>
+                      <p className="text-sm text-blue-600 font-medium mb-2">Faturas Emitidas (Mês)</p>
                       <p className="text-2xl font-bold text-blue-900">
-                        {vendedorSelecionado.baseSemIvaMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        {vendedorSelecionado.vendasMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                       </p>
-                      <p className="text-xs text-blue-700 mt-1">{vendedorSelecionado.numFaturasMes} faturas emitidas</p>
+                      <p className="text-xs text-blue-700 mt-1">Sem IVA</p>
                     </div>
 
                     <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-6 rounded-xl">
-                      <p className="text-sm text-purple-600 font-medium mb-2">Frascos (Mês)</p>
+                      <p className="text-sm text-purple-600 font-medium mb-2">Frascos Vendidos (Mês)</p>
                       <p className="text-2xl font-bold text-purple-900">{vendedorSelecionado.frascosMes}</p>
                     </div>
                   </div>
 
-                  <div className="bg-white border rounded-xl p-4">
-                    <p className="text-sm text-gray-600">
-                      A listagem detalhada de faturas por vendedor é gerada no PDF (botão em “Painel Resumo”), pois o cálculo oficial da comissão usa{' '}
-                      <span className="font-medium">faturas emitidas</span> e base{' '}
-                      <span className="font-medium">sem IVA</span>.
-                    </p>
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-4">Faturas Recentes (Mês Atual)</h3>
+                    <div className="space-y-2">
+                      {faturasDoVendedorMesAtual.length === 0 ? (
+                        <div className="text-center py-8 text-gray-500">
+                          <FileText className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                          <p>Nenhuma fatura emitida no mês atual</p>
+                        </div>
+                      ) : (
+                        faturasDoVendedorMesAtual.map((fat) => {
+                          const cliente = clientes.find((c) => c.id === fat.cliente_id);
+                          const base = safeNum(fat.total_sem_iva ?? fat.subtotal ?? 0);
+                          const frascos = fat.venda_id ? safeNum(frascosPorVendaMes.get(fat.venda_id) ?? 0) : 0;
+
+                          return (
+                            <div key={fat.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                              <div>
+                                <p className="font-medium text-gray-900">{cliente?.nome || 'Cliente não encontrado'}</p>
+                                <p className="text-sm text-gray-600">
+                                  {new Date(fat.data_emissao).toLocaleDateString('pt-PT')} • {frascos} frascos •{' '}
+                                  {(fat.estado || 'N/A').toString()}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold text-purple-600">
+                                  {base.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                                </p>
+                                <p className="text-sm text-gray-600">sem IVA</p>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* ABA KM & VISITAS */}
+              {/* ABA: QUILOMETRAGEM & VISITAS */}
               {abaAtiva === 'km' && (
                 <div className="space-y-6">
-                  {/* KM */}
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-bold text-gray-900">Quilometragem</h3>
@@ -1555,14 +1577,16 @@ export default function VendedoresPage() {
                             <div className="flex items-center gap-3">
                               <MapPin className="w-5 h-5 text-gray-400" />
                               <div>
-                                <p className="font-medium text-gray-900">{new Date(km.data).toLocaleDateString('pt-PT')}</p>
+                                <p className="font-medium text-gray-900">
+                                  {new Date(km.data).toLocaleDateString('pt-PT')}
+                                </p>
                                 <p className="text-sm text-gray-600">{km.km} km</p>
                               </div>
                             </div>
-
                             <div className="flex items-center gap-2">
-                              <p className="font-bold text-blue-600">{km.valor.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€</p>
-
+                              <p className="font-bold text-blue-600">
+                                {safeNum(km.valor).toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                              </p>
                               <button
                                 onClick={() => abrirModalEditarKm(km)}
                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -1570,7 +1594,6 @@ export default function VendedoresPage() {
                               >
                                 <Edit className="w-4 h-4" />
                               </button>
-
                               <button
                                 onClick={() => excluirKm(km.id)}
                                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -1585,7 +1608,6 @@ export default function VendedoresPage() {
                     </div>
                   </div>
 
-                  {/* VISITAS */}
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-bold text-gray-900">Visitas</h3>
@@ -1607,30 +1629,29 @@ export default function VendedoresPage() {
                       ) : (
                         visitasDoVendedor.map((visita) => {
                           const cliente = clientes.find((c) => c.id === visita.cliente_id);
-
                           return (
                             <div key={visita.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                               <div className="flex items-center gap-3">
                                 <Calendar className="w-5 h-5 text-gray-400" />
                                 <div>
                                   <p className="font-medium text-gray-900">{cliente?.nome || 'Cliente não encontrado'}</p>
-                                  <p className="text-sm text-gray-600">{new Date(visita.data_visita).toLocaleDateString('pt-PT')}</p>
+                                  <p className="text-sm text-gray-600">
+                                    {new Date(visita.data_visita).toLocaleDateString('pt-PT')}
+                                  </p>
                                 </div>
                               </div>
-
                               <div className="flex items-center gap-2">
                                 <span
                                   className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
-                                    String(visita.estado).toUpperCase() === 'REALIZADA'
+                                    visita.estado === 'REALIZADA'
                                       ? 'bg-green-100 text-green-800'
-                                      : String(visita.estado).toUpperCase() === 'PENDENTE'
+                                      : visita.estado === 'PENDENTE'
                                       ? 'bg-yellow-100 text-yellow-800'
                                       : 'bg-red-100 text-red-800'
                                   }`}
                                 >
-                                  {String(visita.estado).toUpperCase()}
+                                  {visita.estado}
                                 </span>
-
                                 <button
                                   onClick={() => abrirModalEditarVisita(visita)}
                                   className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -1638,7 +1659,6 @@ export default function VendedoresPage() {
                                 >
                                   <Edit className="w-4 h-4" />
                                 </button>
-
                                 <button
                                   onClick={() => excluirVisita(visita.id)}
                                   className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -1660,14 +1680,17 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL PERÍODO */}
+      {/* Modal Período do Relatório */}
       {mostrarModalPeriodo && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold">Período do Relatório</h2>
-                <button onClick={() => setMostrarModalPeriodo(false)} className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors">
+                <button
+                  onClick={() => setMostrarModalPeriodo(false)}
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
                   ✕
                 </button>
               </div>
@@ -1727,7 +1750,6 @@ export default function VendedoresPage() {
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
-
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Data fim</label>
                     <input
@@ -1747,7 +1769,6 @@ export default function VendedoresPage() {
                 >
                   Cancelar
                 </button>
-
                 <button
                   onClick={async () => {
                     if (tipoPeriodoRelatorio === 'PERSONALIZADO' && (!dataInicioRelatorio || !dataFimRelatorio)) {
@@ -1767,14 +1788,17 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL ADICIONAR CLIENTE */}
+      {/* Modal Adicionar Cliente */}
       {modalAdicionarCliente && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white p-6 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold">Adicionar Cliente à Carteira</h2>
-                <button onClick={() => setModalAdicionarCliente(false)} className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors">
+                <button
+                  onClick={() => setModalAdicionarCliente(false)}
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
                   ✕
                 </button>
               </div>
@@ -1800,7 +1824,10 @@ export default function VendedoresPage() {
                   </div>
                 ) : (
                   clientesDisponiveis.map((cliente) => (
-                    <div key={cliente.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                    <div
+                      key={cliente.id}
+                      className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                    >
                       <div className="flex items-center gap-3">
                         <Building2 className="w-5 h-5 text-gray-400" />
                         <div>
@@ -1808,7 +1835,6 @@ export default function VendedoresPage() {
                           <p className="text-sm text-gray-600">{cliente.localidade || 'N/A'}</p>
                         </div>
                       </div>
-
                       <button
                         onClick={() => adicionarClienteAoVendedor(cliente.id)}
                         className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
@@ -1825,7 +1851,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL ADICIONAR KM */}
+      {/* Modal Adicionar KM */}
       {modalAdicionarKm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
@@ -1870,10 +1896,16 @@ export default function VendedoresPage() {
               </div>
 
               <div className="flex gap-3 pt-4">
-                <button onClick={adicionarKm} className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all">
+                <button
+                  onClick={adicionarKm}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all"
+                >
                   Adicionar
                 </button>
-                <button onClick={() => setModalAdicionarKm(false)} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all">
+                <button
+                  onClick={() => setModalAdicionarKm(false)}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+                >
                   Cancelar
                 </button>
               </div>
@@ -1882,7 +1914,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL EDITAR KM */}
+      {/* Modal Editar KM */}
       {modalEditarKm && kmSelecionada && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
@@ -1926,10 +1958,16 @@ export default function VendedoresPage() {
               </div>
 
               <div className="flex gap-3 pt-4">
-                <button onClick={salvarEdicaoKm} className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all">
+                <button
+                  onClick={salvarEdicaoKm}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all"
+                >
                   Salvar
                 </button>
-                <button onClick={() => setModalEditarKm(false)} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all">
+                <button
+                  onClick={() => setModalEditarKm(false)}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+                >
                   Cancelar
                 </button>
               </div>
@@ -1938,7 +1976,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL ADICIONAR VISITA */}
+      {/* Modal Adicionar Visita */}
       {modalAdicionarVisita && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
@@ -1977,7 +2015,7 @@ export default function VendedoresPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
                 <select
                   value={novaVisita.estado}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value as any })}
+                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 >
                   <option value="PENDENTE">Pendente</option>
@@ -1998,10 +2036,16 @@ export default function VendedoresPage() {
               </div>
 
               <div className="flex gap-3 pt-4">
-                <button onClick={adicionarVisita} className="flex-1 bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 transition-all">
+                <button
+                  onClick={adicionarVisita}
+                  className="flex-1 bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 transition-all"
+                >
                   Adicionar
                 </button>
-                <button onClick={() => setModalAdicionarVisita(false)} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all">
+                <button
+                  onClick={() => setModalAdicionarVisita(false)}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+                >
                   Cancelar
                 </button>
               </div>
@@ -2010,7 +2054,7 @@ export default function VendedoresPage() {
         </div>
       )}
 
-      {/* MODAL EDITAR VISITA */}
+      {/* Modal Editar Visita */}
       {modalEditarVisita && visitaSelecionada && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
@@ -2049,7 +2093,7 @@ export default function VendedoresPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
                 <select
                   value={novaVisita.estado}
-                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value as any })}
+                  onChange={(e) => setNovaVisita({ ...novaVisita, estado: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 >
                   <option value="PENDENTE">Pendente</option>
@@ -2070,10 +2114,16 @@ export default function VendedoresPage() {
               </div>
 
               <div className="flex gap-3 pt-4">
-                <button onClick={salvarEdicaoVisita} className="flex-1 bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 transition-all">
+                <button
+                  onClick={salvarEdicaoVisita}
+                  className="flex-1 bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 transition-all"
+                >
                   Salvar
                 </button>
-                <button onClick={() => setModalEditarVisita(false)} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all">
+                <button
+                  onClick={() => setModalEditarVisita(false)}
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-all"
+                >
                   Cancelar
                 </button>
               </div>
@@ -2084,3 +2134,4 @@ export default function VendedoresPage() {
     </div>
   );
 }
+
