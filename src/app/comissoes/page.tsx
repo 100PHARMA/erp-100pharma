@@ -1,398 +1,210 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
-  TrendingUp,
-  DollarSign,
-  Users,
-  Package,
-  Receipt,
-  Target,
-  RefreshCw,
-  Eye,
-  X,
+  Trophy,
+  Search,
+  AlertCircle,
+  RefreshCcw,
   Lock,
+  Unlock,
+  DollarSign,
+  TrendingUp,
+  Target,
 } from 'lucide-react';
+
 import { supabase } from '@/lib/supabase';
-import {
-  buscarConfiguracaoFinanceira,
-  type ConfiguracaoFinanceira,
-} from '@/lib/configuracoes-financeiras';
+import { PeriodoMesPicker } from '@/components/PeriodoMesPicker';
+import { getVendedorMetricasMes, type VendedorMetricasMes } from '@/lib/vendedor-metricas';
 
-// =====================================================
-// TIPOS
-// =====================================================
-
-type RowComissao = {
-  vendedor_id: string;
-  vendedor_nome: string;
-
-  base_sem_iva: number;
-  comissao_calculada: number;
-
-  faixa_atual: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3';
-  percentual_meta: number;
-
-  falta_para_3000: number;
-  falta_para_7000: number;
-
-  num_faturas: number;
-  clientes_unicos: number;
-  frascos: number;
-
-  ticket_medio: number;
-  preco_medio_frasco: number;
-
-  faturas_pagas: number;
-  faturas_pendentes: number;
-
-    // usado quando mês está FECHADO (vem do snapshot)
-  comissao_faixa1?: number;
-  comissao_faixa2?: number;
-  comissao_faixa3?: number;
-};
-
-type SortKey =
-  | 'base_sem_iva'
-  | 'comissao_calculada'
-  | 'frascos'
-  | 'clientes_unicos'
-  | 'num_faturas'
-  | 'ticket_medio'
-  | 'preco_medio_frasco'
-  | 'vendedor_nome';
-
-type SortDir = 'asc' | 'desc';
-
-type RpcRankingRow = {
-  vendedor_id: string;
-  vendedor_nome: string;
-  base_sem_iva: number;
-  num_faturas: number;
-  clientes_unicos: number;
-  frascos: number;
-  faturas_pagas: number;
-  faturas_pendentes: number;
-};
-
-type RpcDetalheRow = {
-  fatura_id: string;
-  numero: string;
-  data_emissao: string;
-  tipo: string;
-  estado: string;
-  cliente_nome: string | null;
-  base_sem_iva: number;
-};
-
-type SnapshotRow = {
+type SnapshotComissaoMensal = {
+  id: string;
   vendedor_id: string;
   ano: number;
   mes: number;
+
   base_sem_iva: number;
   comissao_calculada: number;
   faixa_atual: string;
   percentual_meta: number;
+
+  num_faturas: number;
+  clientes_unicos: number;
+  frascos: number;
+
+  faturas_pagas: number;
+  faturas_pendentes: number;
+
+  // config congelada (mantida na tabela, mas página só exibe o necessário)
+  meta_mensal: number;
+
+  fechado_em: string;
+};
+
+type VendedorDb = {
+  id: string;
+  nome: string;
+  email: string | null;
+  ativo: boolean | null;
+};
+
+type RowUi = {
+  vendedor_id: string;
+  vendedor_nome: string;
+  vendedor_email: string | null;
+  ativo: boolean;
+
+  base_sem_iva: number;
+  comissao_calculada: number;
+  faixa_atual: string;
+  percentual_meta: number;
+  meta_mensal_usada: number;
+
   num_faturas: number;
   clientes_unicos: number;
   frascos: number;
   faturas_pagas: number;
   faturas_pendentes: number;
-
-  // config congelada
-  meta_mensal: number;
-  faixa1_limite: number;
-  faixa2_limite: number;
-  comissao_faixa1: number;
-  comissao_faixa2: number;
-  comissao_faixa3: number;
-
-  fechado_em: string;
 };
 
-// =====================================================
-// HELPERS
-// =====================================================
+type SortKey = 'BASE' | 'COMISSAO' | 'PERCENTUAL_META';
 
-function formatCurrencyEUR(valor: number) {
+function safeNum(v: any, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function fmtEuro(v: number) {
   return (
-    valor.toLocaleString('pt-PT', {
+    v.toLocaleString('pt-PT', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }) + '€'
   );
 }
 
-function formatInt(n: number) {
-  return n.toLocaleString('pt-PT');
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function safeNum(v: unknown, fallback = 0) {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function getFaixa(baseSemIva: number, config: ConfiguracaoFinanceira) {
-  if (baseSemIva <= config.faixa1_limite) return 'FAIXA_1' as const;
-  if (baseSemIva <= config.faixa2_limite) return 'FAIXA_2' as const;
-  return 'FAIXA_3' as const;
-}
-
-function calcularComissaoProgressivaLocal(total: number, config: ConfiguracaoFinanceira) {
-  const t = Math.max(0, safeNum(total, 0));
-
-  const f1 = Math.max(0, safeNum(config.faixa1_limite, 3000));
-  const f2 = Math.max(f1, safeNum(config.faixa2_limite, 7000)); // garante f2 >= f1
-
-  const p1 = safeNum(config.comissao_faixa1, 5) / 100;
-  const p2 = safeNum(config.comissao_faixa2, 8) / 100;
-  const p3 = safeNum(config.comissao_faixa3, 10) / 100;
-
-  const base1 = Math.min(t, f1);
-  const base2 = Math.min(Math.max(0, t - f1), Math.max(0, f2 - f1));
-  const base3 = Math.max(0, t - f2);
-
-  const c1 = base1 * p1;
-  const c2 = base2 * p2;
-  const c3 = base3 * p3;
-
-  return Number((c1 + c2 + c3).toFixed(2));
-}
-
-function calcularPercentualMetaLocal(total: number, config: ConfiguracaoFinanceira) {
-  const meta = safeNum(config.meta_mensal, 0);
-  if (meta <= 0) return 0;
-  const pct = (safeNum(total, 0) / meta) * 100;
-  return clamp(Number(pct.toFixed(2)), 0, 200);
-}
-
-function faixaPercentLabel(
-  faixa: 'FAIXA_1' | 'FAIXA_2' | 'FAIXA_3',
-  row: any,
-  mesFechado: boolean,
-  config: ConfiguracaoFinanceira | null
-) {
-  const snap1 = safeNum(row?.comissao_faixa1, NaN);
-  const snap2 = safeNum(row?.comissao_faixa2, NaN);
-  const snap3 = safeNum(row?.comissao_faixa3, NaN);
-
-  // MÊS FECHADO → tenta snapshot; se não existir, cai para config
-  if (mesFechado) {
-    if (faixa === 'FAIXA_1' && Number.isFinite(snap1)) return `${snap1}%`;
-    if (faixa === 'FAIXA_2' && Number.isFinite(snap2)) return `${snap2}%`;
-    if (faixa === 'FAIXA_3' && Number.isFinite(snap3)) return `${snap3}%`;
-    // fallback (evita undefined%)
-  }
-
-  // MÊS ABERTO (ou fallback)
-  if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
-  if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
-  if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
-  return `${safeNum(config.comissao_faixa3, 10)}%`;
-}
-
-// =====================================================
-// COMPONENTE
-// =====================================================
-
 export default function ComissoesPage() {
-  const hoje = new Date();
-  const [mesAno, setMesAno] = useState(() => {
-    const y = hoje.getFullYear();
-    const m = String(hoje.getMonth() + 1).padStart(2, '0');
-    return `${y}-${m}`;
-  });
+  const sp = useSearchParams();
+
+  const now = new Date();
+  const anoAtual = now.getUTCFullYear();
+  const mesAtual = now.getUTCMonth() + 1;
+
+  const ano = Number(sp.get('ano')) || anoAtual;
+  const mes = Number(sp.get('mes')) || mesAtual;
 
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
-  const [config, setConfig] = useState<ConfiguracaoFinanceira | null>(null);
-  const [rows, setRows] = useState<RowComissao[]>([]);
+  const [busca, setBusca] = useState('');
+  const [sortBy, setSortBy] = useState<SortKey>('BASE');
+
   const [mesFechado, setMesFechado] = useState(false);
   const [fechadoEm, setFechadoEm] = useState<string | null>(null);
 
-  const [sortKey, setSortKey] = useState<SortKey>('base_sem_iva');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [rows, setRows] = useState<RowUi[]>([]);
 
-  // Modal detalhe
-  const [detalheAberto, setDetalheAberto] = useState(false);
-  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
-  const [detalheLoading, setDetalheLoading] = useState(false);
-  const [detalheErro, setDetalheErro] = useState<string | null>(null);
-  const [detalheFaturas, setDetalheFaturas] = useState<
-    Array<{
-      id: string;
-      numero: string;
-      data_emissao: string;
-      estado: string;
-      tipo: string;
-      cliente_nome: string;
-      base_sem_iva: number;
-    }>
-  >([]);
-
-  // ESC + trava scroll quando modal aberto
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') fecharDetalhe();
-    }
-
-    if (detalheAberto) {
-      document.addEventListener('keydown', onKeyDown);
-      document.body.style.overflow = 'hidden';
-    }
-
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = '';
-    };
+    carregarTudo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detalheAberto]);
+  }, [ano, mes]);
 
-  const { anoSelecionado, mesSelecionado } = useMemo(() => {
-    const [anoStr, mesStr] = mesAno.split('-');
-    return {
-      anoSelecionado: Number(anoStr),
-      mesSelecionado: Number(mesStr),
-    };
-  }, [mesAno]);
-
-  // =====================================================
-  // CARREGAMENTO (SNAPSHOT -> RPC)
-  // =====================================================
-
-  async function carregar() {
-    setLoading(true);
-    setErro(null);
-
+  async function carregarTudo() {
     try {
-      // 1) Config (usada para cálculo/labels quando ABERTO)
-      const cfg = await buscarConfiguracaoFinanceira();
-      setConfig(cfg);
+      setLoading(true);
+      setErro(null);
+
+      // 1) Vendedores (para nome/email/ativo)
+      const { data: vendData, error: vendErr } = await supabase
+        .from('vendedores')
+        .select('id,nome,email,ativo')
+        .order('nome', { ascending: true });
+
+      if (vendErr) throw vendErr;
+
+      const vendById = new Map<string, VendedorDb>();
+      for (const v of (vendData ?? []) as VendedorDb[]) vendById.set(v.id, v);
 
       // 2) Tenta snapshot (mês FECHADO)
-      const { data: snapData, error: snapError } = await supabase
+      const { data: snapData, error: snapErr } = await supabase
         .from('comissoes_mensais')
         .select(
           `
-          vendedor_id, ano, mes,
+          id, vendedor_id, ano, mes,
           base_sem_iva, comissao_calculada, faixa_atual, percentual_meta,
           num_faturas, clientes_unicos, frascos, faturas_pagas, faturas_pendentes,
-          meta_mensal, faixa1_limite, faixa2_limite,
-          comissao_faixa1, comissao_faixa2, comissao_faixa3,
-          fechado_em,
-          vendedores ( nome )
-        `
+          meta_mensal,
+          fechado_em
+        `,
         )
-        .eq('ano', anoSelecionado)
-        .eq('mes', mesSelecionado);
+        .eq('ano', ano)
+        .eq('mes', mes);
 
-      if (snapError) {
-        // Se der erro aqui, não “mascara”: isso é erro real de schema/permissão
-        throw snapError;
-      }
+      if (snapErr) throw snapErr;
 
-      const snaps = (snapData || []) as any[];
+      const snaps = (snapData ?? []) as any[];
 
       if (snaps.length > 0) {
-        // FECHADO: usa snapshot
+        // MÊS FECHADO: lê EXCLUSIVAMENTE do snapshot
         setMesFechado(true);
-        setFechadoEm(snaps[0]?.fechado_em || null);
+        setFechadoEm(snaps[0]?.fechado_em ?? null);
 
-        const rowsOut: RowComissao[] = snaps.map((s) => {
-          const base = safeNum(s.base_sem_iva, 0);
-          const numFaturas = safeNum(s.num_faturas, 0);
-          const clientesUnicos = safeNum(s.clientes_unicos, 0);
-          const frascos = safeNum(s.frascos, 0);
-
-          const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
-          const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
-
+        const out: RowUi[] = snaps.map((s) => {
+          const v = vendById.get(String(s.vendedor_id));
           return {
-            vendedor_id: s.vendedor_id,
-            vendedor_nome: s.vendedores?.nome || '—',
-            base_sem_iva: base,
+            vendedor_id: String(s.vendedor_id),
+            vendedor_nome: v?.nome ?? 'Vendedor não encontrado',
+            vendedor_email: v?.email ?? null,
+            ativo: !!v?.ativo,
+
+            base_sem_iva: safeNum(s.base_sem_iva, 0),
             comissao_calculada: safeNum(s.comissao_calculada, 0),
-            faixa_atual:
-              s.faixa_atual === 'FAIXA_2'
-                ? 'FAIXA_2'
-                : s.faixa_atual === 'FAIXA_3'
-                  ? 'FAIXA_3'
-                  : 'FAIXA_1',
+            faixa_atual: String(s.faixa_atual ?? 'FAIXA_1'),
             percentual_meta: safeNum(s.percentual_meta, 0),
+            meta_mensal_usada: safeNum(s.meta_mensal, 0),
 
-            // “falta” não faz muito sentido no fechado, mas mantemos por consistência visual
-            falta_para_3000: 0,
-            falta_para_7000: 0,
-
-            num_faturas: numFaturas,
-            clientes_unicos: clientesUnicos,
-            frascos,
-            ticket_medio: ticketMedio,
-            preco_medio_frasco: precoMedioFrasco,
-
+            num_faturas: safeNum(s.num_faturas, 0),
+            clientes_unicos: safeNum(s.clientes_unicos, 0),
+            frascos: safeNum(s.frascos, 0),
             faturas_pagas: safeNum(s.faturas_pagas, 0),
             faturas_pendentes: safeNum(s.faturas_pendentes, 0),
           };
         });
 
-        setRows(rowsOut);
+        setRows(out);
         return;
       }
 
-      // 3) ABERTO: usa RPC relatorio_comissoes_mes
+      // 3) MÊS ABERTO: usa fonte única viva
       setMesFechado(false);
       setFechadoEm(null);
 
-      const { data: rpcData, error: rpcError } = await supabase.rpc('relatorio_comissoes_mes', {
-        p_ano: anoSelecionado,
-        p_mes: mesSelecionado,
-      });
+      const met: VendedorMetricasMes[] = await getVendedorMetricasMes(ano, mes);
 
-      if (rpcError) throw rpcError;
-
-      const ranking = (rpcData || []) as RpcRankingRow[];
-
-      const rowsOut: RowComissao[] = ranking.map((r) => {
-        const base = safeNum(r.base_sem_iva, 0);
-        const numFaturas = safeNum(r.num_faturas, 0);
-        const clientesUnicos = safeNum(r.clientes_unicos, 0);
-        const frascos = safeNum(r.frascos, 0);
-
-        const ticketMedio = numFaturas > 0 ? base / numFaturas : 0;
-        const precoMedioFrasco = frascos > 0 ? base / frascos : 0;
-
-        const faixaAtual = getFaixa(base, cfg);
-        const comissao = calcularComissaoProgressivaLocal(base, cfg);
-        const percentualMeta = calcularPercentualMetaLocal(base, cfg);
-
-        const falta3000 = clamp(cfg.faixa1_limite - base, 0, cfg.faixa1_limite);
-        const falta7000 = clamp(cfg.faixa2_limite - base, 0, cfg.faixa2_limite);
-
+      const out: RowUi[] = met.map((m) => {
+        const v = vendById.get(m.vendedor_id);
         return {
-          vendedor_id: r.vendedor_id,
-          vendedor_nome: r.vendedor_nome,
-          base_sem_iva: base,
-          comissao_calculada: comissao,
-          faixa_atual: faixaAtual,
-          percentual_meta: percentualMeta,
-          falta_para_3000: falta3000,
-          falta_para_7000: falta7000,
-          num_faturas: numFaturas,
-          clientes_unicos: clientesUnicos,
-          frascos,
-          ticket_medio: ticketMedio,
-          preco_medio_frasco: precoMedioFrasco,
-          faturas_pagas: safeNum(r.faturas_pagas, 0),
-          faturas_pendentes: safeNum(r.faturas_pendentes, 0),
+          vendedor_id: m.vendedor_id,
+          vendedor_nome: v?.nome ?? 'Vendedor não encontrado',
+          vendedor_email: v?.email ?? null,
+          ativo: !!v?.ativo,
+
+          base_sem_iva: safeNum(m.base_sem_iva ?? 0),
+          comissao_calculada: safeNum(m.comissao_calculada ?? 0),
+          faixa_atual: String(m.faixa_atual ?? 'FAIXA_1'),
+          percentual_meta: safeNum(m.percentual_meta ?? 0),
+          meta_mensal_usada: safeNum(m.meta_mensal_usada ?? 0),
+
+          num_faturas: safeNum(m.num_faturas ?? 0),
+          clientes_unicos: safeNum(m.clientes_unicos ?? 0),
+          frascos: safeNum(m.frascos ?? 0),
+          faturas_pagas: safeNum(m.faturas_pagas ?? 0),
+          faturas_pendentes: safeNum(m.faturas_pendentes ?? 0),
         };
       });
 
-      setRows(rowsOut);
+      setRows(out);
     } catch (e: any) {
       console.error(e);
       setErro(e?.message || 'Erro ao carregar comissões');
@@ -401,20 +213,11 @@ export default function ComissoesPage() {
     }
   }
 
-  useEffect(() => {
-    carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesAno]);
-
-  // =====================================================
-  // FECHAR MÊS
-  // =====================================================
-
   async function fecharMes() {
     if (mesFechado) return;
 
     const ok = window.confirm(
-      `Tem certeza que deseja FECHAR o mês ${mesAno}?\n\nDepois de fechado, os valores ficam imutáveis (snapshot).`
+      `Fechar comissões do mês ${ano}-${String(mes).padStart(2, '0')}?\n\nIsso cria snapshot em comissoes_mensais e congela o período.`,
     );
     if (!ok) return;
 
@@ -422,18 +225,15 @@ export default function ComissoesPage() {
       setLoading(true);
       setErro(null);
 
-      const { data, error } = await supabase.rpc('fechar_comissoes_mes', {
-        p_ano: anoSelecionado,
-        p_mes: mesSelecionado,
+      // RPC oficial
+      const { error } = await supabase.rpc('fechar_comissoes_mes', {
+        ano,
+        mes,
       });
 
       if (error) throw error;
 
-      // Recarrega e agora deve cair no snapshot
-      await carregar();
-
-      // opcional: feedback simples
-      console.log('fechar_comissoes_mes inserted:', data);
+      await carregarTudo();
     } catch (e: any) {
       console.error(e);
       setErro(e?.message || 'Erro ao fechar mês');
@@ -442,119 +242,47 @@ export default function ComissoesPage() {
     }
   }
 
-  // =====================================================
-  // STATS
-  // =====================================================
+  const rowsFiltradasOrdenadas = useMemo(() => {
+    const q = busca.trim().toLowerCase();
 
-  const stats = useMemo(() => {
-    const totalBase = rows.reduce((acc, r) => acc + r.base_sem_iva, 0);
-    const totalComissao = rows.reduce((acc, r) => acc + r.comissao_calculada, 0);
-    const totalFrascos = rows.reduce((acc, r) => acc + r.frascos, 0);
-    const totalFaturas = rows.reduce((acc, r) => acc + r.num_faturas, 0);
-    const ticketMedioGeral = totalFaturas > 0 ? totalBase / totalFaturas : 0;
-
-    const totalPendentes = rows.reduce((acc, r) => acc + r.faturas_pendentes, 0);
-    const totalPagas = rows.reduce((acc, r) => acc + r.faturas_pagas, 0);
-
-    return {
-      totalBase,
-      totalComissao,
-      totalFrascos,
-      totalFaturas,
-      ticketMedioGeral,
-      totalPendentes,
-      totalPagas,
-    };
-  }, [rows]);
-
-  // =====================================================
-  // SORT
-  // =====================================================
-
-  const sortedRows = useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) => {
-      const dir = sortDir === 'asc' ? 1 : -1;
-
-      if (sortKey === 'vendedor_nome') {
-        return a.vendedor_nome.localeCompare(b.vendedor_nome) * dir;
-      }
-
-      const av = (a as any)[sortKey] as number;
-      const bv = (b as any)[sortKey] as number;
-      return (av - bv) * dir;
-    });
-    return copy;
-  }, [rows, sortKey, sortDir]);
-
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  }
-
-  // =====================================================
-  // DETALHE VENDEDOR (RPC-ONLY)
-  // =====================================================
-
-  async function abrirDetalhe(vendedorId: string, vendedorNome: string) {
-    setDetalheAberto(true);
-    setDetalheVendedor({ id: vendedorId, nome: vendedorNome });
-    setDetalheLoading(true);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
-
-    try {
-      const { data, error } = await supabase.rpc('relatorio_comissoes_detalhe_mes', {
-        p_vendedor_id: vendedorId,
-        p_ano: anoSelecionado,
-        p_mes: mesSelecionado,
+    let out = rows;
+    if (q) {
+      out = out.filter((r) => {
+        const nome = (r.vendedor_nome || '').toLowerCase();
+        const email = (r.vendedor_email || '').toLowerCase();
+        return nome.includes(q) || email.includes(q);
       });
-
-      if (error) throw error;
-
-      const detalhe = (data || []) as RpcDetalheRow[];
-
-      setDetalheFaturas(
-        detalhe.map((r) => ({
-          id: r.fatura_id,
-          numero: r.numero,
-          data_emissao: r.data_emissao,
-          estado: r.estado,
-          tipo: r.tipo || 'FATURA',
-          cliente_nome: r.cliente_nome || '—',
-          base_sem_iva: safeNum(r.base_sem_iva, 0),
-        }))
-      );
-    } catch (e: any) {
-      console.error(e);
-      setDetalheErro(e?.message || 'Erro ao carregar detalhe');
-    } finally {
-      setDetalheLoading(false);
     }
-  }
 
-  function fecharDetalhe() {
-    setDetalheAberto(false);
-    setDetalheVendedor(null);
-    setDetalheErro(null);
-    setDetalheFaturas([]);
-  }
+    const sorted = [...out].sort((a, b) => {
+      if (sortBy === 'COMISSAO') return b.comissao_calculada - a.comissao_calculada;
+      if (sortBy === 'PERCENTUAL_META') return b.percentual_meta - a.percentual_meta;
+      return b.base_sem_iva - a.base_sem_iva; // BASE
+    });
 
-  // =====================================================
-  // RENDER
-  // =====================================================
+    return sorted;
+  }, [rows, busca, sortBy]);
+
+  const totais = useMemo(() => {
+    return rows.reduce(
+      (acc, r) => {
+        acc.base += r.base_sem_iva;
+        acc.comissao += r.comissao_calculada;
+        acc.frascos += r.frascos;
+        acc.faturas += r.num_faturas;
+        return acc;
+      },
+      { base: 0, comissao: 0, frascos: 0, faturas: 0 },
+    );
+  }, [rows]);
 
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center gap-3">
-            <RefreshCw className="w-5 h-5 animate-spin" />
-            <p className="text-gray-700 font-medium">Carregando comissões e performance...</p>
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto mb-4" />
+            <p className="text-gray-600">Carregando comissões...</p>
           </div>
         </div>
       </div>
@@ -564,43 +292,38 @@ export default function ComissoesPage() {
   if (erro) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <p className="text-red-600 font-semibold mb-2">Erro ao carregar</p>
-          <p className="text-gray-700 mb-4">{erro}</p>
-          <button
-            type="button"
-            onClick={carregar}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold"
-          >
-            Tentar novamente
-          </button>
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-red-900 mb-2">Erro ao carregar comissões</h3>
+              <div className="text-red-700 mb-4 whitespace-pre-line">{erro}</div>
+              <div className="flex gap-3">
+                <button
+                  onClick={carregarTudo}
+                  className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors inline-flex items-center gap-2"
+                >
+                  <RefreshCcw className="w-4 h-4" />
+                  Tentar novamente
+                </button>
+                <button
+                  onClick={() => (window.location.href = '/')}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Voltar ao início
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
-  const faixaBadge = (faixa: RowComissao['faixa_atual']) => {
-    if (faixa === 'FAIXA_1') return 'bg-blue-100 text-blue-800';
-    if (faixa === 'FAIXA_2') return 'bg-yellow-100 text-yellow-800';
-    return 'bg-green-100 text-green-800';
-  };
-
-  const faixaLabel = (faixa: RowComissao['faixa_atual']) => {
-    if (mesFechado) {
-      // no fechado, o rótulo já está “congelado” na faixa, então mostramos FAIXA_1/2/3
-      return faixa === 'FAIXA_1' ? 'FAIXA 1' : faixa === 'FAIXA_2' ? 'FAIXA 2' : 'FAIXA 3';
-    }
-
-    if (!config) return faixa === 'FAIXA_1' ? '5%' : faixa === 'FAIXA_2' ? '8%' : '10%';
-    if (faixa === 'FAIXA_1') return `${safeNum(config.comissao_faixa1, 5)}%`;
-    if (faixa === 'FAIXA_2') return `${safeNum(config.comissao_faixa2, 8)}%`;
-    return `${safeNum(config.comissao_faixa3, 10)}%`;
-  };
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
       {/* Header */}
-      <div className="mb-6">
+      <div className="mb-8">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
             <div className="flex items-center gap-3 mb-2">
@@ -608,15 +331,18 @@ export default function ComissoesPage() {
 
               <span
                 className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
-                  mesFechado ? 'bg-gray-900 text-white' : 'bg-blue-100 text-blue-800'
+                  mesFechado ? 'bg-gray-900 text-white' : 'bg-green-100 text-green-800'
                 }`}
+                title={mesFechado ? 'Lendo comissoes_mensais (snapshot)' : 'Lendo getVendedorMetricasMes (aberto)'}
               >
                 {mesFechado ? (
                   <>
                     <Lock className="w-4 h-4" /> MÊS FECHADO
                   </>
                 ) : (
-                  <>MÊS ABERTO</>
+                  <>
+                    <Unlock className="w-4 h-4" /> MÊS ABERTO
+                  </>
                 )}
               </span>
 
@@ -627,28 +353,20 @@ export default function ComissoesPage() {
               )}
             </div>
 
-            <p className="text-gray-600 text-sm sm:text-base">
-              Comissão por <strong>emissão de faturas</strong> (tipo FATURA e estado ≠ CANCELADA), com
-              faixas progressivas.
+            <p className="text-gray-600">
+              Ranking por vendedor — base: <b>€ sem IVA</b> (faturas emitidas).{' '}
+              {mesFechado ? 'Fonte: comissoes_mensais.' : 'Fonte: getVendedorMetricasMes.'}
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="flex items-center gap-2 bg-white rounded-xl shadow-lg px-4 py-3">
-              <CalendarIcon />
-              <input
-                type="month"
-                value={mesAno}
-                onChange={(e) => setMesAno(e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+            <PeriodoMesPicker />
 
             {!mesFechado && (
               <button
-                type="button"
                 onClick={fecharMes}
-                className="bg-red-600 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
+                className="inline-flex items-center justify-center gap-2 bg-red-600 text-white px-4 py-3 rounded-xl font-semibold hover:bg-red-700 transition"
+                title="Cria snapshot (comissoes_mensais) e congela o mês"
               >
                 <Lock className="w-5 h-5" />
                 Fechar mês
@@ -656,339 +374,171 @@ export default function ComissoesPage() {
             )}
 
             <button
-              type="button"
-              onClick={carregar}
-              className="bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
+              onClick={carregarTudo}
+              className="inline-flex items-center justify-center gap-2 bg-gray-100 text-gray-700 px-4 py-3 rounded-xl font-semibold hover:bg-gray-200 transition"
+              title="Recarregar"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCcw className="w-4 h-4" />
               Atualizar
             </button>
           </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard
-          title="Base (sem IVA)"
-          value={formatCurrencyEUR(stats.totalBase)}
-          icon={<TrendingUp className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Comissão"
-          value={formatCurrencyEUR(stats.totalComissao)}
-          icon={<DollarSign className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Frascos"
-          value={formatInt(stats.totalFrascos)}
-          icon={<Package className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Faturas"
-          value={formatInt(stats.totalFaturas)}
-          icon={<Receipt className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Ticket médio"
-          value={formatCurrencyEUR(stats.ticketMedioGeral)}
-          icon={<Users className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Pagas / Pendentes"
-          value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`}
-          icon={<Target className="w-5 h-5" />}
-        />
-      </div>
+      {/* KPI */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white rounded-2xl shadow p-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600">Faturação (sem IVA)</span>
+            <TrendingUp className="w-5 h-5 text-gray-400" />
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{fmtEuro(totais.base)}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {ano}-{String(mes).padStart(2, '0')}
+          </div>
+        </div>
 
-      {/* Tabela */}
-      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <Th
-                  onClick={() => toggleSort('vendedor_nome')}
-                  active={sortKey === 'vendedor_nome'}
-                  dir={sortDir}
-                >
-                  Vendedor
-                </Th>
-                <ThRight
-                  onClick={() => toggleSort('base_sem_iva')}
-                  active={sortKey === 'base_sem_iva'}
-                  dir={sortDir}
-                >
-                  Base (sem IVA)
-                </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('comissao_calculada')}
-                  active={sortKey === 'comissao_calculada'}
-                  dir={sortDir}
-                >
-                  Comissão
-                </ThRight>
-                <ThCenter>Faixa</ThCenter>
-                <ThRight
-                  onClick={() => toggleSort('num_faturas')}
-                  active={sortKey === 'num_faturas'}
-                  dir={sortDir}
-                >
-                  Nº faturas
-                </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('clientes_unicos')}
-                  active={sortKey === 'clientes_unicos'}
-                  dir={sortDir}
-                >
-                  Clientes únicos
-                </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('frascos')}
-                  active={sortKey === 'frascos'}
-                  dir={sortDir}
-                >
-                  Frascos
-                </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('ticket_medio')}
-                  active={sortKey === 'ticket_medio'}
-                  dir={sortDir}
-                >
-                  Ticket médio
-                </ThRight>
-                <ThRight
-                  onClick={() => toggleSort('preco_medio_frasco')}
-                  active={sortKey === 'preco_medio_frasco'}
-                  dir={sortDir}
-                >
-                  €/frasco (médio)
-                </ThRight>
-                <ThRight>Meta</ThRight>
-                <ThCenter>Ações</ThCenter>
-              </tr>
-            </thead>
+        <div className="bg-white rounded-2xl shadow p-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600">Total de comissões</span>
+            <DollarSign className="w-5 h-5 text-gray-400" />
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{fmtEuro(totais.comissao)}</div>
+          <div className="text-xs text-gray-500 mt-1">Conforme fonte do período</div>
+        </div>
 
-            <tbody className="divide-y divide-gray-100">
-              {sortedRows.map((r) => (
-                <tr key={r.vendedor_id} className="hover:bg-gray-50 transition-colors">
-                  <td className="py-4 px-4 sm:px-6">
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-gray-900">{r.vendedor_nome}</span>
-                      <span className="text-xs text-gray-500">
-                        Pagas: {r.faturas_pagas} • Pendentes: {r.faturas_pendentes}
-                      </span>
-                      {!mesFechado && config && (
-                        <span className="text-xs text-gray-500">
-                          Falta p/ {formatInt(config.faixa1_limite)}:{' '}
-                          {formatCurrencyEUR(r.falta_para_3000)} • Falta p/{' '}
-                          {formatInt(config.faixa2_limite)}: {formatCurrencyEUR(r.falta_para_7000)}
-                        </span>
-                      )}
-                    </div>
-                  </td>
+        <div className="bg-white rounded-2xl shadow p-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600">Frascos</span>
+            <Trophy className="w-5 h-5 text-gray-400" />
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{totais.frascos}</div>
+          <div className="text-xs text-gray-500 mt-1">Somatório por vendedor</div>
+        </div>
 
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatCurrencyEUR(r.base_sem_iva)}
-                    </span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {formatCurrencyEUR(r.comissao_calculada)}
-                    </span>
-                  </td>
-
-                  <td className="py-4 px-4 text-center">
-                    <span
-                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(
-                        r.faixa_atual
-                      )}`}
-                    >
-                      {faixaPercentLabel(r.faixa_atual, r, mesFechado, config)}
-                    </span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatInt(r.num_faturas)}</span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatInt(r.clientes_unicos)}</span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatInt(r.frascos)}</span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">
-                      {formatCurrencyEUR(r.ticket_medio)}
-                    </span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">
-                      {formatCurrencyEUR(r.preco_medio_frasco)}
-                    </span>
-                  </td>
-
-                  <td className="py-4 px-4 text-right">
-                    <div className="flex flex-col items-end">
-                      <span className="text-sm font-semibold text-gray-900">
-                        {Math.round(r.percentual_meta)}%
-                      </span>
-                      {!mesFechado && config && (
-                        <span className="text-xs text-gray-500">
-                          Meta: {formatCurrencyEUR(safeNum(config.meta_mensal, 0))}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-
-                  <td className="py-4 px-4 text-center">
-                    <button
-                      type="button"
-                      onClick={() => abrirDetalhe(r.vendedor_id, r.vendedor_nome)}
-                      className="inline-flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700"
-                    >
-                      <Eye className="w-4 h-4" />
-                      Ver
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-              {sortedRows.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="py-10 text-center text-gray-600">
-                    Nenhum dado encontrado para o período selecionado.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="bg-white rounded-2xl shadow p-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600">Faturas emitidas</span>
+            <Target className="w-5 h-5 text-gray-400" />
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{totais.faturas}</div>
+          <div className="text-xs text-gray-500 mt-1">Quantidade no mês</div>
         </div>
       </div>
 
-      {/* Modal detalhe */}
-      {detalheAberto && detalheVendedor && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) fecharDetalhe();
-          }}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-            <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
-              <div>
-                <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
-                <p className="text-sm text-white/80">
-                  {mesAno} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={fecharDetalhe}
-                className="p-2 rounded-lg hover:bg-white/10"
-                aria-label="Fechar"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
+      {/* Filtros */}
+      <div className="bg-white rounded-2xl shadow p-4 mb-6">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Buscar por nome ou email..."
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
 
-            <div className="p-6 overflow-y-auto">
-              {detalheLoading && (
-                <div className="flex items-center gap-3 text-gray-700">
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  Carregando detalhe...
-                </div>
-              )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setSortBy('BASE')}
+              className={`px-4 py-3 rounded-xl font-semibold transition ${
+                sortBy === 'BASE' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Ordenar: Base
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortBy('COMISSAO')}
+              className={`px-4 py-3 rounded-xl font-semibold transition ${
+                sortBy === 'COMISSAO' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Ordenar: Comissão
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortBy('PERCENTUAL_META')}
+              className={`px-4 py-3 rounded-xl font-semibold transition ${
+                sortBy === 'PERCENTUAL_META' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Ordenar: % Meta
+            </button>
+          </div>
+        </div>
+      </div>
 
-              {detalheErro && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
-                  {detalheErro}
-                </div>
-              )}
+      {/* Tabela */}
+      {rowsFiltradasOrdenadas.length === 0 ? (
+        <div className="text-center py-12">
+          <Trophy className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Sem dados</h3>
+          <p className="text-gray-600">Não há comissões para o período selecionado.</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl shadow overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-700">#</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-700">Vendedor</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-700">Base (sem IVA)</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-700">Comissão</th>
+                  <th className="text-center px-6 py-4 text-sm font-semibold text-gray-700">Faixa</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-700">% Meta</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-700">Frascos</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-700">Faturas</th>
+                </tr>
+              </thead>
 
-              {!detalheLoading && !detalheErro && (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
-                      <tr>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Fatura
-                        </th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Cliente
-                        </th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
-                          Data
-                        </th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
-                          Tipo
-                        </th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
-                          Estado
-                        </th>
-                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">
-                          Base (sem IVA)
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {detalheFaturas.map((f) => (
-                        <tr key={f.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">
-                            {f.numero}
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
-                          <td className="py-3 px-4 text-sm text-gray-800">
-                            {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
-                          </td>
-                          <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
-                              {f.tipo || 'FATURA'}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span
-                              className={`px-2 py-1 rounded-full ${
-                                f.estado === 'PAGA'
-                                  ? 'bg-green-100 text-green-800'
-                                  : f.estado === 'PENDENTE'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : 'bg-gray-100 text-gray-800'
-                              }`}
-                            >
-                              {f.estado}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
-                            {formatCurrencyEUR(f.base_sem_iva)}
-                          </td>
-                        </tr>
-                      ))}
+              <tbody className="divide-y">
+                {rowsFiltradasOrdenadas.map((r, idx) => (
+                  <tr key={r.vendedor_id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm text-gray-700 font-semibold">{idx + 1}</td>
 
-                      {detalheFaturas.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-10 text-center text-gray-600">
-                            Sem faturas neste período para este vendedor.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                    <td className="px-6 py-4">
+                      <div className="font-semibold text-gray-900">{r.vendedor_nome}</div>
+                      <div className="text-xs text-gray-500">{r.vendedor_email || '—'}</div>
+                      <div className="text-xs text-gray-500">{r.ativo ? 'Ativo' : 'Inativo'}</div>
+                    </td>
 
-              <div className="mt-4 text-xs text-gray-500">
-                Dica: fecha com <strong>ESC</strong> ou clicando fora do modal.
-              </div>
-            </div>
+                    <td className="px-6 py-4 text-right font-semibold text-gray-900">{fmtEuro(r.base_sem_iva)}</td>
+
+                    <td className="px-6 py-4 text-right font-bold text-green-700">{fmtEuro(r.comissao_calculada)}</td>
+
+                    <td className="px-6 py-4 text-center">
+                      <span className="inline-flex px-3 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+                        {r.faixa_atual}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-right font-semibold text-gray-900">
+                      {Math.round(r.percentual_meta)}%
+                      <div className="text-xs text-gray-500">meta: {fmtEuro(r.meta_mensal_usada)}</div>
+                    </td>
+
+                    <td className="px-6 py-4 text-right text-gray-900 font-semibold">{r.frascos}</td>
+
+                    <td className="px-6 py-4 text-right text-gray-900">
+                      <div className="font-semibold">{r.num_faturas}</div>
+                      <div className="text-xs text-gray-500">
+                        {r.faturas_pagas} pagas • {r.faturas_pendentes} pend.
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="border-t bg-gray-50 px-6 py-4 text-xs text-gray-600">
+            Consistência: valores exibidos vêm <b>exclusivamente</b> de{' '}
+            {mesFechado ? <b>comissoes_mensais</b> : <b>getVendedorMetricasMes</b>}. Base = <b>€ sem IVA</b>.
           </div>
         </div>
       )}
@@ -996,87 +546,6 @@ export default function ComissoesPage() {
   );
 }
 
-// =====================================================
-// COMPONENTES AUXILIARES
-// =====================================================
-
-function CalendarIcon() {
-  return <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100">📅</span>;
-}
-
-function StatCard({
-  title,
-  value,
-  icon,
-}: {
-  title: string;
-  value: string;
-  icon: ReactNode;
-}) {
-  return (
-    <div className="bg-white rounded-xl shadow-lg p-4">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-semibold text-gray-600">{title}</span>
-        <div className="text-gray-700">{icon}</div>
-      </div>
-      <div className="text-xl sm:text-2xl font-bold text-gray-900">{value}</div>
-    </div>
-  );
-}
-
-function Th({
-  children,
-  onClick,
-  active,
-  dir,
-}: {
-  children: ReactNode;
-  onClick?: () => void;
-  active?: boolean;
-  dir?: 'asc' | 'desc';
-}) {
-  return (
-    <th
-      className={`text-left py-4 px-4 sm:px-6 text-sm font-semibold text-gray-700 ${
-        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
-      }`}
-      onClick={onClick}
-      title={onClick ? 'Ordenar' : undefined}
-    >
-      <div className="flex items-center gap-2">
-        {children}
-        {active && <span className="text-xs text-gray-500">{dir === 'asc' ? '▲' : '▼'}</span>}
-      </div>
-    </th>
-  );
-}
-
-function ThRight({
-  children,
-  onClick,
-  active,
-  dir,
-}: {
-  children: ReactNode;
-  onClick?: () => void;
-  active?: boolean;
-  dir?: 'asc' | 'desc';
-}) {
-  return (
-    <th
-      className={`text-right py-4 px-4 text-sm font-semibold text-gray-700 ${
-        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
-      }`}
-      onClick={onClick}
-      title={onClick ? 'Ordenar' : undefined}
-    >
-      <div className="flex items-center justify-end gap-2">
-        {children}
-        {active && <span className="text-xs text-gray-500">{dir === 'asc' ? '▲' : '▼'}</span>}
-      </div>
-    </th>
-  );
-}
 
 function ThCenter({ children }: { children: ReactNode }) {
   return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
