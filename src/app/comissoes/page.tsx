@@ -141,9 +141,12 @@ function faixaPercentLabel(
 ) {
   // mês fechado → usar snapshot (percentuais congelados)
   if (mesFechado) {
-    if (faixa === 'FAIXA_1' && Number.isFinite(row.comissao_faixa1 as any)) return `${row.comissao_faixa1}%`;
-    if (faixa === 'FAIXA_2' && Number.isFinite(row.comissao_faixa2 as any)) return `${row.comissao_faixa2}%`;
-    if (faixa === 'FAIXA_3' && Number.isFinite(row.comissao_faixa3 as any)) return `${row.comissao_faixa3}%`;
+    if (faixa === 'FAIXA_1' && Number.isFinite(row.comissao_faixa1 as any))
+      return `${row.comissao_faixa1}%`;
+    if (faixa === 'FAIXA_2' && Number.isFinite(row.comissao_faixa2 as any))
+      return `${row.comissao_faixa2}%`;
+    if (faixa === 'FAIXA_3' && Number.isFinite(row.comissao_faixa3 as any))
+      return `${row.comissao_faixa3}%`;
     return faixa === 'FAIXA_1' ? 'FAIXA 1' : faixa === 'FAIXA_2' ? 'FAIXA 2' : 'FAIXA 3';
   }
 
@@ -200,7 +203,9 @@ function ComissoesClient() {
 
   // Modal detalhe
   const [detalheAberto, setDetalheAberto] = useState(false);
-  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(null);
+  const [detalheVendedor, setDetalheVendedor] = useState<{ id: string; nome: string } | null>(
+    null
+  );
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalheErro, setDetalheErro] = useState<string | null>(null);
   const [detalheFaturas, setDetalheFaturas] = useState<
@@ -370,7 +375,10 @@ function ComissoesClient() {
     if (mesFechado) return;
 
     const ok = window.confirm(
-      `Tem certeza que deseja FECHAR o mês ${anoSelecionado}-${String(mesSelecionado).padStart(2, '0')}?\n\nDepois de fechado, os valores ficam imutáveis (snapshot).`
+      `Tem certeza que deseja FECHAR o mês ${anoSelecionado}-${String(mesSelecionado).padStart(
+        2,
+        '0'
+      )}?\n\nDepois de fechado, os valores ficam imutáveis (snapshot).`
     );
     if (!ok) return;
 
@@ -519,7 +527,11 @@ function ComissoesClient() {
         <div className="bg-white rounded-xl shadow-lg p-6">
           <p className="text-red-600 font-semibold mb-2">Erro ao carregar</p>
           <p className="text-gray-700 mb-4">{erro}</p>
-          <button type="button" onClick={carregar} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold">
+          <button
+            type="button"
+            onClick={carregar}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold"
+          >
             Tentar novamente
           </button>
         </div>
@@ -558,7 +570,8 @@ function ComissoesClient() {
             </div>
 
             <p className="text-gray-600 text-sm sm:text-base">
-              Base: <strong>€ sem IVA</strong>, sempre por <strong>faturas emitidas</strong>. Snapshot mensal quando fechado.
+              Base: <strong>€ sem IVA</strong>, sempre por <strong>faturas emitidas</strong>. Snapshot
+              mensal quando fechado.
             </p>
           </div>
 
@@ -590,12 +603,36 @@ function ComissoesClient() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard title="Base (sem IVA)" value={formatCurrencyEUR(stats.totalBase)} icon={<TrendingUp className="w-5 h-5" />} />
-        <StatCard title="Comissão" value={formatCurrencyEUR(stats.totalComissao)} icon={<DollarSign className="w-5 h-5" />} />
-        <StatCard title="Frascos" value={formatInt(stats.totalFrascos)} icon={<Package className="w-5 h-5" />} />
-        <StatCard title="Faturas" value={formatInt(stats.totalFaturas)} icon={<Receipt className="w-5 h-5" />} />
-        <StatCard title="Ticket médio" value={formatCurrencyEUR(stats.ticketMedioGeral)} icon={<Users className="w-5 h-5" />} />
-        <StatCard title="Pagas / Pendentes" value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`} icon={<Target className="w-5 h-5" />} />
+        <StatCard
+          title="Base (sem IVA)"
+          value={formatCurrencyEUR(stats.totalBase)}
+          icon={<TrendingUp className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Comissão"
+          value={formatCurrencyEUR(stats.totalComissao)}
+          icon={<DollarSign className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Frascos"
+          value={formatInt(stats.totalFrascos)}
+          icon={<Package className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Faturas"
+          value={formatInt(stats.totalFaturas)}
+          icon={<Receipt className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Ticket médio"
+          value={formatCurrencyEUR(stats.ticketMedioGeral)}
+          icon={<Users className="w-5 h-5" />}
+        />
+        <StatCard
+          title={mesFechado ? 'Pagas / Pendentes (no fecho)' : 'Pagas / Pendentes'}
+          value={`${formatInt(stats.totalPagas)} / ${formatInt(stats.totalPendentes)}`}
+          icon={<Target className="w-5 h-5" />}
+        />
       </div>
 
       {/* Tabela */}
@@ -604,29 +641,61 @@ function ComissoesClient() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <Th onClick={() => toggleSort('vendedor_nome')} active={sortKey === 'vendedor_nome'} dir={sortDir}>
+                <Th
+                  onClick={() => toggleSort('vendedor_nome')}
+                  active={sortKey === 'vendedor_nome'}
+                  dir={sortDir}
+                >
                   Vendedor
                 </Th>
-                <ThRight onClick={() => toggleSort('base_sem_iva')} active={sortKey === 'base_sem_iva'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('base_sem_iva')}
+                  active={sortKey === 'base_sem_iva'}
+                  dir={sortDir}
+                >
                   Base (sem IVA)
                 </ThRight>
-                <ThRight onClick={() => toggleSort('comissao_calculada')} active={sortKey === 'comissao_calculada'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('comissao_calculada')}
+                  active={sortKey === 'comissao_calculada'}
+                  dir={sortDir}
+                >
                   Comissão
                 </ThRight>
                 <ThCenter>Faixa</ThCenter>
-                <ThRight onClick={() => toggleSort('num_faturas')} active={sortKey === 'num_faturas'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('num_faturas')}
+                  active={sortKey === 'num_faturas'}
+                  dir={sortDir}
+                >
                   Nº faturas
                 </ThRight>
-                <ThRight onClick={() => toggleSort('clientes_unicos')} active={sortKey === 'clientes_unicos'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('clientes_unicos')}
+                  active={sortKey === 'clientes_unicos'}
+                  dir={sortDir}
+                >
                   Clientes únicos
                 </ThRight>
-                <ThRight onClick={() => toggleSort('frascos')} active={sortKey === 'frascos'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('frascos')}
+                  active={sortKey === 'frascos'}
+                  dir={sortDir}
+                >
                   Frascos
                 </ThRight>
-                <ThRight onClick={() => toggleSort('ticket_medio')} active={sortKey === 'ticket_medio'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('ticket_medio')}
+                  active={sortKey === 'ticket_medio'}
+                  dir={sortDir}
+                >
                   Ticket médio
                 </ThRight>
-                <ThRight onClick={() => toggleSort('preco_medio_frasco')} active={sortKey === 'preco_medio_frasco'} dir={sortDir}>
+                <ThRight
+                  onClick={() => toggleSort('preco_medio_frasco')}
+                  active={sortKey === 'preco_medio_frasco'}
+                  dir={sortDir}
+                >
                   €/frasco (médio)
                 </ThRight>
                 <ThRight>Meta</ThRight>
@@ -641,21 +710,30 @@ function ComissoesClient() {
                     <div className="flex flex-col">
                       <span className="font-semibold text-gray-900">{r.vendedor_nome}</span>
                       <span className="text-xs text-gray-500">
+                        {mesFechado ? 'No fecho — ' : ''}
                         Pagas: {r.faturas_pagas} • Pendentes: {r.faturas_pendentes}
                       </span>
                     </div>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.base_sem_iva)}</span>
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.base_sem_iva)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm font-semibold text-gray-900">{formatCurrencyEUR(r.comissao_calculada)}</span>
+                    <span className="text-sm font-semibold text-gray-900">
+                      {formatCurrencyEUR(r.comissao_calculada)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-center">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(r.faixa_atual)}`}>
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${faixaBadge(
+                        r.faixa_atual
+                      )}`}
+                    >
                       {faixaPercentLabel(r.faixa_atual, r, mesFechado)}
                     </span>
                   </td>
@@ -673,18 +751,26 @@ function ComissoesClient() {
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.ticket_medio)}</span>
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.ticket_medio)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
-                    <span className="text-sm text-gray-900">{formatCurrencyEUR(r.preco_medio_frasco)}</span>
+                    <span className="text-sm text-gray-900">
+                      {formatCurrencyEUR(r.preco_medio_frasco)}
+                    </span>
                   </td>
 
                   <td className="py-4 px-4 text-right">
                     <div className="flex flex-col items-end">
-                      <span className="text-sm font-semibold text-gray-900">{Math.round(r.percentual_meta)}%</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {Math.round(r.percentual_meta)}%
+                      </span>
                       {mesFechado && Number.isFinite(r.meta_mensal as any) && (
-                        <span className="text-xs text-gray-500">Meta: {formatCurrencyEUR(safeNum(r.meta_mensal, 0))}</span>
+                        <span className="text-xs text-gray-500">
+                          Meta: {formatCurrencyEUR(safeNum(r.meta_mensal, 0))}
+                        </span>
                       )}
                     </div>
                   </td>
@@ -729,15 +815,31 @@ function ComissoesClient() {
               <div>
                 <h2 className="text-xl font-bold">Detalhe do mês — {detalheVendedor.nome}</h2>
                 <p className="text-sm text-white/80">
-                  {anoSelecionado}-{String(mesSelecionado).padStart(2, '0')} • faturas emitidas (tipo FATURA e estado ≠ CANCELADA)
+                  {anoSelecionado}-{String(mesSelecionado).padStart(2, '0')} • faturas emitidas (tipo
+                  FATURA e estado ≠ CANCELADA)
                 </p>
               </div>
-              <button type="button" onClick={fecharDetalhe} className="p-2 rounded-lg hover:bg-white/10" aria-label="Fechar">
+              <button
+                type="button"
+                onClick={fecharDetalhe}
+                className="p-2 rounded-lg hover:bg-white/10"
+                aria-label="Fechar"
+              >
                 <X className="w-6 h-6" />
               </button>
             </div>
 
             <div className="p-6 overflow-y-auto">
+              {mesFechado && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                  <p className="font-semibold">Mês fechado</p>
+                  <p className="text-sm">
+                    Este detalhe é consultado em tempo real (estado atual das faturas). Os totais e
+                    “pagas/pendentes” da aba Comissões permanecem congelados no fecho (snapshot).
+                  </p>
+                </div>
+              )}
+
               {detalheLoading && (
                 <div className="flex items-center gap-3 text-gray-700">
                   <RefreshCw className="w-5 h-5 animate-spin" />
@@ -746,7 +848,9 @@ function ComissoesClient() {
               )}
 
               {detalheErro && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">{detalheErro}</div>
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
+                  {detalheErro}
+                </div>
               )}
 
               {!detalheLoading && !detalheErro && (
@@ -754,33 +858,57 @@ function ComissoesClient() {
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                       <tr>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Fatura</th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Cliente</th>
-                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Data</th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Tipo</th>
-                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">Estado</th>
-                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Base (sem IVA)</th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Fatura
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Cliente
+                        </th>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">
+                          Data
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Tipo
+                        </th>
+                        <th className="text-center py-3 px-4 text-xs font-semibold text-gray-700">
+                          Estado
+                        </th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">
+                          Base (sem IVA)
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {detalheFaturas.map((f) => (
                         <tr key={f.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">{f.numero}</td>
+                          <td className="py-3 px-4 text-sm font-semibold text-gray-900">
+                            {f.numero}
+                          </td>
                           <td className="py-3 px-4 text-sm text-gray-800">{f.cliente_nome}</td>
-                          <td className="py-3 px-4 text-sm text-gray-800">{new Date(f.data_emissao).toLocaleDateString('pt-PT')}</td>
+                          <td className="py-3 px-4 text-sm text-gray-800">
+                            {new Date(f.data_emissao).toLocaleDateString('pt-PT')}
+                          </td>
                           <td className="py-3 px-4 text-center text-xs font-semibold">
-                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">{f.tipo || 'FATURA'}</span>
+                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-800">
+                              {f.tipo || 'FATURA'}
+                            </span>
                           </td>
                           <td className="py-3 px-4 text-center text-xs font-semibold">
                             <span
                               className={`px-2 py-1 rounded-full ${
-                                f.estado === 'PAGA' ? 'bg-green-100 text-green-800' : f.estado === 'PENDENTE' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'
+                                f.estado === 'PAGA'
+                                  ? 'bg-green-100 text-green-800'
+                                  : f.estado === 'PENDENTE'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-gray-100 text-gray-800'
                               }`}
                             >
                               {f.estado}
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">{formatCurrencyEUR(f.base_sem_iva)}</td>
+                          <td className="py-3 px-4 text-right text-sm font-semibold text-gray-900">
+                            {formatCurrencyEUR(f.base_sem_iva)}
+                          </td>
                         </tr>
                       ))}
 
@@ -836,7 +964,9 @@ function Th({
 }) {
   return (
     <th
-      className={`text-left py-4 px-4 sm:px-6 text-sm font-semibold text-gray-700 ${onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''}`}
+      className={`text-left py-4 px-4 sm:px-6 text-sm font-semibold text-gray-700 ${
+        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
+      }`}
       onClick={onClick}
       title={onClick ? 'Ordenar' : undefined}
     >
@@ -861,7 +991,9 @@ function ThRight({
 }) {
   return (
     <th
-      className={`text-right py-4 px-4 text-sm font-semibold text-gray-700 ${onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''}`}
+      className={`text-right py-4 px-4 text-sm font-semibold text-gray-700 ${
+        onClick ? 'cursor-pointer select-none hover:text-gray-900' : ''
+      }`}
       onClick={onClick}
       title={onClick ? 'Ordenar' : undefined}
     >
@@ -876,3 +1008,4 @@ function ThRight({
 function ThCenter({ children }: { children: ReactNode }) {
   return <th className="text-center py-4 px-4 text-sm font-semibold text-gray-700">{children}</th>;
 }
+
