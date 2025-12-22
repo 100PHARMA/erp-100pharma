@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase';
-import { PeriodoMesPicker } from '@/components/PeriodoMesPicker';
+import { PeriodoMesPicker } from '../../components/PeriodoMesPicker';
 import { getVendedorMetricasMes, type VendedorMetricasMes } from '@/lib/vendedor-metricas';
 
 type SnapshotComissaoMensal = {
