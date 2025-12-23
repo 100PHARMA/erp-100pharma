@@ -9,6 +9,10 @@ import {
   RefreshCw,
   AlertCircle,
   Calendar,
+  Pencil,
+  X,
+  Save,
+  ShieldAlert,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -61,27 +65,16 @@ function pct(realizado: number, meta: number) {
 type BarVariant = 'vendas' | 'novas' | 'visitas' | 'geral';
 
 function barColor(variant: BarVariant, value: number) {
-  // value 0..200
-  // Paleta consistente com o teu layout (azul/roxo/verde/laranja)
-  // e com leitura clara.
   const v = clamp(value, 0, 200);
-
-  // abaixo de 60%: mais “alerta”
   const low = v < 60;
 
   if (variant === 'vendas') return low ? '#F59E0B' : '#7C3AED'; // amber / roxo
-  if (variant === 'novas') return low ? '#F97316' : '#2563EB';  // laranja / azul
-  if (variant === 'visitas') return low ? '#EF4444' : '#16A34A';// vermelho / verde
-  return low ? '#9CA3AF' : '#111827';                           // cinza / quase preto
+  if (variant === 'novas') return low ? '#F97316' : '#2563EB'; // laranja / azul
+  if (variant === 'visitas') return low ? '#EF4444' : '#16A34A'; // vermelho / verde
+  return low ? '#9CA3AF' : '#111827'; // cinza / quase preto
 }
 
-function ProgressBar({
-  value,
-  variant,
-}: {
-  value: number;
-  variant: BarVariant;
-}) {
+function ProgressBar({ value, variant }: { value: number; variant: BarVariant }) {
   const v = clamp(value, 0, 200);
   const color = barColor(variant, v);
   return (
@@ -95,6 +88,31 @@ function ProgressBar({
       />
     </div>
   );
+}
+
+function toMonthKey(ano: number, mes: number) {
+  return `${ano}-${String(mes).padStart(2, '0')}`;
+}
+
+function isPastMonth(ano: number, mes: number) {
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  if (ano < curY) return true;
+  if (ano > curY) return false;
+  return mes < curM;
+}
+
+function parseMoneyInput(v: string) {
+  // aceita "8500", "8.500,50", "8500,5" etc.
+  const cleaned = v.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseIntInput(v: string) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
 }
 
 export default function MetasPage() {
@@ -124,6 +142,11 @@ export default function MetasPage() {
     };
   }, [mesAno]);
 
+  const mesFechado = useMemo(
+    () => isPastMonth(anoSelecionado, mesSelecionado),
+    [anoSelecionado, mesSelecionado]
+  );
+
   // debounce para evitar múltiplos reloads em sequência
   const reloadTimerRef = useRef<number | null>(null);
   function carregarDebounced(ms = 350) {
@@ -138,11 +161,11 @@ export default function MetasPage() {
     setErro(null);
 
     try {
-      // 1) Metas empresa (global)
-      const { data: empData, error: empErr } = await supabase.rpc(
-        'relatorio_metas_empresa_mes',
-        { p_ano: anoSelecionado, p_mes: mesSelecionado }
-      );
+      // 1) Metas empresa (global do mês)
+      const { data: empData, error: empErr } = await supabase.rpc('relatorio_metas_empresa_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
       if (empErr) throw empErr;
 
       const empRow = (Array.isArray(empData) ? empData[0] : empData) as any;
@@ -154,10 +177,10 @@ export default function MetasPage() {
       });
 
       // 2) Metas por vendedor + realizados
-      const { data: vendData, error: vendErr } = await supabase.rpc(
-        'relatorio_metas_mes',
-        { p_ano: anoSelecionado, p_mes: mesSelecionado }
-      );
+      const { data: vendData, error: vendErr } = await supabase.rpc('relatorio_metas_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
       if (vendErr) throw vendErr;
 
       const list = (vendData || []) as any[];
@@ -199,18 +222,13 @@ export default function MetasPage() {
 
   // Realtime: se mudar visitas/faturas/metas, recarrega automaticamente
   useEffect(() => {
-    // Se não quiser realtime, pode remover este bloco inteiro.
     const channel = supabase
       .channel('metas-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'vendedor_visitas' },
-        () => carregarDebounced(300)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendedor_visitas' }, () =>
+        carregarDebounced(300)
       )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'faturas' },
-        () => carregarDebounced(500)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'faturas' }, () =>
+        carregarDebounced(500)
       )
       .on(
         'postgres_changes',
@@ -246,22 +264,18 @@ export default function MetasPage() {
     ).length;
 
     const metaEmpresaVendas = empresaMeta.meta_vendas_sem_iva > 0 ? empresaMeta.meta_vendas_sem_iva : metaTotalVendas;
-    const metaEmpresaNovas = empresaMeta.meta_novas_farmacias > 0 ? empresaMeta.meta_novas_farmacias : metaTotalNovas;
+    const metaEmpresaNovas =
+      empresaMeta.meta_novas_farmacias > 0 ? empresaMeta.meta_novas_farmacias : metaTotalNovas;
     const metaEmpresaVisitas = empresaMeta.meta_visitas > 0 ? empresaMeta.meta_visitas : metaTotalVisitas;
 
     const atingVendas = pct(realTotalVendas, metaEmpresaVendas);
     const atingNovas = pct(realTotalNovas, metaEmpresaNovas);
     const atingVisitas = pct(realTotalVisitas, metaEmpresaVisitas);
 
-    const pesos = [
-      metaEmpresaVendas > 0 ? 1 : 0,
-      metaEmpresaNovas > 0 ? 1 : 0,
-      metaEmpresaVisitas > 0 ? 1 : 0,
-    ];
+    const pesos = [metaEmpresaVendas > 0 ? 1 : 0, metaEmpresaNovas > 0 ? 1 : 0, metaEmpresaVisitas > 0 ? 1 : 0];
     const somaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
 
-    const atingGeral =
-      (atingVendas * pesos[0] + atingNovas * pesos[1] + atingVisitas * pesos[2]) / somaPesos;
+    const atingGeral = (atingVendas * pesos[0] + atingNovas * pesos[1] + atingVisitas * pesos[2]) / somaPesos;
 
     return {
       metaEmpresaVendas,
@@ -281,6 +295,132 @@ export default function MetasPage() {
     };
   }, [rows, empresaMeta]);
 
+  // ====== EDIÇÃO DE METAS (MODAL) ======
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editErro, setEditErro] = useState<string | null>(null);
+
+  // Empresa (inputs)
+  const [empVendas, setEmpVendas] = useState<string>('0');
+  const [empNovas, setEmpNovas] = useState<string>('0');
+  const [empVisitas, setEmpVisitas] = useState<string>('0');
+
+  // Por vendedor (inputs)
+  type EditVRow = { vendedor_id: string; vendedor_nome: string; vendas: string; novas: string; visitas: string };
+  const [editVend, setEditVend] = useState<EditVRow[]>([]);
+
+  function openEditor() {
+    // Pré-carrega do estado atual (o que está no relatório)
+    setEditErro(null);
+    setEmpVendas(String(empresaMeta.meta_vendas_sem_iva || 0));
+    setEmpNovas(String(empresaMeta.meta_novas_farmacias || 0));
+    setEmpVisitas(String(empresaMeta.meta_visitas || 0));
+
+    setEditVend(
+      rows
+        .slice()
+        .sort((a, b) => a.vendedor_nome.localeCompare(b.vendedor_nome))
+        .map((r) => ({
+          vendedor_id: r.vendedor_id,
+          vendedor_nome: r.vendedor_nome,
+          vendas: String(r.meta_vendas_sem_iva || 0),
+          novas: String(r.meta_novas_farmacias || 0),
+          visitas: String(r.meta_visitas || 0),
+        }))
+    );
+
+    setEditOpen(true);
+  }
+
+  function updateVend(id: string, patch: Partial<EditVRow>) {
+    setEditVend((prev) => prev.map((v) => (v.vendedor_id === id ? { ...v, ...patch } : v)));
+  }
+
+  async function salvarMetas() {
+    setSaving(true);
+    setEditErro(null);
+
+    try {
+      const pAno = anoSelecionado;
+      const pMes = mesSelecionado;
+
+      // ===== Empresa metas do mês =====
+      // Estratégia segura SEM depender de unique(ano,mes):
+      // - procura se existe linha (ano,mes). Se existir -> update por id. Senão -> insert.
+      const { data: empExist, error: empSelErr } = await supabase
+        .from('empresa_metas_mensais')
+        .select('id')
+        .eq('ano', pAno)
+        .eq('mes', pMes)
+        .limit(1);
+
+      if (empSelErr) throw empSelErr;
+
+      const empPayload = {
+        ano: pAno,
+        mes: pMes,
+        meta_vendas_sem_iva: parseMoneyInput(empVendas),
+        meta_novas_farmacias: parseIntInput(empNovas),
+        meta_visitas: parseIntInput(empVisitas),
+      };
+
+      if (empExist && empExist.length > 0) {
+        const { error: empUpdErr } = await supabase
+          .from('empresa_metas_mensais')
+          .update(empPayload)
+          .eq('id', empExist[0].id);
+
+        if (empUpdErr) throw empUpdErr;
+      } else {
+        const { error: empInsErr } = await supabase.from('empresa_metas_mensais').insert(empPayload);
+        if (empInsErr) throw empInsErr;
+      }
+
+      // ===== Metas por vendedor =====
+      // Vamos buscar ids existentes desse mês para mapear update vs insert
+      const { data: vendExist, error: vendSelErr } = await supabase
+        .from('vendedor_metas_operacionais_mensais')
+        .select('id,vendedor_id')
+        .eq('ano', pAno)
+        .eq('mes', pMes);
+
+      if (vendSelErr) throw vendSelErr;
+
+      const mapExist = new Map<string, string>();
+      (vendExist ?? []).forEach((r: any) => mapExist.set(r.vendedor_id, r.id));
+
+      const ops = editVend.map((v) => {
+        const payload = {
+          vendedor_id: v.vendedor_id,
+          ano: pAno,
+          mes: pMes,
+          meta_vendas_sem_iva: parseMoneyInput(v.vendas),
+          meta_novas_farmacias: parseIntInput(v.novas),
+          meta_visitas: parseIntInput(v.visitas),
+        };
+
+        const existingId = mapExist.get(v.vendedor_id);
+        if (existingId) {
+          return supabase.from('vendedor_metas_operacionais_mensais').update(payload).eq('id', existingId);
+        }
+        return supabase.from('vendedor_metas_operacionais_mensais').insert(payload);
+      });
+
+      const results = await Promise.all(ops);
+      const firstErr = results.find((r) => (r as any).error)?.error;
+      if (firstErr) throw firstErr;
+
+      setEditOpen(false);
+      await carregar();
+    } catch (e: any) {
+      console.error(e);
+      setEditErro(e?.message || 'Erro ao guardar metas');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ===== UI STATES =====
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -323,7 +463,15 @@ export default function MetasPage() {
       <div className="mb-6">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Metas</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Metas</h1>
+              {mesFechado && (
+                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <ShieldAlert className="w-4 h-4" />
+                  Mês fechado (ainda é possível ajustar metas)
+                </span>
+              )}
+            </div>
             <p className="text-gray-600 text-sm sm:text-base">
               Acompanhamento por vendedor com base em <strong>faturas emitidas</strong>, visitas e novas farmácias
               (primeira compra da vida do cliente no mês).
@@ -350,6 +498,15 @@ export default function MetasPage() {
             >
               <RefreshCw className="w-5 h-5" />
               Atualizar
+            </button>
+
+            <button
+              type="button"
+              onClick={openEditor}
+              className="bg-blue-600 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
+            >
+              <Pencil className="w-5 h-5" />
+              Alterar metas
             </button>
           </div>
         </div>
@@ -383,7 +540,7 @@ export default function MetasPage() {
         />
       </div>
 
-      {/* Barra geral da empresa (opcional, mas ajuda visualmente) */}
+      {/* Barra geral da empresa */}
       <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <div>
@@ -445,9 +602,7 @@ export default function MetasPage() {
                   <div className="text-sm text-gray-500">Vendas</div>
                   <div className="text-base font-bold text-gray-900">
                     {formatCurrencyEUR(r.realizado_vendas_sem_iva)}{' '}
-                    <span className="text-gray-400 font-semibold">
-                      / {formatCurrencyEUR(r.meta_vendas_sem_iva)}
-                    </span>
+                    <span className="text-gray-400 font-semibold">/ {formatCurrencyEUR(r.meta_vendas_sem_iva)}</span>
                   </div>
                 </div>
               </div>
@@ -460,6 +615,7 @@ export default function MetasPage() {
                   left={formatCurrencyEUR(r.realizado_vendas_sem_iva)}
                   right={formatCurrencyEUR(r.meta_vendas_sem_iva)}
                 />
+
                 <Metric
                   label="Novas farmácias"
                   icon={<Users className="w-5 h-5" />}
@@ -467,6 +623,7 @@ export default function MetasPage() {
                   left={formatInt(r.realizado_novas_farmacias)}
                   right={formatInt(r.meta_novas_farmacias)}
                 />
+
                 <Metric
                   label="Visitas"
                   icon={<MapPin className="w-5 h-5" />}
@@ -506,11 +663,139 @@ export default function MetasPage() {
         })}
 
         {rows.length === 0 && (
-          <div className="bg-white rounded-xl shadow-lg p-10 text-center text-gray-600">
-            Nenhum vendedor encontrado.
-          </div>
+          <div className="bg-white rounded-xl shadow-lg p-10 text-center text-gray-600">Nenhum vendedor encontrado.</div>
         )}
       </div>
+
+      {/* MODAL: Alterar Metas */}
+      {editOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => (saving ? null : setEditOpen(false))} />
+          <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b">
+              <div>
+                <div className="text-lg font-bold text-gray-900">Alterar Metas</div>
+                <div className="text-sm text-gray-500">Mês: {toMonthKey(anoSelecionado, mesSelecionado)}</div>
+              </div>
+              <button
+                type="button"
+                className="p-2 rounded-lg hover:bg-gray-100"
+                onClick={() => (saving ? null : setEditOpen(false))}
+              >
+                <X className="w-5 h-5 text-gray-700" />
+              </button>
+            </div>
+
+            {mesFechado && (
+              <div className="px-6 py-4 bg-amber-50 border-b border-amber-200 text-amber-800 text-sm">
+                Este mês está fechado (passado). Você ainda pode ajustar metas para correções, mas isso altera relatórios
+                retroativamente.
+              </div>
+            )}
+
+            {editErro && (
+              <div className="px-6 py-4 bg-red-50 border-b border-red-200 text-red-700 text-sm flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {editErro}
+              </div>
+            )}
+
+            <div className="p-6 space-y-6 max-h-[70vh] overflow-auto">
+              {/* Empresa */}
+              <div className="rounded-2xl border border-gray-100 p-5">
+                <div className="text-sm font-bold text-gray-900 mb-4">Metas da Empresa (mês)</div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <Field
+                    label="Meta Vendas (sem IVA) €"
+                    value={empVendas}
+                    onChange={setEmpVendas}
+                    placeholder="Ex: 7500"
+                  />
+                  <Field
+                    label="Meta Novas Farmácias"
+                    value={empNovas}
+                    onChange={setEmpNovas}
+                    placeholder="Ex: 10"
+                    inputMode="numeric"
+                  />
+                  <Field
+                    label="Meta Visitas"
+                    value={empVisitas}
+                    onChange={setEmpVisitas}
+                    placeholder="Ex: 40"
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+
+              {/* Vendedores */}
+              <div className="rounded-2xl border border-gray-100 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <div className="text-sm font-bold text-gray-900">Metas por Vendedor (mês)</div>
+                    <div className="text-xs text-gray-500">
+                      Ajuste as metas de Vendas / Novas Farmácias / Visitas por vendedor.
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500">{editVend.length} vendedor(es)</div>
+                </div>
+
+                <div className="space-y-3">
+                  {editVend.map((v) => (
+                    <div key={v.vendedor_id} className="rounded-xl border border-gray-100 p-4">
+                      <div className="text-sm font-bold text-gray-900 mb-3">{v.vendedor_nome}</div>
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                        <Field
+                          label="Vendas €"
+                          value={v.vendas}
+                          onChange={(val) => updateVend(v.vendedor_id, { vendas: val })}
+                          placeholder="0"
+                        />
+                        <Field
+                          label="Novas"
+                          value={v.novas}
+                          onChange={(val) => updateVend(v.vendedor_id, { novas: val })}
+                          placeholder="0"
+                          inputMode="numeric"
+                        />
+                        <Field
+                          label="Visitas"
+                          value={v.visitas}
+                          onChange={(val) => updateVend(v.vendedor_id, { visitas: val })}
+                          placeholder="0"
+                          inputMode="numeric"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t flex items-center justify-between">
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg font-semibold bg-gray-100 text-gray-800 hover:bg-gray-200"
+                onClick={() => (saving ? null : setEditOpen(false))}
+                disabled={saving}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="px-5 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:opacity-95 flex items-center gap-2"
+                onClick={salvarMetas}
+                disabled={saving}
+              >
+                <Save className="w-5 h-5" />
+                {saving ? 'Guardando...' : 'Guardar metas'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -568,4 +853,32 @@ function Metric({
     </div>
   );
 }
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  inputMode,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
+}) {
+  return (
+    <label className="block">
+      <div className="text-xs font-semibold text-gray-600 mb-1">{label}</div>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      />
+    </label>
+  );
+}
+
 
