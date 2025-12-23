@@ -9,6 +9,7 @@ import {
   RefreshCw,
   AlertCircle,
   Calendar,
+  Save,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -34,6 +35,12 @@ type MetasVendedorRow = {
 function safeNum(v: unknown, fallback = 0) {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function safeInt(v: unknown, fallback = 0) {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.trunc(n);
 }
 
 function formatCurrencyEUR(valor: number) {
@@ -62,10 +69,7 @@ function ProgressBar({ value }: { value: number }) {
   const v = clamp(value, 0, 200);
   return (
     <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
-      <div
-        className="h-3 rounded-full transition-all"
-        style={{ width: `${v}%` }}
-      />
+      <div className="h-3 rounded-full transition-all" style={{ width: `${v}%` }} />
     </div>
   );
 }
@@ -88,6 +92,9 @@ export default function MetasPage() {
   });
 
   const [rows, setRows] = useState<MetasVendedorRow[]>([]);
+
+  const [savingEmpresa, setSavingEmpresa] = useState(false);
+  const [savingVendedorId, setSavingVendedorId] = useState<string | null>(null);
 
   const { anoSelecionado, mesSelecionado } = useMemo(() => {
     const [anoStr, mesStr] = mesAno.split('-');
@@ -114,8 +121,8 @@ export default function MetasPage() {
 
       setEmpresaMeta({
         meta_vendas_sem_iva: safeNum(empRow?.meta_vendas_sem_iva, 0),
-        meta_novas_farmacias: safeNum(empRow?.meta_novas_farmacias, 0),
-        meta_visitas: safeNum(empRow?.meta_visitas, 0),
+        meta_novas_farmacias: safeInt(empRow?.meta_novas_farmacias, 0),
+        meta_visitas: safeInt(empRow?.meta_visitas, 0),
       });
 
       // 2) Metas por vendedor (todos os vendedores via LEFT JOIN)
@@ -133,12 +140,12 @@ export default function MetasPage() {
         vendedor_nome: r.vendedor_nome ?? '—',
 
         meta_vendas_sem_iva: safeNum(r.meta_vendas_sem_iva, 0),
-        meta_novas_farmacias: safeNum(r.meta_novas_farmacias, 0),
-        meta_visitas: safeNum(r.meta_visitas, 0),
+        meta_novas_farmacias: safeInt(r.meta_novas_farmacias, 0),
+        meta_visitas: safeInt(r.meta_visitas, 0),
 
         realizado_vendas_sem_iva: safeNum(r.realizado_vendas_sem_iva, 0),
-        realizado_novas_farmacias: safeNum(r.realizado_novas_farmacias, 0),
-        realizado_visitas: safeNum(r.realizado_visitas, 0),
+        realizado_novas_farmacias: safeInt(r.realizado_novas_farmacias, 0),
+        realizado_visitas: safeInt(r.realizado_visitas, 0),
       }));
 
       // ordena por % de vendas (desc), depois por realizado_vendas (desc)
@@ -173,10 +180,10 @@ export default function MetasPage() {
     const metaTotalVisitas = rows.reduce((acc, r) => acc + r.meta_visitas, 0);
     const realTotalVisitas = rows.reduce((acc, r) => acc + r.realizado_visitas, 0);
 
-    // “Acima da meta”: considera somente quem tem meta > 0 (senão vira ruído)
-    const acimaDaMeta = rows.filter((r) => r.meta_vendas_sem_iva > 0 && r.realizado_vendas_sem_iva >= r.meta_vendas_sem_iva).length;
+    const acimaDaMeta = rows.filter(
+      (r) => r.meta_vendas_sem_iva > 0 && r.realizado_vendas_sem_iva >= r.meta_vendas_sem_iva
+    ).length;
 
-    // prioridade: usar meta global da empresa, se existir (se for 0, cai para soma das metas dos vendedores)
     const metaEmpresaVendas = empresaMeta.meta_vendas_sem_iva > 0 ? empresaMeta.meta_vendas_sem_iva : metaTotalVendas;
     const metaEmpresaNovas = empresaMeta.meta_novas_farmacias > 0 ? empresaMeta.meta_novas_farmacias : metaTotalNovas;
     const metaEmpresaVisitas = empresaMeta.meta_visitas > 0 ? empresaMeta.meta_visitas : metaTotalVisitas;
@@ -185,7 +192,6 @@ export default function MetasPage() {
     const atingNovas = pct(realTotalNovas, metaEmpresaNovas);
     const atingVisitas = pct(realTotalVisitas, metaEmpresaVisitas);
 
-    // um “atingimento geral” simples: média ponderada por metas (quando meta=0, ignora)
     const pesos = [
       metaEmpresaVendas > 0 ? 1 : 0,
       metaEmpresaNovas > 0 ? 1 : 0,
@@ -212,6 +218,74 @@ export default function MetasPage() {
     };
   }, [rows, empresaMeta]);
 
+  async function salvarMetasEmpresa() {
+    try {
+      setSavingEmpresa(true);
+      setErro(null);
+
+      const payload = {
+        ano: anoSelecionado,
+        mes: mesSelecionado,
+        meta_vendas_sem_iva: safeNum(empresaMeta.meta_vendas_sem_iva, 0),
+        meta_novas_farmacias: safeInt(empresaMeta.meta_novas_farmacias, 0),
+        meta_visitas: safeInt(empresaMeta.meta_visitas, 0),
+      };
+
+      const { error } = await supabase
+        .from('empresa_metas_mensais')
+        .upsert(payload, { onConflict: 'ano,mes' });
+
+      if (error) throw error;
+
+      await carregar();
+      window.alert('Metas da empresa guardadas com sucesso.');
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao guardar metas da empresa');
+    } finally {
+      setSavingEmpresa(false);
+    }
+  }
+
+  async function salvarMetasVendedor(vendedorId: string) {
+    const r = rows.find((x) => x.vendedor_id === vendedorId);
+    if (!r) return;
+
+    try {
+      setSavingVendedorId(vendedorId);
+      setErro(null);
+
+      const payload = {
+        vendedor_id: vendedorId,
+        ano: anoSelecionado,
+        mes: mesSelecionado,
+        meta_vendas_sem_iva: safeNum(r.meta_vendas_sem_iva, 0),
+        meta_novas_farmacias: safeInt(r.meta_novas_farmacias, 0),
+        meta_visitas: safeInt(r.meta_visitas, 0),
+      };
+
+      const { error } = await supabase
+        .from('vendedor_metas_operacionais_mensais')
+        .upsert(payload, { onConflict: 'vendedor_id,ano,mes' });
+
+      if (error) throw error;
+
+      await carregar();
+      window.alert(`Metas do vendedor "${r.vendedor_nome}" guardadas com sucesso.`);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao guardar metas do vendedor');
+    } finally {
+      setSavingVendedorId(null);
+    }
+  }
+
+  function updateVendedorMeta(vendedorId: string, patch: Partial<Pick<MetasVendedorRow, 'meta_vendas_sem_iva' | 'meta_novas_farmacias' | 'meta_visitas'>>) {
+    setRows((prev) =>
+      prev.map((r) => (r.vendedor_id === vendedorId ? { ...r, ...patch } : r))
+    );
+  }
+
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -232,7 +306,7 @@ export default function MetasPage() {
           <div className="flex items-start gap-3">
             <AlertCircle className="w-6 h-6 text-red-600 mt-0.5" />
             <div>
-              <p className="text-red-600 font-semibold">Erro ao carregar</p>
+              <p className="text-red-600 font-semibold">Erro</p>
               <p className="text-gray-700 mt-1">{erro}</p>
               <button
                 type="button"
@@ -286,6 +360,47 @@ export default function MetasPage() {
         </div>
       </div>
 
+      {/* Metas da empresa (editar + guardar) */}
+      <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <div className="text-lg font-bold text-gray-900">Metas da Empresa — {mesAno}</div>
+            <div className="text-sm text-gray-500">Estas metas alimentam o resumo do topo (empresa).</div>
+          </div>
+
+          <button
+            type="button"
+            onClick={salvarMetasEmpresa}
+            disabled={savingEmpresa}
+            className={`px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center ${
+              savingEmpresa ? 'bg-gray-300 text-gray-700' : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            <Save className="w-5 h-5" />
+            {savingEmpresa ? 'A guardar...' : 'Guardar metas da empresa'}
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <InputField
+            label="Meta vendas (sem IVA)"
+            value={empresaMeta.meta_vendas_sem_iva}
+            onChange={(n) => setEmpresaMeta((p) => ({ ...p, meta_vendas_sem_iva: n }))}
+            step="0.01"
+          />
+          <InputField
+            label="Meta novas farmácias"
+            value={empresaMeta.meta_novas_farmacias}
+            onChangeInt={(n) => setEmpresaMeta((p) => ({ ...p, meta_novas_farmacias: n }))}
+          />
+          <InputField
+            label="Meta visitas"
+            value={empresaMeta.meta_visitas}
+            onChangeInt={(n) => setEmpresaMeta((p) => ({ ...p, meta_visitas: n }))}
+          />
+        </div>
+      </div>
+
       {/* Cards (empresa) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Card
@@ -321,7 +436,6 @@ export default function MetasPage() {
           const pNovas = pct(r.realizado_novas_farmacias, r.meta_novas_farmacias);
           const pVisitas = pct(r.realizado_visitas, r.meta_visitas);
 
-          // atingimento geral do vendedor (média simples ignorando metas=0)
           const w = [
             r.meta_vendas_sem_iva > 0 ? 1 : 0,
             r.meta_novas_farmacias > 0 ? 1 : 0,
@@ -329,6 +443,8 @@ export default function MetasPage() {
           ];
           const sw = w.reduce((a, b) => a + b, 0) || 1;
           const atingVendedor = (pVendas * w[0] + pNovas * w[1] + pVisitas * w[2]) / sw;
+
+          const savingThis = savingVendedorId === r.vendedor_id;
 
           return (
             <div key={r.vendedor_id} className="bg-white rounded-2xl shadow-lg p-6">
@@ -346,19 +462,52 @@ export default function MetasPage() {
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <div className="text-sm text-gray-500">Vendas</div>
-                  <div className="text-base font-bold text-gray-900">
-                    {formatCurrencyEUR(r.realizado_vendas_sem_iva)}{' '}
-                    <span className="text-gray-400 font-semibold">
-                      / {formatCurrencyEUR(r.meta_vendas_sem_iva)}
-                    </span>
+                <div className="flex flex-col items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => salvarMetasVendedor(r.vendedor_id)}
+                    disabled={savingThis}
+                    className={`px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center ${
+                      savingThis ? 'bg-gray-300 text-gray-700' : 'bg-green-600 text-white hover:bg-green-700'
+                    }`}
+                  >
+                    <Save className="w-5 h-5" />
+                    {savingThis ? 'A guardar...' : 'Guardar metas do vendedor'}
+                  </button>
+
+                  <div className="text-right">
+                    <div className="text-sm text-gray-500">Vendas (realizado / meta)</div>
+                    <div className="text-base font-bold text-gray-900">
+                      {formatCurrencyEUR(r.realizado_vendas_sem_iva)}{' '}
+                      <span className="text-gray-400 font-semibold">
+                        / {formatCurrencyEUR(r.meta_vendas_sem_iva)}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
 
+              {/* Editar metas do vendedor */}
+              <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <InputField
+                  label="Meta vendas (sem IVA)"
+                  value={r.meta_vendas_sem_iva}
+                  onChange={(n) => updateVendedorMeta(r.vendedor_id, { meta_vendas_sem_iva: n })}
+                  step="0.01"
+                />
+                <InputField
+                  label="Meta novas farmácias"
+                  value={r.meta_novas_farmacias}
+                  onChangeInt={(n) => updateVendedorMeta(r.vendedor_id, { meta_novas_farmacias: n })}
+                />
+                <InputField
+                  label="Meta visitas"
+                  value={r.meta_visitas}
+                  onChangeInt={(n) => updateVendedorMeta(r.vendedor_id, { meta_visitas: n })}
+                />
+              </div>
+
               <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {/* Vendas */}
                 <Metric
                   label="Vendas (sem IVA)"
                   icon={<TrendingUp className="w-5 h-5" />}
@@ -367,7 +516,6 @@ export default function MetasPage() {
                   right={formatCurrencyEUR(r.meta_vendas_sem_iva)}
                 />
 
-                {/* Novas farmácias */}
                 <Metric
                   label="Novas farmácias"
                   icon={<Users className="w-5 h-5" />}
@@ -376,7 +524,6 @@ export default function MetasPage() {
                   right={formatInt(r.meta_novas_farmacias)}
                 />
 
-                {/* Visitas */}
                 <Metric
                   label="Visitas"
                   icon={<MapPin className="w-5 h-5" />}
@@ -386,7 +533,6 @@ export default function MetasPage() {
                 />
               </div>
 
-              {/* barras */}
               <div className="mt-4 space-y-3">
                 <div>
                   <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
@@ -477,5 +623,47 @@ function Metric({
         <div className="text-sm text-gray-400 font-semibold">/ {right}</div>
       </div>
     </div>
+  );
+}
+
+function InputField({
+  label,
+  value,
+  onChange,
+  onChangeInt,
+  step,
+}: {
+  label: string;
+  value: number;
+  onChange?: (n: number) => void;
+  onChangeInt?: (n: number) => void;
+  step?: string;
+}) {
+  const isInt = Boolean(onChangeInt);
+
+  return (
+    <label className="block">
+      <div className="text-xs font-semibold text-gray-600 mb-1">{label}</div>
+      <input
+        type="number"
+        step={step ?? (isInt ? '1' : '0.01')}
+        value={Number.isFinite(value) ? String(value) : '0'}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === '') {
+            if (onChangeInt) onChangeInt(0);
+            else if (onChange) onChange(0);
+            return;
+          }
+          const n = Number(raw);
+          if (!Number.isFinite(n)) return;
+
+          if (onChangeInt) onChangeInt(Math.max(0, Math.trunc(n)));
+          else if (onChange) onChange(Math.max(0, n));
+        }}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        min={0}
+      />
+    </label>
   );
 }
