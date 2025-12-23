@@ -9,6 +9,10 @@ import {
   RefreshCw,
   AlertCircle,
   Calendar,
+  Lock,
+  Pencil,
+  X,
+  Save,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -33,6 +37,27 @@ type MetasVendedorRow = {
   realizado_vendas_sem_iva: number;
   realizado_novas_farmacias: number;
   realizado_visitas: number;
+};
+
+type SnapshotCheckRow = {
+  fechado_em: string | null;
+};
+
+type MetasEmpresaUpsert = {
+  ano: number;
+  mes: number;
+  meta_vendas_sem_iva: number;
+  meta_novas_farmacias: number;
+  meta_visitas: number;
+};
+
+type MetasVendedorUpsert = {
+  vendedor_id: string;
+  ano: number;
+  mes: number;
+  meta_vendas_sem_iva: number;
+  meta_novas_farmacias: number;
+  meta_visitas: number;
 };
 
 // =====================================================
@@ -66,22 +91,34 @@ function pct(realizado: number, meta: number) {
   return clamp((realizado / meta) * 100, 0, 200);
 }
 
-// Cor por faixa de atingimento
 function progressColorClass(v: number) {
   if (v >= 100) return 'bg-green-600';
   if (v >= 80) return 'bg-yellow-500';
   return 'bg-red-600';
 }
 
+function parseMoneyInput(s: string) {
+  // aceita "8.500,50" ou "8500.50" etc.
+  const cleaned = s.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseIntInput(s: string) {
+  const cleaned = s.replace(/\s/g, '');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+}
+
 // =====================================================
-// PROGRESS BAR (COLORIDA E PROGRESSIVA)
+// PROGRESS BAR
 // =====================================================
 
 function ProgressBar({ value }: { value: number }) {
   const v = clamp(value, 0, 200);
   return (
     <div className="relative w-full h-3 bg-gray-100 rounded-full overflow-hidden">
-      {/* marcador de 100% (em 50% do range 0–200) */}
+      {/* marcador 100% */}
       <div className="absolute left-1/2 top-0 h-3 w-px bg-gray-300" />
       <div
         className={`h-3 rounded-full transition-all duration-500 ${progressColorClass(v)}`}
@@ -114,6 +151,23 @@ export default function MetasPage() {
 
   const [rows, setRows] = useState<MetasVendedorRow[]>([]);
 
+  // Status (não trava edição!)
+  const [mesFechado, setMesFechado] = useState(false);
+  const [fechadoEm, setFechadoEm] = useState<string | null>(null);
+
+  // Modal edição
+  const [editarAberto, setEditarAberto] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErro, setSaveErro] = useState<string | null>(null);
+
+  // Form (strings para input)
+  const [formEmpresaVendas, setFormEmpresaVendas] = useState('0');
+  const [formEmpresaNovas, setFormEmpresaNovas] = useState('0');
+  const [formEmpresaVisitas, setFormEmpresaVisitas] = useState('0');
+
+  type FormVend = { vendas: string; novas: string; visitas: string };
+  const [formVendedores, setFormVendedores] = useState<Record<string, FormVend>>({});
+
   const { anoSelecionado, mesSelecionado } = useMemo(() => {
     const [anoStr, mesStr] = mesAno.split('-');
     return {
@@ -131,7 +185,26 @@ export default function MetasPage() {
     setErro(null);
 
     try {
-      // Metas empresa
+      // 0) Apenas status: mês está “fechado” se houver snapshot em comissoes_mensais
+      const { data: snapCheck, error: snapErr } = await supabase
+        .from('comissoes_mensais')
+        .select('fechado_em')
+        .eq('ano', anoSelecionado)
+        .eq('mes', mesSelecionado)
+        .limit(1);
+
+      if (snapErr) throw snapErr;
+
+      if ((snapCheck || []).length > 0) {
+        const s = (snapCheck?.[0] as SnapshotCheckRow) || null;
+        setMesFechado(true);
+        setFechadoEm(s?.fechado_em || null);
+      } else {
+        setMesFechado(false);
+        setFechadoEm(null);
+      }
+
+      // 1) Metas empresa
       const { data: empData, error: empErr } = await supabase.rpc(
         'relatorio_metas_empresa_mes',
         { p_ano: anoSelecionado, p_mes: mesSelecionado }
@@ -146,7 +219,7 @@ export default function MetasPage() {
         meta_visitas: safeNum(empRow?.meta_visitas, 0),
       });
 
-      // Metas por vendedor
+      // 2) Metas por vendedor
       const { data: vendData, error: vendErr } = await supabase.rpc(
         'relatorio_metas_mes',
         { p_ano: anoSelecionado, p_mes: mesSelecionado }
@@ -166,7 +239,6 @@ export default function MetasPage() {
         realizado_visitas: safeNum(r.realizado_visitas, 0),
       }));
 
-      // Ordena por % de vendas (desc)
       parsed.sort((a, b) => {
         const pa = pct(a.realizado_vendas_sem_iva, a.meta_vendas_sem_iva);
         const pb = pct(b.realizado_vendas_sem_iva, b.meta_vendas_sem_iva);
@@ -189,7 +261,7 @@ export default function MetasPage() {
   }, [mesAno]);
 
   // =====================================================
-  // RESUMO EMPRESA
+  // RESUMO
   // =====================================================
 
   const resumo = useMemo(() => {
@@ -223,7 +295,8 @@ export default function MetasPage() {
       metaEmpresaVisitas > 0 ? 1 : 0,
     ];
     const somaPesos = pesos.reduce((a, b) => a + b, 0) || 1;
-    const atingGeral = (atingVendas * pesos[0] + atingNovas * pesos[1] + atingVisitas * pesos[2]) / somaPesos;
+    const atingGeral =
+      (atingVendas * pesos[0] + atingNovas * pesos[1] + atingVisitas * pesos[2]) / somaPesos;
 
     return {
       metaEmpresaVendas,
@@ -239,6 +312,98 @@ export default function MetasPage() {
       acimaDaMeta,
     };
   }, [rows, empresaMeta]);
+
+  // =====================================================
+  // MODAL: ABRIR / FECHAR / SALVAR
+  // =====================================================
+
+  function abrirEditar() {
+    setSaveErro(null);
+
+    // Empresa
+    setFormEmpresaVendas(String(empresaMeta.meta_vendas_sem_iva ?? 0));
+    setFormEmpresaNovas(String(empresaMeta.meta_novas_farmacias ?? 0));
+    setFormEmpresaVisitas(String(empresaMeta.meta_visitas ?? 0));
+
+    // Vendedores
+    const next: Record<string, FormVend> = {};
+    for (const r of rows) {
+      next[r.vendedor_id] = {
+        vendas: String(r.meta_vendas_sem_iva ?? 0),
+        novas: String(r.meta_novas_farmacias ?? 0),
+        visitas: String(r.meta_visitas ?? 0),
+      };
+    }
+    setFormVendedores(next);
+
+    setEditarAberto(true);
+  }
+
+  function fecharEditar() {
+    if (saving) return;
+    setEditarAberto(false);
+    setSaveErro(null);
+  }
+
+  async function salvarMetas() {
+    setSaving(true);
+    setSaveErro(null);
+
+    try {
+      const payloadEmpresa: MetasEmpresaUpsert = {
+        ano: anoSelecionado,
+        mes: mesSelecionado,
+        meta_vendas_sem_iva: parseMoneyInput(formEmpresaVendas),
+        meta_novas_farmacias: parseIntInput(formEmpresaNovas),
+        meta_visitas: parseIntInput(formEmpresaVisitas),
+      };
+
+      // 1) Upsert empresa_metas_mensais
+      const { error: empUpErr } = await supabase
+        .from('empresa_metas_mensais')
+        .upsert(payloadEmpresa as any, { onConflict: 'ano,mes' });
+
+      if (empUpErr) throw empUpErr;
+
+      // 2) Upsert vendedor_metas_operacionais_mensais
+      const payloadVendedores: MetasVendedorUpsert[] = rows.map((r) => {
+        const f = formVendedores[r.vendedor_id] || { vendas: '0', novas: '0', visitas: '0' };
+        return {
+          vendedor_id: r.vendedor_id,
+          ano: anoSelecionado,
+          mes: mesSelecionado,
+          meta_vendas_sem_iva: parseMoneyInput(f.vendas),
+          meta_novas_farmacias: parseIntInput(f.novas),
+          meta_visitas: parseIntInput(f.visitas),
+        };
+      });
+
+      const { error: vendUpErr } = await supabase
+        .from('vendedor_metas_operacionais_mensais')
+        .upsert(payloadVendedores as any, { onConflict: 'vendedor_id,ano,mes' });
+
+      if (vendUpErr) throw vendUpErr;
+
+      // Recarrega para refletir
+      setEditarAberto(false);
+      await carregar();
+    } catch (e: any) {
+      console.error(e);
+      setSaveErro(e?.message || 'Erro ao salvar metas');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ESC no modal
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && editarAberto) fecharEditar();
+    }
+    if (editarAberto) document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editarAberto, saving]);
 
   // =====================================================
   // RENDER
@@ -283,13 +448,44 @@ export default function MetasPage() {
       {/* Header */}
       <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Metas</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold text-gray-900">Metas</h1>
+
+            <span
+              className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
+                mesFechado ? 'bg-gray-900 text-white' : 'bg-blue-100 text-blue-800'
+              }`}
+            >
+              {mesFechado ? (
+                <>
+                  <Lock className="w-4 h-4" /> MÊS FECHADO
+                </>
+              ) : (
+                <>MÊS ABERTO</>
+              )}
+            </span>
+
+            {mesFechado && fechadoEm && (
+              <span className="text-xs text-gray-500">
+                Fechado em {new Date(fechadoEm).toLocaleString('pt-PT')}
+              </span>
+            )}
+          </div>
+
           <p className="text-gray-600">
             Acompanhamento por vendedor com base em <strong>faturas emitidas</strong>, visitas e novas farmácias.
+            {mesFechado && (
+              <>
+                {' '}
+                <span className="font-semibold text-gray-900">
+                  (Fechado afeta comissões; metas continuam editáveis.)
+                </span>
+              </>
+            )}
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <div className="flex items-center gap-2 bg-white rounded-xl shadow-lg px-4 py-3">
             <Calendar className="w-5 h-5 text-gray-700" />
             <input
@@ -302,8 +498,17 @@ export default function MetasPage() {
 
           <button
             type="button"
+            onClick={abrirEditar}
+            className="bg-blue-600 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:bg-blue-700"
+          >
+            <Pencil className="w-5 h-5" />
+            Alterar metas
+          </button>
+
+          <button
+            type="button"
             onClick={carregar}
-            className="bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2"
+            className="bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg flex items-center gap-2 justify-center hover:opacity-95"
           >
             <RefreshCw className="w-5 h-5" />
             Atualizar
@@ -390,6 +595,170 @@ export default function MetasPage() {
           </div>
         )}
       </div>
+
+      {/* MODAL EDITAR */}
+      {editarAberto && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) fecharEditar();
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white w-full max-w-5xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-xl font-bold">Alterar metas — {mesAno}</h2>
+                <p className="text-sm text-white/80">
+                  Metas são editáveis mesmo com mês fechado (fechamento congela comissões, não metas).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharEditar}
+                className="p-2 rounded-lg hover:bg-white/10"
+                aria-label="Fechar"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto">
+              {saveErro && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 font-semibold">
+                  {saveErro}
+                </div>
+              )}
+
+              {/* Empresa */}
+              <div className="mb-6">
+                <h3 className="text-lg font-bold text-gray-900 mb-3">Metas da Empresa</h3>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <Field
+                    label="Meta Vendas (sem IVA)"
+                    value={formEmpresaVendas}
+                    onChange={setFormEmpresaVendas}
+                    hint="Ex: 8500"
+                  />
+                  <Field
+                    label="Meta Novas farmácias"
+                    value={formEmpresaNovas}
+                    onChange={setFormEmpresaNovas}
+                    hint="Ex: 10"
+                  />
+                  <Field
+                    label="Meta Visitas"
+                    value={formEmpresaVisitas}
+                    onChange={setFormEmpresaVisitas}
+                    hint="Ex: 80"
+                  />
+                </div>
+              </div>
+
+              {/* Vendedores */}
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 mb-3">Metas por Vendedor</h3>
+
+                <div className="overflow-x-auto border border-gray-100 rounded-xl">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left py-3 px-4 text-xs font-semibold text-gray-700">Vendedor</th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Vendas (sem IVA)</th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Novas farmácias</th>
+                        <th className="text-right py-3 px-4 text-xs font-semibold text-gray-700">Visitas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {rows.map((r) => {
+                        const fv = formVendedores[r.vendedor_id] || { vendas: '0', novas: '0', visitas: '0' };
+
+                        return (
+                          <tr key={r.vendedor_id} className="hover:bg-gray-50">
+                            <td className="py-3 px-4 text-sm font-semibold text-gray-900">{r.vendedor_nome}</td>
+
+                            <td className="py-3 px-4">
+                              <input
+                                className="w-full text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                value={fv.vendas}
+                                onChange={(e) =>
+                                  setFormVendedores((prev) => ({
+                                    ...prev,
+                                    [r.vendedor_id]: { ...fv, vendas: e.target.value },
+                                  }))
+                                }
+                                inputMode="decimal"
+                              />
+                            </td>
+
+                            <td className="py-3 px-4">
+                              <input
+                                className="w-full text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                value={fv.novas}
+                                onChange={(e) =>
+                                  setFormVendedores((prev) => ({
+                                    ...prev,
+                                    [r.vendedor_id]: { ...fv, novas: e.target.value },
+                                  }))
+                                }
+                                inputMode="numeric"
+                              />
+                            </td>
+
+                            <td className="py-3 px-4">
+                              <input
+                                className="w-full text-right px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                value={fv.visitas}
+                                onChange={(e) =>
+                                  setFormVendedores((prev) => ({
+                                    ...prev,
+                                    [r.vendedor_id]: { ...fv, visitas: e.target.value },
+                                  }))
+                                }
+                                inputMode="numeric"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {rows.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="py-8 text-center text-gray-600">
+                            Nenhum vendedor encontrado.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
+                <button
+                  type="button"
+                  onClick={fecharEditar}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={salvarMetas}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 flex items-center gap-2 justify-center"
+                >
+                  {saving ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                  Guardar metas
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -448,3 +817,28 @@ function Metric({
     </div>
   );
 }
+
+function Field({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <div className="text-sm font-semibold text-gray-700 mb-1">{label}</div>
+      <input
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {hint && <div className="text-xs text-gray-500 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
