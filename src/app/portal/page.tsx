@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@supabase/supabase-js';
+import { useEffect, useMemo, useState } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
 
 type Perfil = {
   role: 'ADMIN' | 'VENDEDOR' | string;
@@ -14,13 +14,13 @@ export default function PortalPage() {
     const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
     if (!url || !anon) {
-      // Falha explícita (melhor do que “funcionar” silenciosamente e esconder o problema)
       throw new Error(
         'Faltam variáveis de ambiente NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY.',
       );
     }
 
-    return createClient(url, anon);
+    // Importante: no App Router, para componentes client, use createBrowserClient (@supabase/ssr)
+    return createBrowserClient(url, anon);
   }, []);
 
   const [loading, setLoading] = useState(true);
@@ -35,7 +35,7 @@ export default function PortalPage() {
       setLoading(true);
       setErrorMsg(null);
 
-      // 1) User autenticado (middleware já deve garantir, mas não confiamos cegamente)
+      // 1) User autenticado (middleware deve garantir, mas validamos aqui também)
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (!isMounted) return;
 
@@ -47,7 +47,6 @@ export default function PortalPage() {
 
       const user = userData?.user;
       if (!user) {
-        // Se isso acontecer, o middleware não aplicou (ou token expirou).
         window.location.href = '/login';
         return;
       }
@@ -64,7 +63,6 @@ export default function PortalPage() {
       if (!isMounted) return;
 
       if (perfilErr) {
-        // Importante: não “engolir” o erro, porque isso é peça crítica de segurança.
         setErrorMsg(`Erro ao buscar perfil (perfis): ${perfilErr.message}`);
         setRole(null);
         setLoading(false);
@@ -84,11 +82,13 @@ export default function PortalPage() {
 
   async function handleSignOut() {
     setErrorMsg(null);
+
     const { error } = await supabase.auth.signOut();
     if (error) {
       setErrorMsg(`Erro ao sair: ${error.message}`);
       return;
     }
+
     window.location.href = '/login';
   }
 
@@ -145,10 +145,6 @@ export default function PortalPage() {
                   >
                     Visitas
                   </Link>
-
-                  <p className="mt-2 text-xs text-gray-600">
-                    (Ainda vamos criar /portal/visitas na etapa 3. Por agora, este link pode dar 404.)
-                  </p>
                 </div>
               </>
             )}
