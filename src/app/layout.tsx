@@ -3,9 +3,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
-// Import all available fonts for AI usage
 import "../lib/fonts";
-import Navbar from "@/components/custom/navbar";
+import NavbarGate from "@/components/custom/navbar-gate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,7 +34,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}
       >
-        <Navbar />
+        <NavbarGate />
         <main className="min-h-[calc(100vh-4rem)]">
           {children}
         </main>
@@ -43,3 +42,4 @@ export default function RootLayout({
     </html>
   );
 }
+
