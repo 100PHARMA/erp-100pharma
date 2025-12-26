@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 function isEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
@@ -12,12 +12,18 @@ export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  // O middleware usa `next` (não `redirect`). Mantemos fallback para `redirect` por compatibilidade.
   const redirectTo = useMemo(() => {
+    const next = searchParams?.get('next');
     const r = searchParams?.get('redirect');
+    const target = next || r;
+
     // segurança mínima: só permite redirects internos
-    if (r && r.startsWith('/')) return r;
+    if (target && target.startsWith('/')) return target;
     return '/';
   }, [searchParams]);
+
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -40,6 +46,8 @@ export default function LoginClient() {
 
     setLoading(true);
     try {
+      // IMPORTANTE: este client (SSR/browser) escreve sessão em cookies,
+      // permitindo que middleware e Server Components enxerguem o user.
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
@@ -59,9 +67,7 @@ export default function LoginClient() {
     <div className="min-h-[70vh] flex items-center justify-center px-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6">
         <h1 className="text-2xl font-bold text-gray-900">Entrar</h1>
-        <p className="text-gray-600 mt-1">
-          Acesso ao ERP 100PHARMA
-        </p>
+        <p className="text-gray-600 mt-1">Acesso ao ERP 100PHARMA</p>
 
         {erro && (
           <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
