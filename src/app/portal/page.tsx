@@ -7,11 +7,11 @@ export default async function PortalPage() {
 
   const {
     data: { user },
-    error: userErr,
   } = await supabase.auth.getUser();
 
-  if (userErr || !user) {
-    redirect('/login');
+  // IMPORTANTE: preserve o "next" ao mandar para login
+  if (!user) {
+    redirect('/login?next=/portal');
   }
 
   const { data: perfil, error: perfilErr } = await supabase
@@ -31,8 +31,8 @@ export default async function PortalPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-3xl p-6">
+    <main className="min-h-[60vh]">
+      <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -52,13 +52,13 @@ export default async function PortalPage() {
             </form>
           </div>
 
-          <div className="mt-6 space-y-3">
-            {perfilErr ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                Erro ao buscar perfil (perfis): {perfilErr.message}
-              </div>
-            ) : null}
+          {perfilErr ? (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              Erro ao buscar perfil (perfis): {perfilErr.message}
+            </div>
+          ) : null}
 
+          <div className="mt-6 space-y-3">
             <div className="rounded-lg bg-gray-50 p-4">
               <div className="text-xs font-medium text-gray-500">Email</div>
               <div className="mt-1 text-sm font-semibold text-gray-900">{email}</div>
@@ -81,7 +81,7 @@ export default async function PortalPage() {
         </div>
 
         <div className="mt-4 text-xs text-gray-500">
-          Produção: erp-100pharma (Next.js App Router + Supabase Auth/RLS) — rota /portal mínima.
+          Produção: erp-100pharma (Next.js App Router + Supabase Auth/RLS) — rota /portal.
         </div>
       </div>
     </main>
