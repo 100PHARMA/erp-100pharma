@@ -5,6 +5,22 @@ import { createServerClient } from '@supabase/ssr';
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
+  const pathname = req.nextUrl.pathname;
+
+  // Rotas públicas (NÃO exigir sessão)
+  const isPublic =
+    pathname === '/login' ||
+    pathname.startsWith('/login/') ||
+    pathname === '/auth/callback' ||
+    pathname.startsWith('/auth/callback/') ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/reset-password/') ||
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/favicon') ||
+    pathname === '/favicon.ico';
+
+  if (isPublic) return res;
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -22,18 +38,11 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const pathname = req.nextUrl.pathname;
-
-  const isPublic =
-    pathname.startsWith('/login') ||
-    pathname.startsWith('/auth') ||
-    pathname.startsWith('/_next') ||
-    pathname.startsWith('/favicon');
-
-  if (isPublic) return res;
-
+  // Se não está logado, manda para /login
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = '/login';
@@ -41,20 +50,23 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // busca role do usuário
+  // Busca role do usuário
   const { data: perfil } = await supabase
     .from('perfis')
     .select('role')
     .eq('id', user.id)
     .maybeSingle();
 
-  const role = perfil?.role ?? 'VENDEDOR';
+  const role = (perfil?.role ?? 'VENDEDOR').toUpperCase();
 
-  const isPortal = pathname.startsWith('/portal');
-  const isApp = pathname.startsWith('/app') || (!isPortal && !pathname.startsWith('/login'));
+  // Portal do vendedor
+  const isPortal = pathname === '/portal' || pathname.startsWith('/portal/');
+
+  // Tudo que NÃO for portal (e não for público) é considerado "app"
+  const isAppArea = !isPortal;
 
   // VENDEDOR: só portal
-  if (role === 'VENDEDOR' && isApp && !isPortal) {
+  if (role === 'VENDEDOR' && isAppArea) {
     const url = req.nextUrl.clone();
     url.pathname = '/portal';
     return NextResponse.redirect(url);
@@ -63,6 +75,11 @@ export async function middleware(req: NextRequest) {
   // ADMIN: pode tudo
   return res;
 }
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+};
+
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
