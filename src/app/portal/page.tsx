@@ -1,95 +1,33 @@
-'use client';
-
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
+import { redirect } from 'next/navigation';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-type Perfil = {
-  role: 'ADMIN' | 'VENDEDOR' | string;
-};
+export default async function PortalPage() {
+  const supabase = createSupabaseServerClient();
 
-export default function PortalPage() {
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const {
+    data: { user },
+    error: userErr,
+  } = await supabase.auth.getUser();
 
-    if (!url || !anon) {
-      throw new Error(
-        'Faltam variáveis de ambiente NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY.',
-      );
-    }
+  if (userErr || !user) {
+    redirect('/login');
+  }
 
-    // Importante: no App Router, para componentes client, use createBrowserClient (@supabase/ssr)
-    return createBrowserClient(url, anon);
-  }, []);
+  const { data: perfil, error: perfilErr } = await supabase
+    .from('perfis')
+    .select('role')
+    .eq('id', user.id)
+    .single();
 
-  const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const email = user.email ?? '—';
+  const role = perfilErr ? '—' : (perfil?.role ?? '—');
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function load() {
-      setLoading(true);
-      setErrorMsg(null);
-
-      // 1) User autenticado (middleware deve garantir, mas validamos aqui também)
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (!isMounted) return;
-
-      if (userErr) {
-        setErrorMsg(userErr.message);
-        setLoading(false);
-        return;
-      }
-
-      const user = userData?.user;
-      if (!user) {
-        window.location.href = '/login';
-        return;
-      }
-
-      setEmail(user.email ?? null);
-
-      // 2) Perfil (role) vindo de public.perfis
-      const { data: perfil, error: perfilErr } = await supabase
-        .from('perfis')
-        .select('role')
-        .eq('id', user.id)
-        .single<Perfil>();
-
-      if (!isMounted) return;
-
-      if (perfilErr) {
-        setErrorMsg(`Erro ao buscar perfil (perfis): ${perfilErr.message}`);
-        setRole(null);
-        setLoading(false);
-        return;
-      }
-
-      setRole(perfil?.role ?? null);
-      setLoading(false);
-    }
-
-    void load();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [supabase]);
-
-  async function handleSignOut() {
-    setErrorMsg(null);
-
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      setErrorMsg(`Erro ao sair: ${error.message}`);
-      return;
-    }
-
-    window.location.href = '/login';
+  async function signOut() {
+    'use server';
+    const supabase = createSupabaseServerClient();
+    await supabase.auth.signOut();
+    redirect('/login');
   }
 
   return (
@@ -104,50 +42,41 @@ export default function PortalPage() {
               </p>
             </div>
 
-            <button
-              onClick={handleSignOut}
-              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
-              type="button"
-            >
-              Sair
-            </button>
+            <form action={signOut}>
+              <button
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+                type="submit"
+              >
+                Sair
+              </button>
+            </form>
           </div>
 
           <div className="mt-6 space-y-3">
-            {loading ? (
-              <div className="rounded-lg bg-gray-100 p-4 text-sm text-gray-700">
-                A carregar dados do utilizador…
-              </div>
-            ) : errorMsg ? (
+            {perfilErr ? (
               <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {errorMsg}
+                Erro ao buscar perfil (perfis): {perfilErr.message}
               </div>
-            ) : (
-              <>
-                <div className="rounded-lg bg-gray-50 p-4">
-                  <div className="text-xs font-medium text-gray-500">Email</div>
-                  <div className="mt-1 text-sm font-semibold text-gray-900">
-                    {email ?? '—'}
-                  </div>
-                </div>
+            ) : null}
 
-                <div className="rounded-lg bg-gray-50 p-4">
-                  <div className="text-xs font-medium text-gray-500">Role</div>
-                  <div className="mt-1 text-sm font-semibold text-gray-900">
-                    {role ?? '—'}
-                  </div>
-                </div>
+            <div className="rounded-lg bg-gray-50 p-4">
+              <div className="text-xs font-medium text-gray-500">Email</div>
+              <div className="mt-1 text-sm font-semibold text-gray-900">{email}</div>
+            </div>
 
-                <div className="pt-2">
-                  <Link
-                    href="/portal/visitas"
-                    className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
-                  >
-                    Visitas
-                  </Link>
-                </div>
-              </>
-            )}
+            <div className="rounded-lg bg-gray-50 p-4">
+              <div className="text-xs font-medium text-gray-500">Role</div>
+              <div className="mt-1 text-sm font-semibold text-gray-900">{role}</div>
+            </div>
+
+            <div className="pt-2">
+              <Link
+                href="/portal/visitas"
+                className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
+              >
+                Visitas
+              </Link>
+            </div>
           </div>
         </div>
 
