@@ -1,8 +1,24 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { TrendingUp, Package, ShoppingCart, Users } from 'lucide-react';
 
 export default function Home() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // Supabase recovery chega via hash (#...), que o middleware NÃO enxerga.
+    // Então tratamos aqui e redirecionamos para a página de reset.
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const isRecovery =
+      hash.includes('type=recovery') && hash.includes('access_token=');
+
+    if (isRecovery) {
+      router.replace(`/reset-password${hash}`);
+    }
+  }, [router]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       <div className="max-w-7xl mx-auto p-6">
