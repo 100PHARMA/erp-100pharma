@@ -4,7 +4,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import "../lib/fonts";
-import NavbarGate from "@/components/custom/navbar-gate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,13 +30,8 @@ export default function RootLayout({
       <head>
         <Script src="/lasy-bridge.js" strategy="beforeInteractive" />
       </head>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}
-      >
-        <NavbarGate />
-        <main className="min-h-[calc(100vh-4rem)]">
-          {children}
-        </main>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}>
+        {children}
       </body>
     </html>
   );
