@@ -1,98 +1,114 @@
-// erp-100pharma/src/app/reset-password/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
+function getHashParams() {
+  const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+  const params = new URLSearchParams(hash);
+  return {
+    access_token: params.get('access_token'),
+    refresh_token: params.get('refresh_token'),
+    type: params.get('type'),
+  };
+}
+
 export default function ResetPasswordPage() {
   const router = useRouter();
-
+  const [ready, setReady] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const guard = async () => {
-      const { data } = await supabase.auth.getSession();
-      // Se não tem sessão, não tem como resetar
-      if (!data.session) router.replace('/login');
-    };
-    guard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (async () => {
+      const { access_token, refresh_token, type } = getHashParams();
+
+      if (type !== 'recovery' || !access_token || !refresh_token) {
+        setStatus('Link inválido ou expirado. Peça um novo email de recuperação.');
+        return;
+      }
+
+      const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+      if (error) {
+        setStatus('Não consegui validar o link. Peça um novo email de recuperação.');
+        return;
+      }
+
+      setReady(true);
+      setStatus(null);
+    })();
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setMsg(null);
+    setStatus(null);
 
-    if (password.length < 6) {
-      setMsg('A senha deve ter pelo menos 6 caracteres.');
+    if (!ready) return;
+
+    if (!password || password.length < 8) {
+      setStatus('A senha deve ter pelo menos 8 caracteres.');
       return;
     }
     if (password !== password2) {
-      setMsg('As senhas não coincidem.');
+      setStatus('As senhas não coincidem.');
       return;
     }
 
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-
-      setMsg('Senha atualizada com sucesso. A redirecionar...');
-      setTimeout(() => router.replace('/'), 800);
-    } catch (e: any) {
-      setMsg(e?.message || 'Erro ao atualizar senha.');
-    } finally {
-      setLoading(false);
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      setStatus(error.message);
+      return;
     }
+
+    router.replace('/');
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Definir nova senha</h1>
-        <p className="text-gray-600 mb-6">Crie uma nova senha para sua conta.</p>
+        <h1 className="text-2xl font-bold text-gray-900">Definir nova senha</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Crie a sua nova senha para entrar no ERP.
+        </p>
 
-        {msg && (
-          <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-            {msg}
+        {status && (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {status}
           </div>
         )}
 
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Nova senha</label>
+            <label className="text-sm font-semibold text-gray-700">Nova senha</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-              autoComplete="new-password"
+              className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+              placeholder="mínimo 8 caracteres"
+              disabled={!ready}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Confirmar nova senha</label>
+            <label className="text-sm font-semibold text-gray-700">Confirmar senha</label>
             <input
               type="password"
               value={password2}
               onChange={(e) => setPassword2(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-              autoComplete="new-password"
+              className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+              disabled={!ready}
             />
           </div>
 
           <button
             type="submit"
-            disabled={loading}
-            className="w-full bg-gray-900 text-white px-4 py-3 rounded-xl font-semibold shadow-lg hover:opacity-95 disabled:opacity-60"
+            disabled={!ready}
+            className="w-full rounded-xl bg-gray-900 text-white py-3 font-semibold disabled:opacity-50"
           >
-            {loading ? 'A guardar...' : 'Atualizar senha'}
+            Guardar nova senha
           </button>
         </form>
       </div>
