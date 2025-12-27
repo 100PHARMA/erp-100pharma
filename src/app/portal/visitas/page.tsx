@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase/browser';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { RefreshCw, CheckCircle2, XCircle, Plus } from 'lucide-react';
 
 type VisitaRow = {
@@ -20,6 +20,7 @@ function formatDate(d: string) {
 }
 
 export default function PortalVisitasPage() {
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
