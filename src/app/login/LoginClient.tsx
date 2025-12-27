@@ -15,7 +15,7 @@ export default function LoginClient() {
   // O middleware usa `next` (não `redirect`). Mantemos fallback para `redirect` por compatibilidade.
   const redirectTo = useMemo(() => {
     const next = searchParams?.get('next');
-    const r = searchParams?.get('redirect');
+    const r = searchParams?.get('next');
     const target = next || r;
 
     // segurança mínima: só permite redirects internos
