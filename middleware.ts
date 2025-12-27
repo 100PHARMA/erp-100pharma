@@ -5,6 +5,7 @@ export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   const pathname = req.nextUrl.pathname;
 
+  // Rotas públicas (não exigem sessão)
   const isPublic =
     pathname === '/login' ||
     pathname.startsWith('/login/') ||
@@ -32,12 +33,12 @@ export async function middleware(req: NextRequest) {
           });
         },
       },
-    },
+    }
   );
 
-  const { data } = await supabase.auth.getUser();
-  const user = data.user;
+  const { data: { user } } = await supabase.auth.getUser();
 
+  // Se não está logado, manda para /login com next
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = '/login';
@@ -45,24 +46,43 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Role
   const { data: perfil } = await supabase
     .from('perfis')
     .select('role')
     .eq('id', user.id)
     .maybeSingle();
 
-  const role = (perfil?.role ?? 'VENDEDOR').toUpperCase();
-  const isPortal = pathname === '/portal' || pathname.startsWith('/portal/');
+  const role = String(perfil?.role ?? 'VENDEDOR').toUpperCase();
 
-  // Vendedor só pode /portal/*
-  if (role === 'VENDEDOR' && !isPortal) {
+  // Allowlist do vendedor (ajuste aqui)
+  const vendorAllowed = [
+    '/portal',
+    '/portal/visitas',
+    '/vendas',
+    '/quilometragem',
+    '/metas',
+  ];
+
+  const isAllowedForVendor =
+    vendorAllowed.some((base) => pathname === base || pathname.startsWith(base + '/'));
+
+  // VENDEDOR: só rotas permitidas
+  if (role === 'VENDEDOR' && !isAllowedForVendor) {
     const url = req.nextUrl.clone();
-    url.pathname = '/portal';
+    url.pathname = '/vendas'; // home do vendedor
+    url.search = '';
     return NextResponse.redirect(url);
   }
 
+  // ADMIN: tudo liberado
   return res;
 }
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+};
+
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
