@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase/browser';
 import { RefreshCw, CheckCircle2, XCircle, Plus } from 'lucide-react';
 
 type VisitaRow = {
