@@ -448,7 +448,7 @@ export default function QuilometragemAdminPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">Quilometragem</h1>
-            <p className="text-gray-600">Controle de quilometragem e reembolsos (base: vendedor_km_lancamentos)</p>
+            <p className="text-gray-600">Controle de quilometragem e reembolsos</p>
           </div>
 
           <div className="flex items-center gap-3 bg-white p-4 rounded-xl shadow-md">
