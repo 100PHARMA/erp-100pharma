@@ -45,10 +45,12 @@ function pct(realizado: number, meta: number) {
 }
 
 function formatCurrencyEUR(valor: number) {
-  return valor.toLocaleString('pt-PT', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }) + '€';
+  return (
+    valor.toLocaleString('pt-PT', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }) + '€'
+  );
 }
 
 function formatInt(n: number) {
@@ -83,7 +85,7 @@ export default function PortalMetasPage() {
 
   const [row, setRow] = useState<PortalMetasRow | null>(null);
 
-  // Extra (opcional, mas você já tinha): frascos no mês
+  // Extra (opcional): frascos no mês
   const [qtFrascos, setQtFrascos] = useState<number>(0);
 
   const { anoSelecionado, mesSelecionado } = useMemo(() => {
@@ -139,7 +141,7 @@ export default function PortalMetasPage() {
   async function carregar(vendId: string, yyyymm: string) {
     setErro(null);
 
-    // 1) Dados principais via RPC (mesmo conceito do ADMIN/metas)
+    // 1) Dados principais via RPC
     const { data, error } = await supabase.rpc('portal_metas_meu_mes', {
       p_ano: anoSelecionado,
       p_mes: mesSelecionado,
@@ -160,7 +162,7 @@ export default function PortalMetasPage() {
       comissao_estimada: Number(r.comissao_estimada ?? 0),
     });
 
-    // 2) (Opcional) frascos no mês — mantém sua feature
+    // 2) (Opcional) frascos no mês
     const { startISO, endISO } = yyyyMmToRange(yyyymm);
 
     const { data: fatRows, error: fatErr } = await supabase
@@ -299,9 +301,7 @@ export default function PortalMetasPage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Minhas Metas</h1>
-              <p className="text-gray-600 mt-1">
-                Base: <span className="font-semibold">Acompanhamento mensal do seu desempenho
-              </p>
+              <p className="text-gray-600 mt-1">Acompanhamento mensal do seu desempenho</p>
               <p className="text-xs text-gray-500 mt-1">
                 Logado como: <span className="font-semibold">{vendedorEmail ?? 'vendedor'}</span>
               </p>
@@ -368,10 +368,9 @@ export default function PortalMetasPage() {
 
             <div className="flex items-start gap-3 text-xs text-gray-600 pt-1">
               <AlertCircle className="w-4 h-4 mt-0.5 text-gray-500" />
-              <div>
-                <p>
-                  As metas apresentadas correspondem às metas definidas para este mês
-                </p>
+              <div className="space-y-1">
+                <p>As metas apresentadas correspondem às metas definidas para este mês.</p>
+                <p>Os valores apresentados estão sujeitos a validação e aprovação.</p>
               </div>
             </div>
           </div>
