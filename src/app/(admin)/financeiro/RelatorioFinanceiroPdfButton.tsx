@@ -17,6 +17,7 @@ type DadosFinanceirosMensais = {
   custoFixo: number;
   resultadoOperacional: number;
   resultadoLiquido: number;
+  observacoes?: string | null;
 };
 
 type Props = {
