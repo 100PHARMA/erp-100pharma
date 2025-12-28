@@ -35,7 +35,6 @@ interface FaturaRow {
   tipo: string | null;
   data_emissao: string; // timestamptz
   created_at: string; // timestamptz
-  // valores (podem estar incompletos no teu banco, então faremos fallback)
   subtotal: number | null;
   total_sem_iva: number | null;
   total_com_iva: number | null;
@@ -58,9 +57,10 @@ interface VendaItem {
 interface Quilometragem {
   id: string;
   vendedor_id: string;
-  data: string;
+  data: string; // date
   km: number;
   valor: number;
+  status?: string | null; // opcional (APROVADO/PENDENTE/etc)
 }
 
 interface DadosFinanceiros {
@@ -109,13 +109,11 @@ function safeNumber(n: any): number {
 }
 
 function startOfMonthISO(ano: number, mes: number): string {
-  // mes: 1-12
   const d = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
   return d.toISOString();
 }
 
 function endOfMonthISO(ano: number, mes: number): string {
-  // ultimo dia do mes, 23:59:59.999 UTC
   const d = new Date(Date.UTC(ano, mes, 0, 23, 59, 59, 999));
   return d.toISOString();
 }
@@ -140,7 +138,6 @@ function normalizarFaturas(faturas: FaturaRow[]): FaturaRow[] {
       if (!atual) {
         porVendaFat[key] = f;
       } else {
-        // manter a mais recente
         const tAtual = new Date(atual.created_at).getTime();
         const tNova = new Date(f.created_at).getTime();
         if (tNova > tAtual) porVendaFat[key] = f;
@@ -234,7 +231,7 @@ export default function FinanceiroPage() {
       const inicioISO = startOfMonthISO(anoSelecionado, mesSelecionado);
       const fimISO = endOfMonthISO(anoSelecionado, mesSelecionado);
 
-      // 3) Buscar faturas emitidas no mês (exclui canceladas depois via normalizar)
+      // 3) Buscar faturas emitidas no mês
       const { data: faturasRaw, error: faturasError } = await supabase
         .from('faturas')
         .select('id, venda_id, estado, tipo, data_emissao, created_at, subtotal, total_sem_iva, total_com_iva')
@@ -274,45 +271,61 @@ export default function FinanceiroPage() {
         vendaItensData = (data || []) as VendaItem[];
       }
 
-      // 6) Quilometragem do mês (mantém como está: por campo "data" date)
-      const dataInicio = new Date(Date.UTC(anoSelecionado, mesSelecionado - 1, 1)).toISOString().split('T')[0];
-      const dataFim = new Date(Date.UTC(anoSelecionado, mesSelecionado, 0)).toISOString().split('T')[0];
+      // 6) Quilometragem do mês
+      // Regra: o Financeiro deve ler a fonte NOVA (vendedor_km_lancamentos).
+      // Se não existir/der erro, faz fallback para a tabela antiga (vendedor_km).
+      const dataInicio = new Date(Date.UTC(anoSelecionado, mesSelecionado - 1, 1))
+        .toISOString()
+        .split('T')[0];
 
-      const { data: kmData, error: kmError } = await supabase
-        .from('vendedor_km')
-        .select('*')
+      const dataFim = new Date(Date.UTC(anoSelecionado, mesSelecionado, 0))
+        .toISOString()
+        .split('T')[0];
+
+      let kmData: Quilometragem[] = [];
+
+      const { data: kmLanc, error: kmLancErr } = await supabase
+        .from('vendedor_km_lancamentos')
+        .select('id, vendedor_id, data, km, valor, status')
         .gte('data', dataInicio)
         .lte('data', dataFim);
 
-      if (kmError) throw kmError;
+      if (!kmLancErr) {
+        kmData = ((kmLanc || []) as Quilometragem[]).filter((r: any) => {
+          const s = String(r.status || '').toUpperCase();
+          return s !== 'CANCELADO';
+        });
+      } else {
+        console.warn('[Financeiro] Falha ao ler vendedor_km_lancamentos, usando fallback vendedor_km:', kmLancErr);
+
+        const { data: kmOld, error: kmOldErr } = await supabase
+          .from('vendedor_km')
+          .select('id, vendedor_id, data, km, valor')
+          .gte('data', dataInicio)
+          .lte('data', dataFim);
+
+        if (kmOldErr) throw kmOldErr;
+        kmData = (kmOld || []) as Quilometragem[];
+      }
 
       // ======================================================================
       // 7) CÁLCULOS
       // ======================================================================
 
-      // Faturação Bruta (emitida) = soma total_com_iva (fallback: 0)
-      const faturacaoBruta = faturasNormalizadas.reduce((sum, f) => {
-        return sum + safeNumber(f.total_com_iva);
-      }, 0);
+      // Faturação Bruta (emitida) = soma total_com_iva
+      const faturacaoBruta = faturasNormalizadas.reduce((sum, f) => sum + safeNumber(f.total_com_iva), 0);
 
-      // Frascos vendidos = soma quantidade dos itens (das vendas ligadas às faturas)
-      // Nota: se existir nota de crédito, isso não "devolve" frascos automaticamente.
-      // Se quiseres ajustar frascos por devolução, precisas modelar isso no stock/movimentos.
+      // Frascos vendidos = soma quantidade dos itens
       const frascosVendidos = vendaItensData.reduce((sum, it) => sum + safeNumber(it.quantidade), 0);
 
       // Custo KM total
       const custoKmTotal = (kmData || []).reduce((sum: number, km: Quilometragem) => sum + safeNumber(km.valor), 0);
 
-      // Incentivos (corrigido: nomes certos)
+      // Incentivos
       const incentivoPodologista = frascosVendidos * safeNumber(config.incentivo_podologista);
       const fundoFarmaceutico = frascosVendidos * safeNumber(config.fundo_farmaceutico);
 
       // Comissão progressiva por vendedor usando base SEM IVA emitida no mês
-      // Base sem IVA por fatura:
-      // - prioridade: total_sem_iva
-      // - fallback: subtotal
-      // - fallback: vendas.subtotal
-      // Se nota de crédito vier negativa, ela reduz base e reduz comissão (clawback).
       const baseSemIvaPorVendedor = new Map<string, number>();
 
       for (const f of faturasNormalizadas) {
@@ -321,9 +334,9 @@ export default function FinanceiroPage() {
         if (!vendedorId) continue;
 
         const baseSemIva =
-          (f.total_sem_iva !== null && f.total_sem_iva !== undefined)
+          f.total_sem_iva !== null && f.total_sem_iva !== undefined
             ? safeNumber(f.total_sem_iva)
-            : (f.subtotal !== null && f.subtotal !== undefined)
+            : f.subtotal !== null && f.subtotal !== undefined
               ? safeNumber(f.subtotal)
               : safeNumber(venda?.subtotal);
 
