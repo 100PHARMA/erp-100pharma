@@ -22,10 +22,9 @@ type KmRow = {
 function yyyyMmToDateRange(yyyymm: string) {
   const [yStr, mStr] = yyyymm.split('-');
   const y = Number(yStr);
-  const m = Number(mStr); // 1..12
+  const m = Number(mStr);
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
   const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
-  // Para coluna DATE, usamos YYYY-MM-DD (sem timezone)
   const startDate = start.toISOString().slice(0, 10);
   const endDate = end.toISOString().slice(0, 10);
   return { startDate, endDate };
@@ -110,7 +109,6 @@ export default function PortalQuilometragemPage() {
   }, [mes]);
 
   const carregar = async (vendId: string, yyyymm: string) => {
-    // config valor_km (referência visual)
     const { data: configRows, error: cfgErr } = await supabase
       .from('configuracoes_financeiras')
       .select('valor_km')
@@ -305,11 +303,7 @@ export default function PortalQuilometragemPage() {
               <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
-                <p className="mt-1">
-                  Esta tela é <span className="font-semibold">somente leitura</span> para o vendedor.
-                  Aprovação/pagamento serão controlados pelo Admin.
-                  Quando integrarmos km dentro de <span className="font-semibold">Visitas</span>, esta lista passará a refletir os km concluídos.
-                </p>
+                <p className="mt-1">Os valores apresentados estão sujeitos a validação e aprovação.</p>
               </div>
             </div>
           </div>
