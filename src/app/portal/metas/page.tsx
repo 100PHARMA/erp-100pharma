@@ -370,7 +370,7 @@ export default function PortalMetasPage() {
               <AlertCircle className="w-4 h-4 mt-0.5 text-gray-500" />
               <div>
                 <p>
-                  As metas apresentadas correspondem às metas definidas para este mês.
+                  As metas apresentadas correspondem às metas definidas para este mês
                 </p>
               </div>
             </div>
