@@ -300,7 +300,7 @@ export default function PortalMetasPage() {
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Minhas Metas</h1>
               <p className="text-gray-600 mt-1">
-                Base: <span className="font-semibold">faturas emitidas (sem IVA)</span> + visitas realizadas + novas farmácias
+                Base: <span className="font-semibold">Acompanhamento mensal do seu desempenho
               </p>
               <p className="text-xs text-gray-500 mt-1">
                 Logado como: <span className="font-semibold">{vendedorEmail ?? 'vendedor'}</span>
@@ -370,8 +370,7 @@ export default function PortalMetasPage() {
               <AlertCircle className="w-4 h-4 mt-0.5 text-gray-500" />
               <div>
                 <p>
-                  As metas exibidas aqui vêm das tabelas operacionais do mês (as mesmas do ADMIN/metas).
-                  Se a meta estiver 0, o atingimento fica 0%.
+                  As metas apresentadas correspondem às metas definidas para este mês.
                 </p>
               </div>
             </div>
