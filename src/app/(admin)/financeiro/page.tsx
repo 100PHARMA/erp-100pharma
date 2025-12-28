@@ -54,13 +54,14 @@ interface VendaItem {
   preco_unitario: number;
 }
 
-interface Quilometragem {
+interface KmLancamento {
   id: string;
   vendedor_id: string;
   data: string; // date
   km: number;
-  valor: number;
-  status?: string | null; // opcional (APROVADO/PENDENTE/etc)
+  valor_km: number;
+  valor_total: number;
+  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO';
 }
 
 interface DadosFinanceiros {
@@ -116,6 +117,16 @@ function startOfMonthISO(ano: number, mes: number): string {
 function endOfMonthISO(ano: number, mes: number): string {
   const d = new Date(Date.UTC(ano, mes, 0, 23, 59, 59, 999));
   return d.toISOString();
+}
+
+function startOfMonthDate(ano: number, mes: number): string {
+  const d = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function endOfMonthDateExclusive(ano: number, mes: number): string {
+  const d = new Date(Date.UTC(ano, mes, 1, 0, 0, 0));
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -231,7 +242,7 @@ export default function FinanceiroPage() {
       const inicioISO = startOfMonthISO(anoSelecionado, mesSelecionado);
       const fimISO = endOfMonthISO(anoSelecionado, mesSelecionado);
 
-      // 3) Buscar faturas emitidas no mês
+      // 3) Buscar faturas emitidas no mês (exclui canceladas depois via normalizar)
       const { data: faturasRaw, error: faturasError } = await supabase
         .from('faturas')
         .select('id, venda_id, estado, tipo, data_emissao, created_at, subtotal, total_sem_iva, total_com_iva')
@@ -247,11 +258,7 @@ export default function FinanceiroPage() {
       // 4) Buscar vendas (para vendedor_id e fallback de subtotal)
       let vendasData: VendaRow[] = [];
       if (vendasIds.length > 0) {
-        const { data, error } = await supabase
-          .from('vendas')
-          .select('id, vendedor_id, subtotal')
-          .in('id', vendasIds);
-
+        const { data, error } = await supabase.from('vendas').select('id, vendedor_id, subtotal').in('id', vendasIds);
         if (error) throw error;
         vendasData = (data || []) as VendaRow[];
       }
@@ -262,66 +269,35 @@ export default function FinanceiroPage() {
       // 5) Buscar itens das vendas (para frascos)
       let vendaItensData: VendaItem[] = [];
       if (vendasIds.length > 0) {
-        const { data, error } = await supabase
-          .from('venda_itens')
-          .select('*')
-          .in('venda_id', vendasIds);
-
+        const { data, error } = await supabase.from('venda_itens').select('*').in('venda_id', vendasIds);
         if (error) throw error;
         vendaItensData = (data || []) as VendaItem[];
       }
 
-      // 6) Quilometragem do mês
-      // Regra: o Financeiro deve ler a fonte NOVA (vendedor_km_lancamentos).
-      // Se não existir/der erro, faz fallback para a tabela antiga (vendedor_km).
-      const dataInicio = new Date(Date.UTC(anoSelecionado, mesSelecionado - 1, 1))
-        .toISOString()
-        .split('T')[0];
+      // 6) Quilometragem do mês (NOVA FONTE: vendedor_km_lancamentos)
+      // Regra: só entra em custo depois de aprovado (ou pago).
+      const dataInicio = startOfMonthDate(anoSelecionado, mesSelecionado);
+      const dataFimExclusivo = endOfMonthDateExclusive(anoSelecionado, mesSelecionado);
 
-      const dataFim = new Date(Date.UTC(anoSelecionado, mesSelecionado, 0))
-        .toISOString()
-        .split('T')[0];
-
-      let kmData: Quilometragem[] = [];
-
-      const { data: kmLanc, error: kmLancErr } = await supabase
+      const { data: kmLanc, error: kmError } = await supabase
         .from('vendedor_km_lancamentos')
-        .select('id, vendedor_id, data, km, valor, status')
+        .select('id, vendedor_id, data, km, valor_km, valor_total, status')
         .gte('data', dataInicio)
-        .lte('data', dataFim);
+        .lt('data', dataFimExclusivo)
+        .in('status', ['APROVADO', 'PAGO']);
 
-      if (!kmLancErr) {
-        kmData = ((kmLanc || []) as Quilometragem[]).filter((r: any) => {
-          const s = String(r.status || '').toUpperCase();
-          return s !== 'CANCELADO';
-        });
-      } else {
-        console.warn('[Financeiro] Falha ao ler vendedor_km_lancamentos, usando fallback vendedor_km:', kmLancErr);
-
-        const { data: kmOld, error: kmOldErr } = await supabase
-          .from('vendedor_km')
-          .select('id, vendedor_id, data, km, valor')
-          .gte('data', dataInicio)
-          .lte('data', dataFim);
-
-        if (kmOldErr) throw kmOldErr;
-        kmData = (kmOld || []) as Quilometragem[];
-      }
+      if (kmError) throw kmError;
 
       // ======================================================================
       // 7) CÁLCULOS
       // ======================================================================
 
-      // Faturação Bruta (emitida) = soma total_com_iva
       const faturacaoBruta = faturasNormalizadas.reduce((sum, f) => sum + safeNumber(f.total_com_iva), 0);
 
-      // Frascos vendidos = soma quantidade dos itens
       const frascosVendidos = vendaItensData.reduce((sum, it) => sum + safeNumber(it.quantidade), 0);
 
-      // Custo KM total
-      const custoKmTotal = (kmData || []).reduce((sum: number, km: Quilometragem) => sum + safeNumber(km.valor), 0);
+      const custoKmTotal = (kmLanc || []).reduce((sum: number, k: KmLancamento) => sum + safeNumber(k.valor_total), 0);
 
-      // Incentivos
       const incentivoPodologista = frascosVendidos * safeNumber(config.incentivo_podologista);
       const fundoFarmaceutico = frascosVendidos * safeNumber(config.fundo_farmaceutico);
 
@@ -350,11 +326,7 @@ export default function FinanceiroPage() {
       }
 
       const resultadoOperacional =
-        faturacaoBruta -
-        comissaoTotal -
-        custoKmTotal -
-        incentivoPodologista -
-        fundoFarmaceutico;
+        faturacaoBruta - comissaoTotal - custoKmTotal - incentivoPodologista - fundoFarmaceutico;
 
       setDados({
         faturacaoBruta,
@@ -446,7 +418,7 @@ export default function FinanceiroPage() {
       });
 
       if (error) {
-        if (error.code === '23505') {
+        if ((error as any).code === '23505') {
           alert('Este mês já foi fechado. Para alterar, ajuste o registo em resumo_financeiro_mensal.');
         } else {
           throw error;
@@ -610,6 +582,7 @@ export default function FinanceiroPage() {
                   custoFixo: dados.custosFixos || 0,
                   resultadoOperacional: dados.resultadoOperacional,
                   resultadoLiquido: dados.resultadoLiquido || 0,
+                  observacoes: resumoMensal?.observacoes ?? dados.observacoes ?? null,
                 }}
               />
             )}
@@ -684,7 +657,7 @@ export default function FinanceiroPage() {
             <MapPin className="w-6 h-6 text-orange-600" />
           </div>
           <p className="text-2xl font-bold text-orange-900">{formatarMoeda(dados.custoKmTotal)}€</p>
-          <p className="text-xs text-orange-600 mt-2">Quilometragem</p>
+          <p className="text-xs text-orange-600 mt-2">KM aprovados/pagos</p>
         </div>
 
         <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-2xl shadow-lg">
