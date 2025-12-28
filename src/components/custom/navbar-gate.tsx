@@ -12,9 +12,7 @@ export default function NavbarGate() {
     pathname === '/reset-password' ||
     pathname.startsWith('/reset-password/') ||
     pathname === '/auth/callback' ||
-    pathname.startsWith('/auth/callback/') ||
-    pathname === '/portal' ||
-    pathname.startsWith('/portal/');
+    pathname.startsWith('/auth/callback/');
 
   if (hideNavbar) return null;
   return <Navbar />;
