@@ -5,10 +5,13 @@ import { useRouter } from 'next/navigation';
 import {
   Target,
   TrendingUp,
-  FileText,
-  Package,
+  Users,
+  MapPin,
+  Euro,
   Calendar,
   AlertCircle,
+  RefreshCw,
+  Package,
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
@@ -17,26 +20,48 @@ type Perfil = {
   vendedor_id: string | null;
 };
 
-type ConfigFinanceira = {
-  meta_mensal: number | null;
-  faixa1_limite: number | null;
-  comissao_faixa1: number | null;
-  faixa2_limite: number | null;
-  comissao_faixa2: number | null;
-  comissao_faixa3: number | null;
+type PortalMetasRow = {
+  vendedor_id: string;
+  vendedor_nome: string;
+
+  meta_vendas_sem_iva: number;
+  meta_novas_farmacias: number;
+  meta_visitas: number;
+
+  realizado_vendas_sem_iva: number;
+  realizado_novas_farmacias: number;
+  realizado_visitas: number;
+
+  comissao_estimada: number;
 };
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function pct(realizado: number, meta: number) {
+  if (!meta || meta <= 0) return 0;
+  return clamp((realizado / meta) * 100, 0, 200);
+}
+
+function formatCurrencyEUR(valor: number) {
+  return valor.toLocaleString('pt-PT', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }) + '€';
+}
+
+function formatInt(n: number) {
+  return n.toLocaleString('pt-PT');
+}
+
 function yyyyMmToRange(yyyymm: string) {
-  // yyyymm: "2025-12"
   const [yStr, mStr] = yyyymm.split('-');
   const y = Number(yStr);
-  const m = Number(mStr); // 1..12
+  const m = Number(mStr);
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-  const end = new Date(Date.UTC(y, m, 1, 0, 0, 0)); // first day of next month
-  return {
-    startISO: start.toISOString(),
-    endISO: end.toISOString(),
-  };
+  const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+  return { startISO: start.toISOString(), endISO: end.toISOString() };
 }
 
 export default function PortalMetasPage() {
@@ -44,6 +69,7 @@ export default function PortalMetasPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
   const [vendedorId, setVendedorId] = useState<string | null>(null);
   const [vendedorEmail, setVendedorEmail] = useState<string | null>(null);
@@ -55,17 +81,21 @@ export default function PortalMetasPage() {
     return `${y}-${m}`;
   });
 
-  const [metaMensal, setMetaMensal] = useState<number>(0);
-  const [faturadoSemIva, setFaturadoSemIva] = useState<number>(0);
-  const [qtFaturas, setQtFaturas] = useState<number>(0);
+  const [row, setRow] = useState<PortalMetasRow | null>(null);
+
+  // Extra (opcional, mas você já tinha): frascos no mês
   const [qtFrascos, setQtFrascos] = useState<number>(0);
 
-  const [config, setConfig] = useState<ConfigFinanceira | null>(null);
+  const { anoSelecionado, mesSelecionado } = useMemo(() => {
+    const [y, m] = mes.split('-');
+    return { anoSelecionado: Number(y), mesSelecionado: Number(m) };
+  }, [mes]);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
+  async function bootstrap() {
+    setLoading(true);
+    setErro(null);
 
+    try {
       const {
         data: { user },
         error: userErr,
@@ -84,11 +114,7 @@ export default function PortalMetasPage() {
         .eq('id', user.id)
         .maybeSingle<Perfil>();
 
-      if (perfilErr) {
-        alert('Erro ao buscar perfil: ' + perfilErr.message);
-        router.push('/login');
-        return;
-      }
+      if (perfilErr) throw perfilErr;
 
       const role = String(perfil?.role ?? '').toUpperCase();
       if (role !== 'VENDEDOR') {
@@ -97,77 +123,46 @@ export default function PortalMetasPage() {
       }
 
       if (!perfil?.vendedor_id) {
-        alert('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
-        router.push('/portal');
-        return;
+        throw new Error('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
       }
 
       setVendedorId(perfil.vendedor_id);
-      await carregarTudo(perfil.vendedor_id, mes);
+      await carregar(perfil.vendedor_id, mes);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao carregar metas do portal');
+    } finally {
       setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }
+  }
 
-  useEffect(() => {
-    if (!vendedorId) return;
-    (async () => {
-      setLoading(true);
-      await carregarTudo(vendedorId, mes);
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes]);
+  async function carregar(vendId: string, yyyymm: string) {
+    setErro(null);
 
-  const carregarTudo = async (vendId: string, yyyymm: string) => {
+    // 1) Dados principais via RPC (mesmo conceito do ADMIN/metas)
+    const { data, error } = await supabase.rpc('portal_metas_meu_mes', {
+      p_ano: anoSelecionado,
+      p_mes: mesSelecionado,
+    });
+
+    if (error) throw error;
+
+    const r = (Array.isArray(data) ? data[0] : data) as any;
+    setRow({
+      vendedor_id: r.vendedor_id,
+      vendedor_nome: r.vendedor_nome ?? '—',
+      meta_vendas_sem_iva: Number(r.meta_vendas_sem_iva ?? 0),
+      meta_novas_farmacias: Number(r.meta_novas_farmacias ?? 0),
+      meta_visitas: Number(r.meta_visitas ?? 0),
+      realizado_vendas_sem_iva: Number(r.realizado_vendas_sem_iva ?? 0),
+      realizado_novas_farmacias: Number(r.realizado_novas_farmacias ?? 0),
+      realizado_visitas: Number(r.realizado_visitas ?? 0),
+      comissao_estimada: Number(r.comissao_estimada ?? 0),
+    });
+
+    // 2) (Opcional) frascos no mês — mantém sua feature
     const { startISO, endISO } = yyyyMmToRange(yyyymm);
 
-    // 1) Config financeira (para fallback meta + faixas de comissão se quiser mostrar)
-    const { data: configRows, error: configErr } = await supabase
-      .from('configuracoes_financeiras')
-      .select(
-        'meta_mensal, faixa1_limite, comissao_faixa1, faixa2_limite, comissao_faixa2, comissao_faixa3'
-      )
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (configErr) {
-      console.error(configErr);
-      alert('Erro ao buscar configurações financeiras: ' + configErr.message);
-    }
-
-    const cfg = (configRows?.[0] ?? null) as ConfigFinanceira | null;
-    setConfig(cfg);
-
-    // 2) Meta mensal do vendedor (override) -> fallback config.meta_mensal
-    const [yStr, mStr] = yyyymm.split('-');
-    const ano = Number(yStr);
-    const mesNum = Number(mStr);
-
-    const { data: metaRows, error: metaErr } = await supabase
-      .from('vendedor_metas_mensais')
-      .select('meta_mensal')
-      .eq('vendedor_id', vendId)
-      .eq('ano', ano)
-      .eq('mes', mesNum)
-      .limit(1);
-
-    if (metaErr) {
-      console.error(metaErr);
-    }
-
-    const metaOverride =
-      metaRows && metaRows.length > 0 && metaRows[0]?.meta_mensal != null
-        ? Number(metaRows[0].meta_mensal)
-        : null;
-
-    const metaFinal = Number(metaOverride ?? cfg?.meta_mensal ?? 0);
-    setMetaMensal(metaFinal);
-
-    // 3) Faturas do mês (sem IVA), filtrando por vendedor via join com vendas
-    //    - tipo = 'FATURA'
-    //    - estado <> 'CANCELADA'
-    //    - data_emissao entre startISO e endISO
     const { data: fatRows, error: fatErr } = await supabase
       .from('faturas')
       .select(
@@ -176,8 +171,6 @@ export default function PortalMetasPage() {
         data_emissao,
         estado,
         tipo,
-        subtotal,
-        total_sem_iva,
         venda_id,
         vendas!inner ( id, vendedor_id )
       `
@@ -190,22 +183,10 @@ export default function PortalMetasPage() {
 
     if (fatErr) {
       console.error(fatErr);
-      alert('Erro ao buscar faturas: ' + fatErr.message);
-      setFaturadoSemIva(0);
-      setQtFaturas(0);
       setQtFrascos(0);
       return;
     }
 
-    const faturado = (fatRows ?? []).reduce((acc: number, f: any) => {
-      const base = f.total_sem_iva != null ? Number(f.total_sem_iva) : Number(f.subtotal ?? 0);
-      return acc + base;
-    }, 0);
-
-    setFaturadoSemIva(faturado);
-    setQtFaturas((fatRows ?? []).length);
-
-    // 4) Frascos no mês: soma de venda_itens.quantidade das vendas que geraram essas faturas
     const vendaIds = Array.from(new Set((fatRows ?? []).map((f: any) => f.venda_id))).filter(Boolean);
 
     if (vendaIds.length === 0) {
@@ -220,22 +201,93 @@ export default function PortalMetasPage() {
 
     if (itensErr) {
       console.error(itensErr);
-      // não bloqueia a tela; só zera frascos
       setQtFrascos(0);
       return;
     }
 
     const frascos = (itensRows ?? []).reduce((acc: number, it: any) => acc + Number(it.quantidade ?? 0), 0);
     setQtFrascos(frascos);
-  };
+  }
 
-  const progresso = metaMensal > 0 ? Math.min(100, (faturadoSemIva / metaMensal) * 100) : 0;
-  const faltante = Math.max(0, metaMensal - faturadoSemIva);
+  useEffect(() => {
+    bootstrap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!vendedorId) return;
+    (async () => {
+      setLoading(true);
+      try {
+        await carregar(vendedorId, mes);
+      } catch (e: any) {
+        console.error(e);
+        setErro(e?.message || 'Erro ao atualizar mês');
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mes]);
+
+  const calc = useMemo(() => {
+    if (!row) return null;
+
+    const pVendas = pct(row.realizado_vendas_sem_iva, row.meta_vendas_sem_iva);
+    const pNovas = pct(row.realizado_novas_farmacias, row.meta_novas_farmacias);
+    const pVisitas = pct(row.realizado_visitas, row.meta_visitas);
+
+    const w = [
+      row.meta_vendas_sem_iva > 0 ? 1 : 0,
+      row.meta_novas_farmacias > 0 ? 1 : 0,
+      row.meta_visitas > 0 ? 1 : 0,
+    ];
+    const sw = w.reduce((a, b) => a + b, 0) || 1;
+    const geral = (pVendas * w[0] + pNovas * w[1] + pVisitas * w[2]) / sw;
+
+    return { pVendas, pNovas, pVisitas, geral };
+  }, [row]);
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl shadow-lg p-6">
-        <p className="text-gray-600">Carregando metas...</p>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 flex items-center justify-center">
+        <div className="bg-white rounded-2xl shadow-lg p-6 flex items-center gap-3 text-gray-700">
+          <RefreshCw className="w-5 h-5 animate-spin" />
+          Carregando metas...
+        </div>
+      </div>
+    );
+  }
+
+  if (erro) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-red-600 mt-0.5" />
+            <div>
+              <p className="text-red-700 font-semibold">Erro ao carregar</p>
+              <p className="text-gray-700 mt-1">{erro}</p>
+              <button
+                type="button"
+                onClick={bootstrap}
+                className="mt-4 bg-gray-900 text-white px-4 py-2 rounded-lg font-semibold"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!row || !calc) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 text-gray-700">
+          Nenhum dado encontrado.
+        </div>
       </div>
     );
   }
@@ -248,7 +300,7 @@ export default function PortalMetasPage() {
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Minhas Metas</h1>
               <p className="text-gray-600 mt-1">
-                Faturação do mês baseada em <span className="font-semibold">faturas emitidas (sem IVA)</span>
+                Base: <span className="font-semibold">faturas emitidas (sem IVA)</span> + visitas realizadas + novas farmácias
               </p>
               <p className="text-xs text-gray-500 mt-1">
                 Logado como: <span className="font-semibold">{vendedorEmail ?? 'vendedor'}</span>
@@ -266,93 +318,109 @@ export default function PortalMetasPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
-            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-blue-600 p-3 rounded-lg">
-                  <TrendingUp className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Faturado (sem IVA)</p>
-                  <p className="text-2xl font-bold text-blue-700">€ {faturadoSemIva.toFixed(2)}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-emerald-600 p-3 rounded-lg">
-                  <Target className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Meta do mês</p>
-                  <p className="text-2xl font-bold text-emerald-700">€ {metaMensal.toFixed(2)}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-purple-600 p-3 rounded-lg">
-                  <FileText className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Faturas emitidas</p>
-                  <p className="text-2xl font-bold text-purple-700">{qtFaturas}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-orange-600 p-3 rounded-lg">
-                  <Package className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Frascos (mês)</p>
-                  <p className="text-2xl font-bold text-orange-700">{qtFrascos}</p>
-                </div>
-              </div>
-            </div>
+          {/* KPIs */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-6">
+            <Kpi
+              title="Vendas (sem IVA)"
+              value={formatCurrencyEUR(row.realizado_vendas_sem_iva)}
+              sub={`Meta: ${formatCurrencyEUR(row.meta_vendas_sem_iva)}`}
+              icon={<TrendingUp className="w-6 h-6 text-white" />}
+              color="bg-blue-600"
+            />
+            <Kpi
+              title="Novas farmácias"
+              value={formatInt(row.realizado_novas_farmacias)}
+              sub={`Meta: ${formatInt(row.meta_novas_farmacias)}`}
+              icon={<Users className="w-6 h-6 text-white" />}
+              color="bg-indigo-600"
+            />
+            <Kpi
+              title="Visitas realizadas"
+              value={formatInt(row.realizado_visitas)}
+              sub={`Meta: ${formatInt(row.meta_visitas)}`}
+              icon={<MapPin className="w-6 h-6 text-white" />}
+              color="bg-emerald-600"
+            />
+            <Kpi
+              title="Comissão estimada"
+              value={formatCurrencyEUR(row.comissao_estimada)}
+              sub="base: faturas emitidas"
+              icon={<Euro className="w-6 h-6 text-white" />}
+              color="bg-purple-600"
+            />
+            <Kpi
+              title="Frascos (mês)"
+              value={formatInt(qtFrascos)}
+              sub="somatório venda_itens"
+              icon={<Package className="w-6 h-6 text-white" />}
+              color="bg-orange-600"
+            />
           </div>
 
-          <div className="mt-6 bg-gray-50 border border-gray-200 rounded-xl p-5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-gray-700">
-                Progresso da meta: <span className="font-semibold">{progresso.toFixed(1)}%</span>
-              </p>
-              <p className="text-sm text-gray-700">
-                Faltante: <span className="font-semibold">€ {faltante.toFixed(2)}</span>
-              </p>
+          {/* Progresso */}
+          <div className="mt-6 bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-4">
+            <Bar label="Atingimento Geral" value={calc.geral} />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Bar label="Vendas" value={calc.pVendas} />
+              <Bar label="Novas farmácias" value={calc.pNovas} />
+              <Bar label="Visitas" value={calc.pVisitas} />
             </div>
 
-            <div className="mt-3 bg-white rounded-full h-3 border border-gray-200 overflow-hidden">
-              <div
-                className="h-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600"
-                style={{ width: `${progresso}%` }}
-              />
-            </div>
-
-            <div className="mt-4 flex items-start gap-3 text-xs text-gray-600">
+            <div className="flex items-start gap-3 text-xs text-gray-600 pt-1">
               <AlertCircle className="w-4 h-4 mt-0.5 text-gray-500" />
               <div>
                 <p>
-                  Regra: soma das <span className="font-semibold">FATURAS</span> do mês com estado diferente de{' '}
-                  <span className="font-semibold">CANCELADA</span>, usando base sem IVA.
+                  As metas exibidas aqui vêm das tabelas operacionais do mês (as mesmas do ADMIN/metas).
+                  Se a meta estiver 0, o atingimento fica 0%.
                 </p>
-                {config && (
-                  <p className="mt-1">
-                    Config de comissão (referência): Faixa1 até €{Number(config.faixa1_limite ?? 0).toFixed(0)} ={' '}
-                    {Number(config.comissao_faixa1 ?? 0).toFixed(0)}% | Faixa2 até €{Number(config.faixa2_limite ?? 0).toFixed(0)} ={' '}
-                    {Number(config.comissao_faixa2 ?? 0).toFixed(0)}% | Acima = {Number(config.comissao_faixa3 ?? 0).toFixed(0)}%
-                  </p>
-                )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Espaço para evolução futura: ranking, histórico 12 meses, etc. */}
+        {/* depois: histórico, ranking interno, etc. */}
+      </div>
+    </div>
+  );
+}
+
+function Kpi({
+  title,
+  value,
+  sub,
+  icon,
+  color,
+}: {
+  title: string;
+  value: string;
+  sub?: string;
+  icon: React.ReactNode;
+  color: string;
+}) {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <div className="flex items-center gap-3">
+        <div className={`${color} p-3 rounded-lg`}>{icon}</div>
+        <div>
+          <p className="text-sm text-gray-600">{title}</p>
+          <p className="text-xl font-bold text-gray-900">{value}</p>
+          {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bar({ label, value }: { label: string; value: number }) {
+  const v = clamp(value, 0, 200);
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+        <span>{label}</span>
+        <span className="font-semibold text-gray-900">{Math.round(v)}%</span>
+      </div>
+      <div className="w-full h-3 bg-white rounded-full border border-gray-200 overflow-hidden">
+        <div className="h-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600" style={{ width: `${v}%` }} />
       </div>
     </div>
   );
