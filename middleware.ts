@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-  const pathname = req.nextUrl.pathname;
-
-  // Rotas públicas (não exigem sessão)
-  const isPublic =
+function isPublicPath(pathname: string) {
+  return (
     pathname === '/login' ||
     pathname.startsWith('/login/') ||
     pathname === '/auth/callback' ||
@@ -15,9 +11,20 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/reset-password/') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
-    pathname === '/favicon.ico';
+    pathname === '/favicon.ico'
+  );
+}
 
-  if (isPublic) return res;
+function isPortalPath(pathname: string) {
+  return pathname === '/portal' || pathname.startsWith('/portal/');
+}
+
+export async function middleware(req: NextRequest) {
+  const res = NextResponse.next();
+  const pathname = req.nextUrl.pathname;
+
+  // Rotas públicas não exigem sessão
+  if (isPublicPath(pathname)) return res;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,53 +43,41 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  // Se não está logado, manda para /login com next
+  // Se não está logado, manda para /login com next (inclui querystring)
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = '/login';
-    url.searchParams.set('next', pathname);
+    url.searchParams.set('next', req.nextUrl.pathname + req.nextUrl.search);
     return NextResponse.redirect(url);
   }
 
-  // Role
-  const { data: perfil } = await supabase
+  // Role (fonte única)
+  const { data: perfil, error: perfilError } = await supabase
     .from('perfis')
     .select('role')
     .eq('id', user.id)
     .maybeSingle();
 
+  // Segurança: se não conseguir ler perfil/role, trata como vendedor (mais restritivo)
   const role = String(perfil?.role ?? 'VENDEDOR').toUpperCase();
 
-  // Allowlist do vendedor (ajuste aqui)
-  const vendorAllowed = [
-    '/portal',
-    '/portal/visitas',
-    '/vendas',
-    '/quilometragem',
-    '/metas',
-  ];
-
-  const isAllowedForVendor =
-    vendorAllowed.some((base) => pathname === base || pathname.startsWith(base + '/'));
-
-  // VENDEDOR: só rotas permitidas
-  if (role === 'VENDEDOR' && !isAllowedForVendor) {
+  // VENDEDOR: apenas portal
+  if (role === 'VENDEDOR' && !isPortalPath(pathname)) {
     const url = req.nextUrl.clone();
-    url.pathname = '/vendas'; // home do vendedor
+    url.pathname = '/portal';
     url.search = '';
     return NextResponse.redirect(url);
   }
 
-  // ADMIN: tudo liberado
+  // ADMIN: tudo liberado (inclusive /portal)
+  // Se houver erro ao ler perfil, ainda assim já caímos no padrão restritivo acima
+  void perfilError; // evita lint "unused" caso exista regra
   return res;
 }
-
-export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
-};
-
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
