@@ -60,6 +60,23 @@ function formatEUR(valor: number) {
   return safeNumber(valor).toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/**
+ * Espera a sessão “aparecer” (hidratação / recuperação do storage).
+ * Evita falso negativo do tipo: "Sem sessão ativa" logo no primeiro tick.
+ */
+async function waitForSession(maxMs = 2000, intervalMs = 150) {
+  const start = Date.now();
+
+  while (Date.now() - start < maxMs) {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return null;
+    if (data?.session?.user) return data.session;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  return null;
+}
+
 export default function QuilometragemAdminPage() {
   const router = useRouter();
 
@@ -80,42 +97,35 @@ export default function QuilometragemAdminPage() {
   const [rows, setRows] = useState<KmLancRow[]>([]);
 
   const getAuthAndCheckAdmin = async () => {
-    // 1) Session
-    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-    if (sessionErr) {
-      throw new Error(`Erro ao obter sessão: ${sessionErr.message}`);
-    }
-    const session = sessionData?.session;
+    // 1) esperar sessão (evitar falso negativo)
+    const session = await waitForSession(2500, 150);
+
     if (!session?.user) {
-      // aqui não “chutamos” para login sem explicar
-      throw new Error('Sem sessão ativa. Faça login novamente (a sessão não foi encontrada nesta rota).');
+      // fallback: tentar getUser também (às vezes resolve)
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (!userErr && userData?.user) {
+        // ok, temos user
+      } else {
+        throw new Error('Sem sessão ativa. Faça login novamente (a sessão não foi encontrada nesta rota).');
+      }
     }
 
-    // 2) User (garantir token ok)
+    // 2) garantir user
     const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (userErr) {
-      throw new Error(`Erro ao obter utilizador: ${userErr.message}`);
-    }
+    if (userErr) throw new Error(`Erro ao obter utilizador: ${userErr.message}`);
     const user = userData?.user;
-    if (!user) {
-      throw new Error('Não foi possível obter o utilizador autenticado.');
-    }
+    if (!user) throw new Error('Não foi possível obter o utilizador autenticado.');
 
-    // 3) Perfil (role)
+    // 3) perfil admin
     const { data: perfil, error: perfilErr } = await supabase
       .from('perfis')
       .select('id, role, vendedor_id')
       .eq('id', user.id)
       .maybeSingle<Perfil>();
 
-    if (perfilErr) {
-      throw new Error(`Erro ao ler perfis (RLS/perm?): ${perfilErr.message}`);
-    }
-
+    if (perfilErr) throw new Error(`Erro ao ler perfis (RLS/perm?): ${perfilErr.message}`);
     if (!perfil) {
-      throw new Error(
-        'Não existe registo na tabela "perfis" para este utilizador. Crie a linha em perfis com role=ADMIN.'
-      );
+      throw new Error('Não existe registo na tabela "perfis" para este utilizador. Crie a linha em perfis com role=ADMIN.');
     }
 
     const role = String(perfil.role ?? '').toUpperCase().trim();
@@ -127,7 +137,7 @@ export default function QuilometragemAdminPage() {
   };
 
   const carregarValorKmRef = async () => {
-    // se não existir tabela/coluna, não quebra a página
+    // opcional: se não existir, fica default 0.20
     const { data: cfgRows, error: cfgErr } = await supabase
       .from('configuracoes_financeiras')
       .select('valor_km')
@@ -167,9 +177,7 @@ export default function QuilometragemAdminPage() {
       .order('data', { ascending: false })
       .order('criado_em', { ascending: false });
 
-    if (error) {
-      throw new Error(`Erro ao ler vendedor_km_lancamentos (RLS/perm?): ${error.message}`);
-    }
+    if (error) throw new Error(`Erro ao ler vendedor_km_lancamentos (RLS/perm?): ${error.message}`);
 
     setRows((data ?? []) as KmLancRow[]);
   };
@@ -177,7 +185,6 @@ export default function QuilometragemAdminPage() {
   const bootstrap = async () => {
     setLoading(true);
     setErro(null);
-
     try {
       await getAuthAndCheckAdmin();
       await carregarValorKmRef();
@@ -256,7 +263,6 @@ export default function QuilometragemAdminPage() {
 
   const aprovarLancamento = async (id: string) => {
     if (!confirm('Aprovar este lançamento de KM?')) return;
-
     try {
       setLoading(true);
       const { error } = await supabase
@@ -265,7 +271,6 @@ export default function QuilometragemAdminPage() {
         .eq('id', id);
 
       if (error) throw new Error(error.message);
-
       await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
@@ -287,7 +292,6 @@ export default function QuilometragemAdminPage() {
         .eq('id', id);
 
       if (error) throw new Error(error.message);
-
       await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
@@ -308,7 +312,6 @@ export default function QuilometragemAdminPage() {
         .eq('id', id);
 
       if (error) throw new Error(error.message);
-
       await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
@@ -375,7 +378,7 @@ export default function QuilometragemAdminPage() {
               </div>
 
               <p className="mt-4 text-xs text-gray-500">
-                Se continuar a cair aqui, o problema é de <b>sessão</b> ou <b>RLS</b>, não de UI.
+                Se continuar a cair aqui, o problema é de <b>sessão</b> (persistência) ou <b>RLS</b>.
               </p>
             </div>
           </div>
@@ -413,7 +416,6 @@ export default function QuilometragemAdminPage() {
             </div>
           </div>
 
-          {/* KPIs */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <div className="flex items-center gap-3">
@@ -464,7 +466,6 @@ export default function QuilometragemAdminPage() {
             </div>
           </div>
 
-          {/* Filtros */}
           <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1 relative">
@@ -492,7 +493,6 @@ export default function QuilometragemAdminPage() {
             </div>
           </div>
 
-          {/* Tabela */}
           <div className="mt-4 bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -601,14 +601,14 @@ export default function QuilometragemAdminPage() {
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
                 <p className="mt-1">
-                  Se você cair para login, o problema é <b>sessão</b> ou <b>perfis/RLS</b>. Esta página agora mostra o motivo exato.
+                  Se ainda aparecer “Sem sessão ativa”, então a sessão Supabase não está a ser persistida (config do client).
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Futuro: detalhe por visita, export, batch approvals */}
+        {/* Futuro: export / batch approvals / detalhe por visita */}
       </div>
     </div>
   );
