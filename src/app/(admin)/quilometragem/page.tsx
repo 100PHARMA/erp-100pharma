@@ -11,15 +11,11 @@ import {
   XCircle,
   Clock,
   Eye,
+  MapPin,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type KmStatus = 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO';
-
-type VendedorRow = {
-  id: string;
-  nome: string | null;
-};
 
 type KmLancRow = {
   id: string;
@@ -35,10 +31,8 @@ type KmLancRow = {
   criado_em: string;
   aprovado_em: string | null;
   pago_em: string | null;
-  // joins (se existirem no teu schema/relacionamentos)
   vendedores?: { id: string; nome: string | null } | null;
   clientes?: { id: string; nome: string | null } | null;
-  vendedor_visitas?: { id: string } | null;
 };
 
 type GroupRow = {
@@ -49,9 +43,9 @@ type GroupRow = {
   ano: number;
   mes: number;
   total_km: number;
-  valor_km_ref: number; // média ponderada ou último (aqui: média simples do período)
+  valor_km_ref: number; // média simples do período
   total_reembolso: number;
-  status_geral: KmStatus; // agregado
+  status_geral: KmStatus;
   pendentes: number;
   aprovados: number;
   pagos: number;
@@ -64,8 +58,7 @@ function safeNumber(n: any): number {
 }
 
 function yyyyMm(dateStr: string): string {
-  // dateStr = YYYY-MM-DD
-  return dateStr.slice(0, 7);
+  return dateStr.slice(0, 7); // YYYY-MM
 }
 
 function monthLabelPT(ano: number, mes: number): string {
@@ -117,11 +110,6 @@ function statusIcon(status: KmStatus) {
 }
 
 function computeGroupStatus(p: { pendentes: number; aprovados: number; pagos: number; rejeitados: number }): KmStatus {
-  // Regra objetiva e previsível:
-  // - Se tiver qualquer PENDENTE => PENDENTE
-  // - Senão se tiver qualquer APROVADO => APROVADO
-  // - Senão se tiver qualquer PAGO => PAGO
-  // - Senão (só rejeitado) => REJEITADO
   if (p.pendentes > 0) return 'PENDENTE';
   if (p.aprovados > 0) return 'APROVADO';
   if (p.pagos > 0) return 'PAGO';
@@ -162,7 +150,6 @@ export default function QuilometragemAdminPage() {
   const [valorKmRef, setValorKmRef] = useState<number>(0.2);
 
   async function carregarValorKmRef() {
-    // Config: apenas referência visual (não recalcula valor_total)
     const { data, error } = await supabase
       .from('configuracoes_financeiras')
       .select('valor_km')
@@ -184,9 +171,6 @@ export default function QuilometragemAdminPage() {
 
       const { startDate, endDate } = yyyyMmToDateRange(mesFiltro);
 
-      // Puxar lançamentos do mês (fonte real)
-      // OBS: os joins (vendedores/clientes/vendedor_visitas) dependem dos relacionamentos no Supabase.
-      // Se algum join não existir, a query ainda funciona sem os campos (o fallback é usar vendedor_id).
       const { data, error } = await supabase
         .from('vendedor_km_lancamentos')
         .select(
@@ -216,7 +200,6 @@ export default function QuilometragemAdminPage() {
 
       const lanc = (data ?? []) as KmLancRow[];
 
-      // Agrupar por vendedor + mês (na prática aqui é só o mês filtrado, mas mantemos modelo certo)
       const map = new Map<string, GroupRow>();
 
       for (const r of lanc) {
@@ -251,8 +234,6 @@ export default function QuilometragemAdminPage() {
         const g = map.get(key)!;
         g.total_km += safeNumber(r.km);
         g.total_reembolso += safeNumber(r.valor_total);
-
-        // valor_km_ref (média simples do período, apenas para exibir)
         g.valor_km_ref += safeNumber(r.valor_km);
 
         if (r.status === 'PENDENTE') g.pendentes += 1;
@@ -272,7 +253,6 @@ export default function QuilometragemAdminPage() {
         };
       });
 
-      // Ordenar por vendedor_nome
       grouped.sort((a, b) => a.vendedor_nome.localeCompare(b.vendedor_nome));
 
       setRows(grouped);
@@ -464,7 +444,6 @@ export default function QuilometragemAdminPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-      {/* Header */}
       <div className="mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -652,20 +631,6 @@ export default function QuilometragemAdminPage() {
         </div>
       </div>
 
-      {/* Nota */}
-      <div className="mt-6 bg-blue-50 border border-blue-200 rounded-2xl p-5 text-sm text-gray-700">
-        <div className="flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
-          <div>
-            <p className="font-semibold text-gray-900">Regra para o Financeiro</p>
-            <p className="mt-1">
-              O Financeiro contabiliza custo de KM somente quando o lançamento está em <strong>APROVADO</strong> ou <strong>PAGO</strong>.
-              Lançamentos <strong>PENDENTES</strong> são “feito pelo vendedor”, mas ainda não são custo reconhecido.
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Modal Detalhes */}
       {detalhesAbertos && detalhesGroup && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -714,9 +679,7 @@ export default function QuilometragemAdminPage() {
                           <td className="px-4 py-3 text-sm text-gray-900">
                             {new Date(l.data).toLocaleDateString('pt-PT')}
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-700">
-                            {l.clientes?.nome ?? '—'}
-                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{l.clientes?.nome ?? '—'}</td>
                           <td className="px-4 py-3 text-sm text-gray-900 text-right">
                             {safeNumber(l.km).toLocaleString('pt-PT')} km
                           </td>
