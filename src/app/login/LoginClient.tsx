@@ -8,19 +8,22 @@ function isEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
+function safeInternalPath(input: string | null | undefined): string | null {
+  if (!input) return null;
+  // segurança mínima: só permite redirects internos
+  if (input.startsWith('/')) return input;
+  return null;
+}
+
 export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // O middleware usa `next` (não `redirect`). Mantemos fallback para `redirect` por compatibilidade.
-  const redirectTo = useMemo(() => {
-    const next = searchParams?.get('next');
-    const r = searchParams?.get('next');
-    const target = next || r;
-
-    // segurança mínima: só permite redirects internos
-    if (target && target.startsWith('/')) return target;
-    return '/';
+  // O middleware usa `next`. Mantemos fallback para `redirect` por compatibilidade.
+  const nextPath = useMemo(() => {
+    const next = safeInternalPath(searchParams?.get('next'));
+    const redirect = safeInternalPath(searchParams?.get('redirect'));
+    return next || redirect; // pode ser null
   }, [searchParams]);
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -46,15 +49,45 @@ export default function LoginClient() {
 
     setLoading(true);
     try {
-      // IMPORTANTE: este client (SSR/browser) escreve sessão em cookies,
-      // permitindo que middleware e Server Components enxerguem o user.
-      const { error } = await supabase.auth.signInWithPassword({
+      // Client browser da @supabase/ssr escreve sessão em cookies
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
       if (error) throw error;
 
-      router.replace(redirectTo);
+      const userId = data.user?.id;
+      if (!userId) {
+        setErro('Login efetuado, mas não foi possível identificar o utilizador.');
+        return;
+      }
+
+      // Fonte única: public.perfis
+      const { data: perfil, error: perfilError } = await supabase
+        .from('perfis')
+        .select('role')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (perfilError) {
+        throw new Error(`Erro ao carregar perfil: ${perfilError.message}`);
+      }
+
+      const role = String(perfil?.role ?? '').toUpperCase();
+
+      let target = '/dashboard';
+
+      if (role === 'VENDEDOR') {
+        target = '/portal';
+      } else if (role === 'ADMIN') {
+        target = nextPath || '/dashboard';
+      } else {
+        // Segurança: não joga para área errada se role estiver ausente/inválida
+        setErro('Perfil sem role definido (ADMIN|VENDEDOR). Verifique public.perfis.');
+        return;
+      }
+
+      router.replace(target);
       router.refresh();
     } catch (e: any) {
       setErro(e?.message || 'Falha no login.');
