@@ -12,11 +12,13 @@ import {
   XCircle,
   CreditCard,
   RefreshCw,
+  ShieldAlert,
 } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase';
 
 type Perfil = {
+  id: string;
   role: string;
   vendedor_id: string | null;
 };
@@ -34,7 +36,6 @@ type KmLancRow = {
   motivo_rejeicao: string | null;
   criado_em: string;
 
-  // joins
   vendedores?: { id: string; nome?: string | null } | null;
   clientes?: { id: string; nome?: string | null } | null;
 };
@@ -78,50 +79,55 @@ export default function QuilometragemAdminPage() {
   const [valorKmRef, setValorKmRef] = useState<number>(0.2);
   const [rows, setRows] = useState<KmLancRow[]>([]);
 
-  const bootstrap = async () => {
-    setLoading(true);
-    setErro(null);
-
-    try {
-      // Auth
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-
-      if (userErr || !user) {
-        router.push('/login');
-        return;
-      }
-
-      // Role check
-      const { data: perfil, error: perfilErr } = await supabase
-        .from('perfis')
-        .select('role, vendedor_id')
-        .eq('id', user.id)
-        .maybeSingle<Perfil>();
-
-      if (perfilErr) throw perfilErr;
-
-      const role = String(perfil?.role ?? '').toUpperCase();
-      if (role !== 'ADMIN') {
-        router.push('/portal');
-        return;
-      }
-
-      await carregar(mes);
-    } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Erro ao carregar quilometragem');
-    } finally {
-      setLoading(false);
+  const getAuthAndCheckAdmin = async () => {
+    // 1) Session
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr) {
+      throw new Error(`Erro ao obter sessão: ${sessionErr.message}`);
     }
+    const session = sessionData?.session;
+    if (!session?.user) {
+      // aqui não “chutamos” para login sem explicar
+      throw new Error('Sem sessão ativa. Faça login novamente (a sessão não foi encontrada nesta rota).');
+    }
+
+    // 2) User (garantir token ok)
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr) {
+      throw new Error(`Erro ao obter utilizador: ${userErr.message}`);
+    }
+    const user = userData?.user;
+    if (!user) {
+      throw new Error('Não foi possível obter o utilizador autenticado.');
+    }
+
+    // 3) Perfil (role)
+    const { data: perfil, error: perfilErr } = await supabase
+      .from('perfis')
+      .select('id, role, vendedor_id')
+      .eq('id', user.id)
+      .maybeSingle<Perfil>();
+
+    if (perfilErr) {
+      throw new Error(`Erro ao ler perfis (RLS/perm?): ${perfilErr.message}`);
+    }
+
+    if (!perfil) {
+      throw new Error(
+        'Não existe registo na tabela "perfis" para este utilizador. Crie a linha em perfis com role=ADMIN.'
+      );
+    }
+
+    const role = String(perfil.role ?? '').toUpperCase().trim();
+    if (role !== 'ADMIN') {
+      throw new Error(`Acesso negado. Role atual: "${perfil.role}". Esta página é apenas para ADMIN.`);
+    }
+
+    return { user, perfil };
   };
 
-  const carregar = async (yyyymm: string) => {
-    setErro(null);
-
-    // valor_km de referência (config)
+  const carregarValorKmRef = async () => {
+    // se não existir tabela/coluna, não quebra a página
     const { data: cfgRows, error: cfgErr } = await supabase
       .from('configuracoes_financeiras')
       .select('valor_km')
@@ -132,11 +138,12 @@ export default function QuilometragemAdminPage() {
       const v = safeNumber(cfgRows?.[0]?.valor_km ?? 0.2);
       setValorKmRef(v > 0 ? v : 0.2);
     }
+  };
 
+  const carregarLancamentos = async (yyyymm: string) => {
     const { startDate, endDate } = yyyyMmToDateRange(yyyymm);
 
-    // IMPORTANTÍSSIMO: ler da tabela NOVA
-    const query = supabase
+    const { data, error } = await supabase
       .from('vendedor_km_lancamentos')
       .select(
         `
@@ -160,11 +167,27 @@ export default function QuilometragemAdminPage() {
       .order('data', { ascending: false })
       .order('criado_em', { ascending: false });
 
-    const { data, error } = await query;
-
-    if (error) throw error;
+    if (error) {
+      throw new Error(`Erro ao ler vendedor_km_lancamentos (RLS/perm?): ${error.message}`);
+    }
 
     setRows((data ?? []) as KmLancRow[]);
+  };
+
+  const bootstrap = async () => {
+    setLoading(true);
+    setErro(null);
+
+    try {
+      await getAuthAndCheckAdmin();
+      await carregarValorKmRef();
+      await carregarLancamentos(mes);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao carregar quilometragem');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -175,8 +198,11 @@ export default function QuilometragemAdminPage() {
   useEffect(() => {
     (async () => {
       setLoading(true);
+      setErro(null);
       try {
-        await carregar(mes);
+        await getAuthAndCheckAdmin();
+        await carregarValorKmRef();
+        await carregarLancamentos(mes);
       } catch (e: any) {
         console.error(e);
         setErro(e?.message || 'Erro ao atualizar período');
@@ -192,7 +218,6 @@ export default function QuilometragemAdminPage() {
 
     return rows.filter((r) => {
       if (statusFiltro !== 'TODOS' && r.status !== statusFiltro) return false;
-
       if (!term) return true;
 
       const vendedorNome = String(r.vendedores?.nome ?? '').toLowerCase();
@@ -214,6 +239,21 @@ export default function QuilometragemAdminPage() {
   const totalValor = filtered.reduce((acc, r) => acc + safeNumber(r.valor_total), 0);
   const pendentes = filtered.filter((r) => r.status === 'PENDENTE').length;
 
+  const recarregar = async () => {
+    setLoading(true);
+    setErro(null);
+    try {
+      await getAuthAndCheckAdmin();
+      await carregarValorKmRef();
+      await carregarLancamentos(mes);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao recarregar');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const aprovarLancamento = async (id: string) => {
     if (!confirm('Aprovar este lançamento de KM?')) return;
 
@@ -224,9 +264,9 @@ export default function QuilometragemAdminPage() {
         .update({ status: 'APROVADO', aprovado_em: new Date().toISOString() })
         .eq('id', id);
 
-      if (error) throw error;
+      if (error) throw new Error(error.message);
 
-      await carregar(mes);
+      await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
       alert(e?.message || 'Erro ao aprovar');
@@ -246,9 +286,9 @@ export default function QuilometragemAdminPage() {
         .update({ status: 'REJEITADO', motivo_rejeicao: motivo.trim() })
         .eq('id', id);
 
-      if (error) throw error;
+      if (error) throw new Error(error.message);
 
-      await carregar(mes);
+      await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
       alert(e?.message || 'Erro ao rejeitar');
@@ -267,9 +307,9 @@ export default function QuilometragemAdminPage() {
         .update({ status: 'PAGO', pago_em: new Date().toISOString() })
         .eq('id', id);
 
-      if (error) throw error;
+      if (error) throw new Error(error.message);
 
-      await carregar(mes);
+      await carregarLancamentos(mes);
     } catch (e: any) {
       console.error(e);
       alert(e?.message || 'Erro ao marcar como pago');
@@ -300,19 +340,43 @@ export default function QuilometragemAdminPage() {
   if (erro) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
-        <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-lg p-6">
+        <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6">
           <div className="flex items-start gap-3">
-            <AlertCircle className="w-6 h-6 text-red-600 mt-0.5" />
+            <ShieldAlert className="w-7 h-7 text-red-600 mt-0.5" />
             <div className="flex-1">
-              <p className="text-red-700 font-semibold">Erro ao carregar</p>
-              <p className="text-gray-700 mt-1">{erro}</p>
-              <button
-                type="button"
-                onClick={bootstrap}
-                className="mt-4 bg-gray-900 text-white px-4 py-2 rounded-lg font-semibold"
-              >
-                Tentar novamente
-              </button>
+              <p className="text-red-700 font-bold text-lg">Bloqueio de acesso / sessão</p>
+              <p className="text-gray-700 mt-2 whitespace-pre-wrap">{erro}</p>
+
+              <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-900">
+                <p className="font-semibold">Checklist rápido</p>
+                <ol className="list-decimal ml-5 mt-2 space-y-1">
+                  <li>Confirme que está logado como ADMIN no ERP (mesmo browser, mesma aba).</li>
+                  <li>Na tabela <b>perfis</b>, deve existir uma linha com <b>id = auth.users.id</b> e <b>role = ADMIN</b>.</li>
+                  <li>RLS: a policy do ADMIN precisa permitir SELECT em <b>perfis</b> e em <b>vendedor_km_lancamentos</b>.</li>
+                </ol>
+              </div>
+
+              <div className="mt-5 flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={() => router.push('/login')}
+                  className="bg-gray-900 text-white px-4 py-2 rounded-lg font-semibold"
+                >
+                  Ir para Login
+                </button>
+
+                <button
+                  type="button"
+                  onClick={recarregar}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold"
+                >
+                  Tentar novamente
+                </button>
+              </div>
+
+              <p className="mt-4 text-xs text-gray-500">
+                Se continuar a cair aqui, o problema é de <b>sessão</b> ou <b>RLS</b>, não de UI.
+              </p>
             </div>
           </div>
         </div>
@@ -338,6 +402,14 @@ export default function QuilometragemAdminPage() {
                 onChange={(e) => setMes(e.target.value)}
                 className="border border-gray-300 rounded-lg px-3 py-2 bg-white"
               />
+              <button
+                type="button"
+                onClick={recarregar}
+                className="inline-flex items-center gap-2 bg-gray-900 text-white px-4 py-2 rounded-lg font-semibold"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Recarregar
+              </button>
             </div>
           </div>
 
@@ -529,15 +601,14 @@ export default function QuilometragemAdminPage() {
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
                 <p className="mt-1">
-                  Esta tela lê diretamente a tabela <span className="font-semibold">vendedor_km_lancamentos</span>. O custo de KM no
-                  Financeiro deve considerar apenas lançamentos <span className="font-semibold">APROVADOS/PAGOS</span> (não pendentes).
+                  Se você cair para login, o problema é <b>sessão</b> ou <b>perfis/RLS</b>. Esta página agora mostra o motivo exato.
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Futuro: detalhe por visita, export, batch approvals, etc. */}
+        {/* Futuro: detalhe por visita, export, batch approvals */}
       </div>
     </div>
   );
