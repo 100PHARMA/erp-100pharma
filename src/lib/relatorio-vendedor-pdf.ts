@@ -1,5 +1,3 @@
-// lib/relatorio-vendedor-pdf.ts
-
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -16,37 +14,37 @@ interface DadosVendedor {
 
 interface IntervaloRelatorio {
   dataInicio: string; // 'YYYY-MM-DD'
-  dataFim: string;    // 'YYYY-MM-DD'
+  dataFim: string; // 'YYYY-MM-DD'
 }
 
 interface ResumoPeriodo {
-  vendasMes: number;         // faturação no período
-  frascosMes: number;        // frascos vendidos
-  comissaoMes: number;       // comissão no período
-  percentualMeta: number;    // %
+  vendasMes: number; // faturação no período (SEM IVA)
+  frascosMes: number; // frascos vendidos
+  comissaoMes: number; // comissão no período
+  percentualMeta: number; // %
   clientesAtivos: number;
-  kmRodadosMes: number;
-  custoKmMes: number;
+  kmRodadosMes: number; // KM PAGO no período
+  custoKmMes: number; // € PAGO no período
 }
 
 interface VendaRelatorio {
   id: string;
-  data: string;          // 'YYYY-MM-DD'
+  data: string; // 'YYYY-MM-DD'
   cliente_nome: string;
   frascos: number;
-  total_com_iva: number;
+  total_com_iva: number; // aqui, no teu caso, é SEM IVA (mantido por compatibilidade)
 }
 
 interface QuilometragemRelatorio {
   id: string;
-  data: string;          // 'YYYY-MM-DD'
+  data: string; // 'YYYY-MM-DD'
   km: number;
   valor: number;
 }
 
 interface VisitaRelatorio {
   id: string;
-  data_visita: string;   // 'YYYY-MM-DD'
+  data_visita: string; // 'YYYY-MM-DD'
   estado: string;
   notas: string;
   cliente_nome: string;
@@ -67,7 +65,13 @@ interface DadosRelatorioVendedor {
 
 function formatDate(iso: string): string {
   if (!iso) return '-';
-  const [year, month, day] = iso.split('-');
+
+  // aceita YYYY-MM-DD e ignora resto se vier algo maior
+  const clean = iso.includes('T') ? iso.slice(0, 10) : iso;
+  const parts = clean.split('-');
+  if (parts.length !== 3) return iso;
+
+  const [year, month, day] = parts;
   if (!year || !month || !day) return iso;
   return `${day}/${month}/${year}`;
 }
@@ -100,9 +104,7 @@ function formatPercent(value: number | undefined | null): string {
 // GERADOR DE PDF
 // ======================================================================
 
-export async function gerarRelatorioVendedorPdf(
-  dados: DadosRelatorioVendedor
-): Promise<void> {
+export async function gerarRelatorioVendedorPdf(dados: DadosRelatorioVendedor): Promise<void> {
   const { vendedor, intervalo, resumo, vendas, quilometragens, visitas } = dados;
 
   const doc = new jsPDF('p', 'pt', 'a4');
@@ -124,13 +126,7 @@ export async function gerarRelatorioVendedorPdf(
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
 
-  doc.text(
-    `Período: ${formatDate(intervalo.dataInicio)} a ${formatDate(
-      intervalo.dataFim
-    )}`,
-    marginLeft,
-    cursorY
-  );
+  doc.text(`Período: ${formatDate(intervalo.dataInicio)} a ${formatDate(intervalo.dataFim)}`, marginLeft, cursorY);
   cursorY += 16;
 
   doc.text(`Vendedor: ${vendedor.nome}`, marginLeft, cursorY);
@@ -154,12 +150,12 @@ export async function gerarRelatorioVendedorPdf(
     startY: cursorY + 4,
     head: [['Indicador', 'Valor']],
     body: [
-      ['Faturação no período', formatCurrency(resumo.vendasMes)],
+      ['Faturação no período (sem IVA)', formatCurrency(resumo.vendasMes)],
       ['Comissão no período', formatCurrency(resumo.comissaoMes)],
       ['Frascos vendidos', `${resumo.frascosMes ?? 0}`],
       ['Clientes ativos', `${resumo.clientesAtivos ?? 0}`],
-      ['Km rodados', formatKm(resumo.kmRodadosMes)],
-      ['Custo de km', formatCurrency(resumo.custoKmMes)],
+      ['Km rodados (PAGO)', formatKm(resumo.kmRodadosMes)],
+      ['Custo de km (PAGO)', formatCurrency(resumo.custoKmMes)],
       ['Percentual da meta', formatPercent(resumo.percentualMeta)],
     ],
     styles: {
@@ -190,11 +186,7 @@ export async function gerarRelatorioVendedorPdf(
   if (!vendas || vendas.length === 0) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.text(
-      'Nenhuma venda registrada neste período.',
-      marginLeft,
-      cursorY + 10
-    );
+    doc.text('Nenhuma venda registrada neste período.', marginLeft, cursorY + 10);
     cursorY += 30;
   } else {
     const corpoVendas = vendas.map((v) => [
@@ -206,7 +198,7 @@ export async function gerarRelatorioVendedorPdf(
 
     autoTable(doc, {
       startY: cursorY + 4,
-      head: [['Data', 'Cliente', 'Frascos', 'Total (com IVA)']],
+      head: [['Data', 'Cliente', 'Frascos', 'Total (sem IVA)']],
       body: corpoVendas,
       styles: {
         font: 'helvetica',
@@ -231,24 +223,16 @@ export async function gerarRelatorioVendedorPdf(
   // --------------------------------------------------
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.text('Quilometragem no período', marginLeft, cursorY);
+  doc.text('Quilometragem no período (PAGO)', marginLeft, cursorY);
   cursorY += 12;
 
   if (!quilometragens || quilometragens.length === 0) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.text(
-      'Nenhum registo de quilometragem neste período.',
-      marginLeft,
-      cursorY + 10
-    );
+    doc.text('Nenhum registo de quilometragem paga neste período.', marginLeft, cursorY + 10);
     cursorY += 30;
   } else {
-    const corpoKm = quilometragens.map((km) => [
-      formatDate(km.data),
-      `${km.km ?? 0}`,
-      formatCurrency(km.valor),
-    ]);
+    const corpoKm = quilometragens.map((km) => [formatDate(km.data), `${km.km ?? 0}`, formatCurrency(km.valor)]);
 
     autoTable(doc, {
       startY: cursorY + 4,
@@ -283,11 +267,7 @@ export async function gerarRelatorioVendedorPdf(
   if (!visitas || visitas.length === 0) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.text(
-      'Nenhuma visita registrada neste período.',
-      marginLeft,
-      cursorY + 10
-    );
+    doc.text('Nenhuma visita registrada neste período.', marginLeft, cursorY + 10);
   } else {
     const corpoVisitas = visitas.map((visita) => [
       formatDate(visita.data_visita),
