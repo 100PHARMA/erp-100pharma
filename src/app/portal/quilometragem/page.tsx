@@ -1,17 +1,9 @@
+// src/app/portal/quilometragem/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Calendar,
-  Car,
-  DollarSign,
-  Search,
-  AlertCircle,
-  CheckCircle2,
-  Clock3,
-  BadgeInfo,
-} from 'lucide-react';
+import { Calendar, Car, DollarSign, Search, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 type Perfil = {
@@ -19,26 +11,27 @@ type Perfil = {
   vendedor_id: string | null;
 };
 
-type KmStatus = 'PENDENTE' | 'APROVADO' | 'PAGO' | string;
-
-type KmRow = {
+type KmLancRow = {
   id: string;
   vendedor_id: string;
   data: string; // date (YYYY-MM-DD)
   km: number | null;
   valor_total: number | null;
-  status: KmStatus;
-  visita_id?: string | null;
+  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | string | null;
 };
+
+function safeNum(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function yyyyMmToDateRange(yyyymm: string) {
   const [yStr, mStr] = yyyymm.split('-');
   const y = Number(yStr);
   const m = Number(mStr);
 
-  // start = 1º dia do mês
+  // intervalo: [startDate, endDate) (end exclusivo)
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-  // end = 1º dia do próximo mês (exclusivo)
   const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
 
   const startDate = start.toISOString().slice(0, 10);
@@ -47,33 +40,8 @@ function yyyyMmToDateRange(yyyymm: string) {
   return { startDate, endDate };
 }
 
-function safeNum(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 function formatEUR(n: number) {
   return n.toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function formatKm(n: number) {
-  return n.toLocaleString('pt-PT', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-}
-
-function statusLabel(s: KmStatus) {
-  const up = String(s ?? '').toUpperCase();
-  if (up === 'PENDENTE') return 'Pendente';
-  if (up === 'APROVADO') return 'Em aprovação';
-  if (up === 'PAGO') return 'Pago';
-  return up || '—';
-}
-
-function statusPillClass(s: KmStatus) {
-  const up = String(s ?? '').toUpperCase();
-  if (up === 'PAGO') return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-  if (up === 'APROVADO') return 'bg-blue-100 text-blue-800 border-blue-200';
-  if (up === 'PENDENTE') return 'bg-amber-100 text-amber-800 border-amber-200';
-  return 'bg-gray-100 text-gray-700 border-gray-200';
 }
 
 export default function PortalQuilometragemPage() {
@@ -92,9 +60,7 @@ export default function PortalQuilometragemPage() {
     return `${y}-${m}`;
   });
 
-  const [valorKmRef, setValorKmRef] = useState<number>(0.2);
-
-  const [rows, setRows] = useState<KmRow[]>([]);
+  const [rows, setRows] = useState<KmLancRow[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   // =========================================================
@@ -157,34 +123,19 @@ export default function PortalQuilometragemPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes]);
 
-  // =========================================================
-  // CARREGAR
-  // =========================================================
   const carregar = async (vendId: string, yyyymm: string) => {
-    // valor/km (ref.) do config
-    const { data: configRows, error: cfgErr } = await supabase
-      .from('configuracoes_financeiras')
-      .select('valor_km')
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (!cfgErr) {
-      const v = Number(configRows?.[0]?.valor_km ?? 0.2);
-      setValorKmRef(v > 0 ? v : 0.2);
-    }
-
     const { startDate, endDate } = yyyyMmToDateRange(yyyymm);
 
-    // IMPORTANTE:
-    // - fonte correta: vendedor_km_lancamentos
-    // - NÃO selecionar created_at (não existe na tua tabela)
+    // Fonte correta: vendedor_km_lancamentos (com status)
+    // Importante: NÃO usar created_at se não existe no banco.
     const { data, error } = await supabase
       .from('vendedor_km_lancamentos')
-      .select('id, vendedor_id, data, km, valor_total, status, visita_id')
+      .select('id, vendedor_id, data, km, valor_total, status')
       .eq('vendedor_id', vendId)
       .gte('data', startDate)
       .lt('data', endDate)
-      .order('data', { ascending: false });
+      .order('data', { ascending: false })
+      .order('id', { ascending: false });
 
     if (error) {
       console.error(error);
@@ -193,64 +144,68 @@ export default function PortalQuilometragemPage() {
       return;
     }
 
-    setRows((data ?? []) as KmRow[]);
+    setRows((data ?? []) as KmLancRow[]);
   };
 
-  // =========================================================
-  // FILTRO + KPIs
-  // =========================================================
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     if (!term) return rows;
 
     return rows.filter((r) => {
-      const d = String(r.data ?? '').toLowerCase();
-      const km = String(r.km ?? '').toLowerCase();
-      const val = String(r.valor_total ?? '').toLowerCase();
-      const st = statusLabel(r.status).toLowerCase();
-      return d.includes(term) || km.includes(term) || val.includes(term) || st.includes(term);
+      const dataStr = String(r.data ?? '').toLowerCase();
+      const kmStr = String(r.km ?? '').toLowerCase();
+      const valorStr = String(r.valor_total ?? '').toLowerCase();
+      const statusStr = String(r.status ?? '').toLowerCase();
+      return (
+        dataStr.includes(term) ||
+        kmStr.includes(term) ||
+        valorStr.includes(term) ||
+        statusStr.includes(term)
+      );
     });
   }, [rows, searchTerm]);
 
-  // Total do mês = PENDENTE + APROVADO + PAGO (ou seja: todos os que retornaram)
+  // TOTAL do mês: PENDENTE + APROVADO + PAGO (na prática, tudo que veio)
   const totalKmMes = useMemo(() => filtered.reduce((acc, r) => acc + safeNum(r.km), 0), [filtered]);
   const totalValorMes = useMemo(
     () => filtered.reduce((acc, r) => acc + safeNum(r.valor_total), 0),
     [filtered],
   );
 
-  const totalPagoMes = useMemo(
-    () =>
-      filtered
-        .filter((r) => String(r.status ?? '').toUpperCase() === 'PAGO')
-        .reduce((acc, r) => acc + safeNum(r.valor_total), 0),
-    [filtered],
-  );
+  // Total pago no mês: somente PAGO
+  const totalPagoMes = useMemo(() => {
+    return filtered
+      .filter((r) => String(r.status ?? '').toUpperCase() === 'PAGO')
+      .reduce((acc, r) => acc + safeNum(r.valor_total), 0);
+  }, [filtered]);
 
-  const totalEmAprovacaoMes = useMemo(
-    () =>
-      filtered
-        .filter((r) => String(r.status ?? '').toUpperCase() === 'APROVADO')
-        .reduce((acc, r) => acc + safeNum(r.valor_total), 0),
-    [filtered],
-  );
+  function badgeStatus(status: string) {
+    const s = String(status ?? '').toUpperCase();
+    if (s === 'PAGO') return 'bg-emerald-100 text-emerald-800';
+    if (s === 'APROVADO') return 'bg-blue-100 text-blue-800';
+    if (s === 'PENDENTE') return 'bg-amber-100 text-amber-800';
+    return 'bg-gray-100 text-gray-700';
+  }
 
-  const qtdLancamentos = filtered.length;
+  function labelStatus(status: string) {
+    const s = String(status ?? '').toUpperCase();
+    if (s === 'PAGO') return 'Pago';
+    if (s === 'APROVADO') return 'Aprovado';
+    if (s === 'PENDENTE') return 'Pendente';
+    return s || '—';
+  }
 
   if (loading) {
     return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-lg p-6 flex items-center gap-3 text-gray-700">
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
-          Carregando quilometragem...
-        </div>
+      <div className="bg-white rounded-2xl shadow-lg p-6">
+        <p className="text-gray-600">Carregando quilometragem...</p>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div className="bg-white rounded-2xl shadow-xl p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
@@ -272,49 +227,45 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* KPIs (responsivo e alinhado) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mt-6">
-            <Kpi
-              title="Total km (mês)"
-              value={`${formatKm(totalKmMes)} km`}
-              icon={<Car className="w-6 h-6 text-white" />}
-              color="bg-blue-600"
-            />
+          {/* KPIs (limpo: 3 cards) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-600 p-3 rounded-lg">
+                  <Car className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Total km (mês)</p>
+                  <p className="text-2xl font-bold text-blue-700">
+                    {totalKmMes.toLocaleString('pt-PT')} km
+                  </p>
+                </div>
+              </div>
+            </div>
 
-            <Kpi
-              title="Total (€) (mês)"
-              value={`€ ${formatEUR(totalValorMes)}`}
-              icon={<DollarSign className="w-6 h-6 text-white" />}
-              color="bg-emerald-600"
-            />
+            <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-600 p-3 rounded-lg">
+                  <DollarSign className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Total (€) (mês)</p>
+                  <p className="text-2xl font-bold text-emerald-700">€ {formatEUR(totalValorMes)}</p>
+                </div>
+              </div>
+            </div>
 
-            <Kpi
-              title="Lançamentos"
-              value={`${qtdLancamentos}`}
-              icon={<Search className="w-6 h-6 text-white" />}
-              color="bg-purple-600"
-            />
-
-            <Kpi
-              title="Valor/km (ref.)"
-              value={`€ ${formatEUR(valorKmRef)}`}
-              icon={<AlertCircle className="w-6 h-6 text-white" />}
-              color="bg-orange-600"
-            />
-
-            <Kpi
-              title="Total pago (€)"
-              value={`€ ${formatEUR(totalPagoMes)}`}
-              icon={<CheckCircle2 className="w-6 h-6 text-white" />}
-              color="bg-emerald-700"
-            />
-
-            <Kpi
-              title="Em aprovação (€)"
-              value={`€ ${formatEUR(totalEmAprovacaoMes)}`}
-              icon={<Clock3 className="w-6 h-6 text-white" />}
-              color="bg-blue-700"
-            />
+            <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-700 p-3 rounded-lg">
+                  <CheckCircle2 className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Total pago (€) (mês)</p>
+                  <p className="text-2xl font-bold text-emerald-800">€ {formatEUR(totalPagoMes)}</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Busca */}
@@ -361,7 +312,7 @@ export default function PortalQuilometragemPage() {
                         </td>
 
                         <td className="px-6 py-4 text-center text-sm font-semibold text-gray-900">
-                          {formatKm(safeNum(r.km))} km
+                          {safeNum(r.km).toLocaleString('pt-PT')} km
                         </td>
 
                         <td className="px-6 py-4 text-right text-sm font-semibold text-emerald-700">
@@ -370,11 +321,11 @@ export default function PortalQuilometragemPage() {
 
                         <td className="px-6 py-4 text-center">
                           <span
-                            className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-semibold border ${statusPillClass(
-                              r.status,
+                            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${badgeStatus(
+                              String(r.status ?? ''),
                             )}`}
                           >
-                            {statusLabel(r.status)}
+                            {labelStatus(String(r.status ?? ''))}
                           </span>
                         </td>
                       </tr>
@@ -388,43 +339,19 @@ export default function PortalQuilometragemPage() {
           {/* Nota */}
           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-gray-700">
             <div className="flex items-start gap-3">
-              <BadgeInfo className="w-5 h-5 text-blue-600 mt-0.5" />
+              <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
                 <p className="mt-1">
-                  O “Total (mês)” inclui lançamentos <strong>pendentes</strong>, <strong>em aprovação</strong> e{' '}
-                  <strong>pagos</strong>. Valores sujeitos a validação e aprovação.
+                  O total do mês inclui lançamentos pendentes, aprovados e pagos. Os valores apresentados estão sujeitos
+                  a validação e aprovação.
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Evolução futura: filtros por status, link da visita, export, etc. */}
-      </div>
-    </div>
-  );
-}
-
-function Kpi({
-  title,
-  value,
-  icon,
-  color,
-}: {
-  title: string;
-  value: string;
-  icon: React.ReactNode;
-  color: string;
-}) {
-  return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 h-full">
-      <div className="flex items-center gap-3">
-        <div className={`${color} p-3 rounded-lg shrink-0`}>{icon}</div>
-        <div className="min-w-0">
-          <p className="text-sm text-gray-600 leading-tight">{title}</p>
-          <p className="text-xl font-bold text-gray-900 truncate">{value}</p>
-        </div>
+        {/* Evolução futura: filtros por status, export, etc. */}
       </div>
     </div>
   );
