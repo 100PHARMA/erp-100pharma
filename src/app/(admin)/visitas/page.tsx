@@ -113,13 +113,9 @@ export default function VisitasPage() {
   const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
-  // map visita_id -> km_lancamento (último/único)
   const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>({});
-
-  // Se falhar leitura por RLS, guardamos para saber que não podemos “confiar” no bloqueio por PAGO
   const [kmLancReadFailed, setKmLancReadFailed] = useState(false);
 
-  // Modal
   const [showModal, setShowModal] = useState(false);
   const [modoEdicao, setModoEdicao] = useState(false);
   const [visitaEditandoId, setVisitaEditandoId] = useState<string | null>(null);
@@ -140,7 +136,6 @@ export default function VisitasPage() {
     km_informado: string;
     km_referencia: string;
 
-    // Dropdown apenas para AGENDADA/CANCELADA (REALIZADA só via concluir)
     estado: 'AGENDADA' | 'CANCELADA';
   }>({
     vendedor_id: '',
@@ -267,8 +262,6 @@ export default function VisitasPage() {
   }
 
   function canEditVisita(visita: VisitaRow) {
-    // Regra: bloqueia apenas se KM estiver PAGO
-    // Se não conseguimos ler km_lancamentos (RLS), não dá para afirmar que é PAGO -> não bloqueia aqui.
     if (!kmLancReadFailed && isPago(visita.id)) return false;
     return true;
   }
@@ -290,18 +283,13 @@ export default function VisitasPage() {
       vendedor_id: visita.vendedor_id,
       cliente_id: visita.cliente_id ?? '',
       data_visita: visita.data_visita,
-
       hora_inicio: '',
       hora_fim: '',
-
       objetivo: notas,
       resultado: '',
       proxima_acao: '',
-
       km_informado: visita.km_informado != null ? String(visita.km_informado) : '',
       km_referencia: visita.km_referencia != null ? String(visita.km_referencia) : '',
-
-      // dropdown só controla AGENDADA/CANCELADA; se visita for REALIZADA, vamos travar o select no UI
       estado: estadoAtual === 'CANCELADA' ? 'CANCELADA' : 'AGENDADA',
     });
 
@@ -328,7 +316,6 @@ export default function VisitasPage() {
       return;
     }
 
-    // Se estiver editando e já for PAGO, bloqueia (segunda barreira)
     if (modoEdicao && visitaEditandoId && visitaEditandoOriginal && !kmLancReadFailed) {
       if (isPago(visitaEditandoId)) {
         alert('Edição bloqueada: esta visita está vinculada a um lançamento de KM PAGO.');
@@ -356,29 +343,27 @@ export default function VisitasPage() {
         }),
         km_informado: kmInformado,
         km_referencia: kmReferencia,
-
-        // colunas existem (você confirmou)
         origem: 'ADMIN',
         updated_by: userId,
       };
 
       if (modoEdicao && visitaEditandoId) {
-        // Regra central: se a visita original é REALIZADA, NÃO alteramos estado via modal.
-        // Edita-se apenas os campos, mantendo REALIZADA.
         if (originalEstado === 'REALIZADA') {
-          // mantém estado REALIZADA, não escreve estado no payload
+          // mantém REALIZADA
         } else {
-          // se não for REALIZADA, estado pode ser AGENDADA/CANCELADA via select
           payload.estado = form.estado;
         }
 
-        const { error } = await supabase.from('vendedor_visitas').update(payload).eq('id', visitaEditandoId);
+        const { error } = await supabase
+          .from('vendedor_visitas')
+          .update(payload)
+          .eq('id', visitaEditandoId);
+
         if (error) throw error;
 
         alert('Visita atualizada.');
       } else {
-        // criação
-        payload.estado = form.estado; // AGENDADA/CANCELADA
+        payload.estado = form.estado;
         payload.created_by = userId;
 
         const { error } = await supabase.from('vendedor_visitas').insert(payload);
@@ -444,13 +429,11 @@ export default function VisitasPage() {
 
   async function cancelarVisita(visita: VisitaRow) {
     const estado = (visita.estado ?? 'AGENDADA') as EstadoVisita;
-
     if (estado === 'REALIZADA') {
       alert('Visita REALIZADA não deve ser cancelada neste fluxo.');
       return;
     }
     if (estado === 'CANCELADA') return;
-
     if (!confirm('Cancelar esta visita?')) return;
 
     setLoading(true);
@@ -489,7 +472,12 @@ export default function VisitasPage() {
       const vendedorNome = (v.vendedores?.nome ?? '').toLowerCase();
       const notas = (v.notas ?? '').toLowerCase();
 
-      const matchBusca = !term || clienteNome.includes(term) || vendedorNome.includes(term) || notas.includes(term);
+      const matchBusca =
+        !term ||
+        clienteNome.includes(term) ||
+        vendedorNome.includes(term) ||
+        notas.includes(term);
+
       return matchStatus && matchBusca;
     });
   }, [visitas, filterStatus, busca]);
@@ -498,9 +486,11 @@ export default function VisitasPage() {
     const total = visitas.length;
     const agendadas = visitas.filter((v) => (v.estado ?? 'AGENDADA') === 'AGENDADA').length;
     const realizadas = visitas.filter((v) => (v.estado ?? 'AGENDADA') === 'REALIZADA').length;
+
     const totalKm = visitas
       .filter((v) => (v.estado ?? 'AGENDADA') === 'REALIZADA')
       .reduce((acc, v) => acc + Number(v.km_informado ?? 0), 0);
+
     return { total, agendadas, realizadas, totalKm };
   }, [visitas]);
 
@@ -559,7 +549,9 @@ export default function VisitasPage() {
                 key={status}
                 onClick={() => setFilterStatus(status)}
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
-                  filterStatus === status ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  filterStatus === status
+                    ? 'bg-blue-600 text-white shadow-lg'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
                 {status === 'TODOS' ? 'Todas' : statusLabels[status]}
@@ -703,19 +695,19 @@ export default function VisitasPage() {
                 </div>
 
                 <div className="flex flex-row lg:flex-col gap-2 justify-end">
-                  {/* Editar: permitido em AGENDADA/CANCELADA/REALIZADA, exceto quando KM PAGO */}
                   <button
                     onClick={() => abrirModalEditar(visita)}
                     disabled={bloqueadaPorPago}
                     className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm ${
-                      bloqueadaPorPago ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-100 hover:bg-slate-200 text-slate-900'
+                      bloqueadaPorPago
+                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-900'
                     }`}
                   >
                     <Edit3 className="w-4 h-4" />
                     Editar
                   </button>
 
-                  {/* Concluir/Cancelar apenas se não for REALIZADA */}
                   {estado !== 'REALIZADA' && (
                     <>
                       <button
@@ -755,10 +747,12 @@ export default function VisitasPage() {
         </div>
       )}
 
+      {/* MODAL CORRIGIDO: header fixo + corpo com scroll + footer sticky com botões */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-5 flex items-center justify-between">
+          <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Header fixo */}
+            <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-5 flex items-center justify-between shrink-0">
               <h2 className="text-xl sm:text-2xl font-bold">{modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}</h2>
               <button
                 onClick={() => {
@@ -772,7 +766,8 @@ export default function VisitasPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            {/* Corpo com scroll */}
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
               {modoEdicao && visitaEditandoOriginal?.estado === 'REALIZADA' && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                   Esta visita está <strong>REALIZADA</strong>. Você pode editar os dados, mas o estado não é alterado aqui.
@@ -910,9 +905,8 @@ export default function VisitasPage() {
                 </div>
               </div>
 
-              <div>
+              <div className="pb-24">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
-
                 {modoEdicao && visitaEditandoOriginal?.estado === 'REALIZADA' ? (
                   <div className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-slate-50 text-slate-700">
                     REALIZADA (travado no modal)
@@ -927,11 +921,11 @@ export default function VisitasPage() {
                     <option value="CANCELADA">Cancelada</option>
                   </select>
                 )}
-
                 <p className="text-xs text-gray-500 mt-1">REALIZADA é via botão “Concluir”. PAGO bloqueia edição.</p>
               </div>
 
-              <div className="flex gap-3 pt-2">
+              {/* Footer sticky dentro do form para garantir submit */}
+              <div className="sticky bottom-0 -mx-6 px-6 py-4 bg-white border-t border-gray-200 flex gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -940,7 +934,7 @@ export default function VisitasPage() {
                   }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold transition-colors"
                 >
-                  Fechar
+                  Voltar
                 </button>
 
                 <button
