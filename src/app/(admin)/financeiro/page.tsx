@@ -54,16 +54,6 @@ interface VendaItem {
   preco_unitario: number;
 }
 
-interface KmLancamento {
-  id: string;
-  vendedor_id: string;
-  data: string; // date
-  km: number;
-  valor_km: number;
-  valor_total: number;
-  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO';
-}
-
 interface DadosFinanceiros {
   faturacaoBruta: number;
   frascosVendidos: number;
@@ -100,6 +90,12 @@ interface ResumoMensal {
   created_at: string;
 }
 
+// Resultado do RPC finance_km_pago_mes
+type KmPagoAggRow = {
+  qtd: number | null;
+  total: number | null;
+};
+
 // ======================================================================
 // HELPERS
 // ======================================================================
@@ -117,16 +113,6 @@ function startOfMonthISO(ano: number, mes: number): string {
 function endOfMonthISO(ano: number, mes: number): string {
   const d = new Date(Date.UTC(ano, mes, 0, 23, 59, 59, 999));
   return d.toISOString();
-}
-
-function startOfMonthDate(ano: number, mes: number): string {
-  const d = new Date(Date.UTC(ano, mes - 1, 1, 0, 0, 0));
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-function endOfMonthDateExclusive(ano: number, mes: number): string {
-  const d = new Date(Date.UTC(ano, mes, 1, 0, 0, 0));
-  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -274,20 +260,18 @@ export default function FinanceiroPage() {
         vendaItensData = (data || []) as VendaItem[];
       }
 
-      // 6) Quilometragem do mês (FONTE: vendedor_km_lancamentos)
-      // Regra de negócio: Financeiro reflete custo apenas quando STATUS = 'PAGO'
-      // (aprovado ainda não é custo realizado).
-      const dataInicio = startOfMonthDate(anoSelecionado, mesSelecionado);
-      const dataFimExclusivo = endOfMonthDateExclusive(anoSelecionado, mesSelecionado);
+      // 6) Quilometragem do mês (CUSTO REALIZADO = somente PAGO) via RPC (ignora RLS)
+      const { data: kmAgg, error: kmAggError } = await supabase.rpc('finance_km_pago_mes', {
+        p_ano: anoSelecionado,
+        p_mes: mesSelecionado,
+      });
 
-      const { data: kmLanc, error: kmError } = await supabase
-        .from('vendedor_km_lancamentos')
-        .select('id, vendedor_id, data, km, valor_km, valor_total, status')
-        .gte('data', dataInicio)
-        .lt('data', dataFimExclusivo)
-        .eq('status', 'PAGO');
+      if (kmAggError) throw kmAggError;
 
-      if (kmError) throw kmError;
+      const kmAggRow: KmPagoAggRow | null =
+        Array.isArray(kmAgg) && kmAgg.length > 0 ? (kmAgg[0] as KmPagoAggRow) : null;
+
+      const custoKmTotal = kmAggRow ? safeNumber(kmAggRow.total) : 0;
 
       // ======================================================================
       // 7) CÁLCULOS
@@ -296,8 +280,6 @@ export default function FinanceiroPage() {
       const faturacaoBruta = faturasNormalizadas.reduce((sum, f) => sum + safeNumber(f.total_com_iva), 0);
 
       const frascosVendidos = vendaItensData.reduce((sum, it) => sum + safeNumber(it.quantidade), 0);
-
-      const custoKmTotal = (kmLanc || []).reduce((sum: number, k: KmLancamento) => sum + safeNumber(k.valor_total), 0);
 
       const incentivoPodologista = frascosVendidos * safeNumber(config.incentivo_podologista);
       const fundoFarmaceutico = frascosVendidos * safeNumber(config.fundo_farmaceutico);
@@ -628,9 +610,7 @@ export default function FinanceiroPage() {
           }`}
         >
           <div className="flex items-center justify-between mb-4">
-            <span
-              className={`text-sm font-semibold ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`}
-            >
+            <span className={`text-sm font-semibold ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`}>
               Resultado Operacional
             </span>
             <Calculator className={`w-6 h-6 ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`} />
@@ -660,7 +640,7 @@ export default function FinanceiroPage() {
             <MapPin className="w-6 h-6 text-orange-600" />
           </div>
           <p className="text-2xl font-bold text-orange-900">{formatarMoeda(dados.custoKmTotal)}€</p>
-          <p className="text-xs text-orange-600 mt-2">KM pagos</p>
+          <p className="text-xs text-orange-600 mt-2">KM pagos (realizado)</p>
         </div>
 
         <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-2xl shadow-lg">
@@ -699,9 +679,7 @@ export default function FinanceiroPage() {
             }`}
           >
             <div className="flex items-center justify-between mb-4">
-              <span
-                className={`text-sm font-semibold ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}
-              >
+              <span className={`text-sm font-semibold ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 Resultado Líquido
               </span>
               <TrendingUp className={`w-6 h-6 ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`} />
@@ -741,7 +719,12 @@ export default function FinanceiroPage() {
           incentivos a podologistas e fundo farmacêutico. Este valor <strong>não inclui custos fixos</strong>.
         </p>
         <p className="text-gray-700 text-sm leading-relaxed mt-2">
-          <strong>Nota:</strong> Os valores são calculados com base em <strong>faturas emitidas</strong>, usando a <strong>data de emissão</strong>.
+          <strong>Nota:</strong> Os valores são calculados com base em <strong>faturas emitidas</strong>, usando a{' '}
+          <strong>data de emissão</strong>.
+        </p>
+        <p className="text-gray-700 text-sm leading-relaxed mt-2">
+          <strong>KM:</strong> o custo de quilometragem aqui é o <strong>realizado</strong>, ou seja, somente lançamentos{' '}
+          <strong>PAGO</strong> (via RPC no banco).
         </p>
       </div>
 
@@ -925,4 +908,5 @@ export default function FinanceiroPage() {
     </div>
   );
 }
+
 
