@@ -8,8 +8,9 @@ import {
   DollarSign,
   Search,
   AlertCircle,
-  CheckCircle,
-  Clock,
+  CheckCircle2,
+  Clock3,
+  BadgeInfo,
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
@@ -28,7 +29,6 @@ type KmRow = {
   valor_total: number | null;
   status: KmStatus;
   visita_id?: string | null;
-  created_at?: string | null;
 };
 
 function yyyyMmToDateRange(yyyymm: string) {
@@ -36,8 +36,9 @@ function yyyyMmToDateRange(yyyymm: string) {
   const y = Number(yStr);
   const m = Number(mStr);
 
-  // intervalo [startDate, endDate) em DATE
+  // start = 1º dia do mês
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+  // end = 1º dia do próximo mês (exclusivo)
   const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
 
   const startDate = start.toISOString().slice(0, 10);
@@ -51,28 +52,28 @@ function safeNum(v: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function formatEUR(v: number) {
-  return v.toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function formatEUR(n: number) {
+  return n.toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatKm(v: number) {
-  return v.toLocaleString('pt-PT', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+function formatKm(n: number) {
+  return n.toLocaleString('pt-PT', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-function statusLabel(s: string) {
-  const u = String(s ?? '').toUpperCase();
-  if (u === 'PENDENTE') return 'Pendente';
-  if (u === 'APROVADO') return 'Em aprovação';
-  if (u === 'PAGO') return 'Pago';
-  return u || '—';
+function statusLabel(s: KmStatus) {
+  const up = String(s ?? '').toUpperCase();
+  if (up === 'PENDENTE') return 'Pendente';
+  if (up === 'APROVADO') return 'Em aprovação';
+  if (up === 'PAGO') return 'Pago';
+  return up || '—';
 }
 
-function statusBadgeClass(s: string) {
-  const u = String(s ?? '').toUpperCase();
-  if (u === 'PENDENTE') return 'bg-yellow-100 text-yellow-800';
-  if (u === 'APROVADO') return 'bg-blue-100 text-blue-800';
-  if (u === 'PAGO') return 'bg-green-100 text-green-800';
-  return 'bg-gray-100 text-gray-700';
+function statusPillClass(s: KmStatus) {
+  const up = String(s ?? '').toUpperCase();
+  if (up === 'PAGO') return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+  if (up === 'APROVADO') return 'bg-blue-100 text-blue-800 border-blue-200';
+  if (up === 'PENDENTE') return 'bg-amber-100 text-amber-800 border-amber-200';
+  return 'bg-gray-100 text-gray-700 border-gray-200';
 }
 
 export default function PortalQuilometragemPage() {
@@ -146,7 +147,6 @@ export default function PortalQuilometragemPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Atualiza quando troca mês
   useEffect(() => {
     if (!vendedorId) return;
     (async () => {
@@ -157,8 +157,11 @@ export default function PortalQuilometragemPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes]);
 
+  // =========================================================
+  // CARREGAR
+  // =========================================================
   const carregar = async (vendId: string, yyyymm: string) => {
-    // 1) valor/km referência
+    // valor/km (ref.) do config
     const { data: configRows, error: cfgErr } = await supabase
       .from('configuracoes_financeiras')
       .select('valor_km')
@@ -166,16 +169,18 @@ export default function PortalQuilometragemPage() {
       .limit(1);
 
     if (!cfgErr) {
-      const v = safeNum(configRows?.[0]?.valor_km ?? 0.2);
+      const v = Number(configRows?.[0]?.valor_km ?? 0.2);
       setValorKmRef(v > 0 ? v : 0.2);
     }
 
-    // 2) km lançamentos no mês
     const { startDate, endDate } = yyyyMmToDateRange(yyyymm);
 
+    // IMPORTANTE:
+    // - fonte correta: vendedor_km_lancamentos
+    // - NÃO selecionar created_at (não existe na tua tabela)
     const { data, error } = await supabase
       .from('vendedor_km_lancamentos')
-      .select('id, vendedor_id, data, km, valor_total, status, visita_id, created_at')
+      .select('id, vendedor_id, data, km, valor_total, status, visita_id')
       .eq('vendedor_id', vendId)
       .gte('data', startDate)
       .lt('data', endDate)
@@ -191,54 +196,61 @@ export default function PortalQuilometragemPage() {
     setRows((data ?? []) as KmRow[]);
   };
 
+  // =========================================================
+  // FILTRO + KPIs
+  // =========================================================
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     if (!term) return rows;
 
     return rows.filter((r) => {
-      return (
-        String(r.data ?? '').toLowerCase().includes(term) ||
-        String(r.km ?? '').toLowerCase().includes(term) ||
-        String(r.valor_total ?? '').toLowerCase().includes(term) ||
-        String(r.status ?? '').toLowerCase().includes(term)
-      );
+      const d = String(r.data ?? '').toLowerCase();
+      const km = String(r.km ?? '').toLowerCase();
+      const val = String(r.valor_total ?? '').toLowerCase();
+      const st = statusLabel(r.status).toLowerCase();
+      return d.includes(term) || km.includes(term) || val.includes(term) || st.includes(term);
     });
   }, [rows, searchTerm]);
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const totalKmMes = filtered.reduce((acc, r) => acc + safeNum(r.km), 0);
+  // Total do mês = PENDENTE + APROVADO + PAGO (ou seja: todos os que retornaram)
+  const totalKmMes = useMemo(() => filtered.reduce((acc, r) => acc + safeNum(r.km), 0), [filtered]);
+  const totalValorMes = useMemo(
+    () => filtered.reduce((acc, r) => acc + safeNum(r.valor_total), 0),
+    [filtered],
+  );
 
-    const totalValorMes = filtered.reduce((acc, r) => {
-      // Para PENDENTE/APROVADO pode existir valor_total já calculado (baseado em km * valor_km no momento).
-      // Se vier nulo, não inventamos; soma 0.
-      return acc + safeNum(r.valor_total);
-    }, 0);
+  const totalPagoMes = useMemo(
+    () =>
+      filtered
+        .filter((r) => String(r.status ?? '').toUpperCase() === 'PAGO')
+        .reduce((acc, r) => acc + safeNum(r.valor_total), 0),
+    [filtered],
+  );
 
-    const totalPagoMes = filtered
-      .filter((r) => String(r.status ?? '').toUpperCase() === 'PAGO')
-      .reduce((acc, r) => acc + safeNum(r.valor_total), 0);
+  const totalEmAprovacaoMes = useMemo(
+    () =>
+      filtered
+        .filter((r) => String(r.status ?? '').toUpperCase() === 'APROVADO')
+        .reduce((acc, r) => acc + safeNum(r.valor_total), 0),
+    [filtered],
+  );
 
-    const totalAprovacaoMes = filtered
-      .filter((r) => String(r.status ?? '').toUpperCase() === 'APROVADO')
-      .reduce((acc, r) => acc + safeNum(r.valor_total), 0);
-
-    const qtdLancamentos = filtered.length;
-
-    return { totalKmMes, totalValorMes, totalPagoMes, totalAprovacaoMes, qtdLancamentos };
-  }, [filtered]);
+  const qtdLancamentos = filtered.length;
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl shadow-lg p-6">
-        <p className="text-gray-600">Carregando quilometragem...</p>
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="bg-white rounded-2xl shadow-lg p-6 flex items-center gap-3 text-gray-700">
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
+          Carregando quilometragem...
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         <div className="bg-white rounded-2xl shadow-xl p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
@@ -260,83 +272,49 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* KPIs */}
-          <div className="grid grid-cols-1 md:grid-cols-6 gap-4 mt-6">
-            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-blue-600 p-3 rounded-lg">
-                  <Car className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Total km (mês)</p>
-                  <p className="text-2xl font-bold text-blue-700">
-                    {formatKm(kpis.totalKmMes)} km
-                  </p>
-                </div>
-              </div>
-            </div>
+          {/* KPIs (responsivo e alinhado) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mt-6">
+            <Kpi
+              title="Total km (mês)"
+              value={`${formatKm(totalKmMes)} km`}
+              icon={<Car className="w-6 h-6 text-white" />}
+              color="bg-blue-600"
+            />
 
-            <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-emerald-600 p-3 rounded-lg">
-                  <DollarSign className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Total (€) (mês)</p>
-                  <p className="text-2xl font-bold text-emerald-700">€ {formatEUR(kpis.totalValorMes)}</p>
-                </div>
-              </div>
-            </div>
+            <Kpi
+              title="Total (€) (mês)"
+              value={`€ ${formatEUR(totalValorMes)}`}
+              icon={<DollarSign className="w-6 h-6 text-white" />}
+              color="bg-emerald-600"
+            />
 
-            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-purple-600 p-3 rounded-lg">
-                  <Search className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Lançamentos</p>
-                  <p className="text-2xl font-bold text-purple-700">{kpis.qtdLancamentos}</p>
-                </div>
-              </div>
-            </div>
+            <Kpi
+              title="Lançamentos"
+              value={`${qtdLancamentos}`}
+              icon={<Search className="w-6 h-6 text-white" />}
+              color="bg-purple-600"
+            />
 
-            <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-orange-600 p-3 rounded-lg">
-                  <AlertCircle className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Valor/km (ref.)</p>
-                  <p className="text-2xl font-bold text-orange-700">
-                    € {formatEUR(valorKmRef)}
-                  </p>
-                </div>
-              </div>
-            </div>
+            <Kpi
+              title="Valor/km (ref.)"
+              value={`€ ${formatEUR(valorKmRef)}`}
+              icon={<AlertCircle className="w-6 h-6 text-white" />}
+              color="bg-orange-600"
+            />
 
-            <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-green-600 p-3 rounded-lg">
-                  <CheckCircle className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Total pago (€)</p>
-                  <p className="text-2xl font-bold text-green-700">€ {formatEUR(kpis.totalPagoMes)}</p>
-                </div>
-              </div>
-            </div>
+            <Kpi
+              title="Total pago (€)"
+              value={`€ ${formatEUR(totalPagoMes)}`}
+              icon={<CheckCircle2 className="w-6 h-6 text-white" />}
+              color="bg-emerald-700"
+            />
 
-            <div className="bg-gradient-to-br from-sky-50 to-sky-100 p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="bg-sky-600 p-3 rounded-lg">
-                  <Clock className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Em aprovação (€)</p>
-                  <p className="text-2xl font-bold text-sky-700">€ {formatEUR(kpis.totalAprovacaoMes)}</p>
-                </div>
-              </div>
-            </div>
+            <Kpi
+              title="Em aprovação (€)"
+              value={`€ ${formatEUR(totalEmAprovacaoMes)}`}
+              icon={<Clock3 className="w-6 h-6 text-white" />}
+              color="bg-blue-700"
+            />
           </div>
 
           {/* Busca */}
@@ -367,6 +345,7 @@ export default function PortalQuilometragemPage() {
                     <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Estado</th>
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-gray-100">
                   {filtered.length === 0 ? (
                     <tr>
@@ -380,19 +359,22 @@ export default function PortalQuilometragemPage() {
                         <td className="px-6 py-4 text-sm text-gray-900">
                           {new Date(r.data).toLocaleDateString('pt-PT')}
                         </td>
+
                         <td className="px-6 py-4 text-center text-sm font-semibold text-gray-900">
                           {formatKm(safeNum(r.km))} km
                         </td>
+
                         <td className="px-6 py-4 text-right text-sm font-semibold text-emerald-700">
                           € {formatEUR(safeNum(r.valor_total))}
                         </td>
+
                         <td className="px-6 py-4 text-center">
                           <span
-                            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${statusBadgeClass(
-                              String(r.status ?? '')
+                            className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-semibold border ${statusPillClass(
+                              r.status,
                             )}`}
                           >
-                            {statusLabel(String(r.status ?? ''))}
+                            {statusLabel(r.status)}
                           </span>
                         </td>
                       </tr>
@@ -406,18 +388,43 @@ export default function PortalQuilometragemPage() {
           {/* Nota */}
           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-gray-700">
             <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+              <BadgeInfo className="w-5 h-5 text-blue-600 mt-0.5" />
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
                 <p className="mt-1">
-                  Os valores apresentados incluem lançamentos pendentes, em aprovação e pagos, e estão sujeitos a validação e aprovação.
+                  O “Total (mês)” inclui lançamentos <strong>pendentes</strong>, <strong>em aprovação</strong> e{' '}
+                  <strong>pagos</strong>. Valores sujeitos a validação e aprovação.
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Evolução futura: filtro por status, detalhe por visita, export, etc. */}
+        {/* Evolução futura: filtros por status, link da visita, export, etc. */}
+      </div>
+    </div>
+  );
+}
+
+function Kpi({
+  title,
+  value,
+  icon,
+  color,
+}: {
+  title: string;
+  value: string;
+  icon: React.ReactNode;
+  color: string;
+}) {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 h-full">
+      <div className="flex items-center gap-3">
+        <div className={`${color} p-3 rounded-lg shrink-0`}>{icon}</div>
+        <div className="min-w-0">
+          <p className="text-sm text-gray-600 leading-tight">{title}</p>
+          <p className="text-xl font-bold text-gray-900 truncate">{value}</p>
+        </div>
       </div>
     </div>
   );
