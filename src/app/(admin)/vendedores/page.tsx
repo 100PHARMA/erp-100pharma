@@ -1,4 +1,3 @@
-// src/app/vendedores/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -55,6 +54,9 @@ interface Vendedor {
   frascosMes: number;
   percentualMeta: number;
   clientesAtivos: number;
+
+  // IMPORTANTÍSSIMO:
+  // aqui vamos exibir KM + custo REALIZADO (PAGO) vindo de vendedor_km_lancamentos via RPC.
   kmRodadosMes: number;
   custoKmMes: number;
 }
@@ -104,6 +106,18 @@ type FaturaRow = {
   vendas?: { id: string; vendedor_id: string } | null;
 };
 
+type RpcKmPagoMesRow = {
+  km_total: number | null;
+  valor_total: number | null;
+};
+
+type RpcKmPagoPeriodoRow = {
+  id: string;
+  data: string; // date
+  km: number | null;
+  valor_total: number | null;
+};
+
 // ======================================================================
 // HELPERS
 // ======================================================================
@@ -145,13 +159,16 @@ function dayRangeUtcInclusive(inicioDate: string, fimDate: string) {
   return { inicioTsUtc: start.toISOString(), fimTsUtc: endExclusive.toISOString() };
 }
 
-function calcComissaoProgressivaFromRegra(base: number, regra: {
-  faixa1_limite: number;
-  faixa1_percent: number;
-  faixa2_limite: number;
-  faixa2_percent: number;
-  faixa3_percent: number;
-}) {
+function calcComissaoProgressivaFromRegra(
+  base: number,
+  regra: {
+    faixa1_limite: number;
+    faixa1_percent: number;
+    faixa2_limite: number;
+    faixa2_percent: number;
+    faixa3_percent: number;
+  },
+) {
   const b = Math.max(0, safeNum(base));
   const f1 = Math.max(0, safeNum(regra.faixa1_limite));
   const f2 = Math.max(0, safeNum(regra.faixa2_limite));
@@ -171,7 +188,7 @@ function calcComissaoProgressivaFromRegra(base: number, regra: {
 
   const c1 = f1 * (p1 / 100);
   const c2 = faixa2Valida ? (f2 - f1) * (p2 / 100) : 0;
-  const excedenteBase = faixa2Valida ? (b - f2) : (b - f1);
+  const excedenteBase = faixa2Valida ? (b - f2) : b - f1;
   const c3 = Math.max(0, excedenteBase) * (p3 / 100);
   return c1 + c2 + c3;
 }
@@ -182,6 +199,53 @@ function calcPercentualMeta(base: number, meta: number) {
   if (m <= 0) return 0;
   const pct = (b / m) * 100;
   return Math.min(Math.max(pct, 0), 200);
+}
+
+function toYmdFromTimestamptz(ts: string): string {
+  // garante YYYY-MM-DD para PDF/tabelas
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts?.slice(0, 10) || ts;
+  return d.toISOString().slice(0, 10);
+}
+
+async function buscarKmPagoMes(vendedorId: string, ano: number, mes: number) {
+  const { data, error } = await supabase.rpc('vendedor_km_pago_mes', {
+    p_vendedor_id: vendedorId,
+    p_ano: ano,
+    p_mes: mes,
+  });
+
+  if (error) throw error;
+
+  const row = (Array.isArray(data) ? data[0] : data) as RpcKmPagoMesRow | undefined;
+  return {
+    km: safeNum(row?.km_total ?? 0),
+    valor: safeNum(row?.valor_total ?? 0),
+  };
+}
+
+async function buscarKmPagoPeriodo(vendedorId: string, dataInicio: string, dataFim: string) {
+  const { data, error } = await supabase.rpc('vendedor_km_pago_periodo', {
+    p_vendedor_id: vendedorId,
+    p_data_inicio: dataInicio,
+    p_data_fim: dataFim,
+  });
+
+  if (error) throw error;
+
+  const rows = (data ?? []) as RpcKmPagoPeriodoRow[];
+  const quilometragens = rows.map((r) => ({
+    id: r.id,
+    vendedor_id: vendedorId,
+    data: r.data,
+    km: safeNum(r.km ?? 0),
+    valor: safeNum(r.valor_total ?? 0),
+  })) as Quilometragem[];
+
+  const kmTotal = quilometragens.reduce((t, r) => t + safeNum(r.km), 0);
+  const valorTotal = quilometragens.reduce((t, r) => t + safeNum(r.valor), 0);
+
+  return { quilometragens, kmTotal, valorTotal };
 }
 
 // ======================================================================
@@ -353,7 +417,7 @@ export default function VendedoresPage() {
 
       if (vendedorClientesError) throw vendedorClientesError;
 
-      // 6) KM (mês e geral, para detalhe)
+      // 6) KM (tela antiga / detalhes) — continua vindo de vendedor_km (manual)
       const { data: quilometragensData, error: quilometragensError } = await supabase
         .from('vendedor_km')
         .select('*')
@@ -361,7 +425,7 @@ export default function VendedoresPage() {
 
       if (quilometragensError) throw quilometragensError;
 
-      // 7) Visitas (mês e geral, para detalhe)
+      // 7) Visitas
       const { data: visitasData, error: visitasError } = await supabase
         .from('vendedor_visitas')
         .select('*')
@@ -372,7 +436,9 @@ export default function VendedoresPage() {
       // 8) Faturas emitidas do mês atual (para lista "Vendas Recentes" no modal)
       const { data: faturasData, error: faturasErr } = await supabase
         .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .select(
+          'id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)',
+        )
         .eq('tipo', 'FATURA')
         .neq('estado', 'CANCELADA')
         .gte('data_emissao', periodoMes.inicioTsUtc)
@@ -384,7 +450,7 @@ export default function VendedoresPage() {
       const faturas = (faturasData ?? []) as FaturaRow[];
       setFaturasMes(faturas);
 
-      // 8.1) frascos por venda_id (mês) — para mostrar frascos por fatura
+      // 8.1) frascos por venda_id (mês)
       const vendaIds = Array.from(
         new Set(
           faturas
@@ -414,7 +480,7 @@ export default function VendedoresPage() {
       }
       setFrascosPorVendaMes(frascosMap);
 
-      // 9) Merge: vendedores + métricas (fonte única)
+      // 9) Merge: vendedores + métricas (faturas emitidas)
       const metricasById = new Map<string, VendedorMetricasMes>();
       for (const r of metricas) metricasById.set(r.vendedor_id, r);
 
@@ -426,6 +492,9 @@ export default function VendedoresPage() {
         const frascosMes = Math.trunc(safeNum(m?.frascos ?? 0));
         const percentualMeta = safeNum(m?.percentual_meta ?? 0);
         const clientesAtivos = Math.trunc(safeNum(m?.clientes_unicos ?? 0));
+
+        // ATENÇÃO:
+        // métricas antigas podem não refletir KM PAGO; o resumo do MODAL será corrigido por RPC ao abrir detalhes.
         const kmRodadosMes = safeNum(m?.km_rodados ?? 0);
         const custoKmMes = safeNum(m?.custo_km ?? 0);
 
@@ -477,9 +546,7 @@ export default function VendedoresPage() {
   const vendedoresFiltrados = useMemo(() => {
     const q = busca.trim().toLowerCase();
     if (!q) return vendedores;
-    return vendedores.filter(
-      (v) => v.nome.toLowerCase().includes(q) || (v.email || '').toLowerCase().includes(q),
-    );
+    return vendedores.filter((v) => v.nome.toLowerCase().includes(q) || (v.email || '').toLowerCase().includes(q));
   }, [busca, vendedores]);
 
   // ======================================================================
@@ -538,10 +605,27 @@ export default function VendedoresPage() {
     }
   };
 
-  const abrirDetalhes = (vendedor: Vendedor) => {
-    setVendedorSelecionado(vendedor);
-    setAbaAtiva('resumo');
-    setModalDetalhes(true);
+  const abrirDetalhes = async (vendedor: Vendedor) => {
+    try {
+      const { ano, mes } = getAnoMesAtualUtc();
+
+      // Ao abrir o modal: força KM + custo a vir do REALIZADO (PAGO)
+      const kmPago = await buscarKmPagoMes(vendedor.id, ano, mes);
+
+      setVendedorSelecionado({
+        ...vendedor,
+        kmRodadosMes: kmPago.km,
+        custoKmMes: kmPago.valor,
+      });
+      setAbaAtiva('resumo');
+      setModalDetalhes(true);
+    } catch (e: any) {
+      console.error('Erro ao buscar KM pago do mês:', e);
+      // Mesmo se falhar, abre o modal com o que já tinha
+      setVendedorSelecionado(vendedor);
+      setAbaAtiva('resumo');
+      setModalDetalhes(true);
+    }
   };
 
   const abrirModalAdicionarKm = () => {
@@ -851,7 +935,9 @@ export default function VendedoresPage() {
       // 1) Buscar faturas emitidas no período (SEM IVA)
       const { data: faturasData, error: faturasErr } = await supabase
         .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .select(
+          'id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)',
+        )
         .eq('tipo', 'FATURA')
         .neq('estado', 'CANCELADA')
         .eq('vendas.vendedor_id', vendedorSelecionado.id)
@@ -896,11 +982,12 @@ export default function VendedoresPage() {
         const cliente = clientes.find((c) => c.id === fat.cliente_id);
         const frascos = fat.venda_id ? safeNum(frascosMap.get(fat.venda_id) ?? 0) : 0;
         const base = safeNum(fat.total_sem_iva ?? fat.subtotal ?? 0);
+
         return {
           id: fat.id,
-          data: fat.data_emissao,
+          data: toYmdFromTimestamptz(fat.data_emissao), // <-- CORREÇÃO: YYYY-MM-DD
           cliente_nome: cliente?.nome || 'N/A',
-          total_com_iva: base, // mantemos o campo que o PDF espera, mas aqui é SEM IVA
+          total_com_iva: base, // campo do PDF, mas aqui é SEM IVA
           frascos,
         };
       });
@@ -908,19 +995,11 @@ export default function VendedoresPage() {
       const faturacaoPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.total_com_iva), 0);
       const frascosPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.frascos), 0);
 
-      // 3) KM do período (tabela date)
-      const { data: kmData, error: kmErr } = await supabase
-        .from('vendedor_km')
-        .select('id, vendedor_id, data, km, valor')
-        .eq('vendedor_id', vendedorSelecionado.id)
-        .gte('data', dataInicio)
-        .lte('data', dataFim);
-
-      if (kmErr) throw kmErr;
-
-      const quilometragensPeriodo = (kmData ?? []) as Quilometragem[];
-      const kmRodadosPeriodo = quilometragensPeriodo.reduce((t, r) => t + safeNum(r.km), 0);
-      const custoKmPeriodo = quilometragensPeriodo.reduce((t, r) => t + safeNum(r.valor), 0);
+      // 3) KM PAGO do período (FONTE FINAL): vendedor_km_lancamentos status=PAGO via RPC
+      const kmPago = await buscarKmPagoPeriodo(vendedorSelecionado.id, dataInicio, dataFim);
+      const quilometragensPeriodo = kmPago.quilometragens;
+      const kmRodadosPeriodo = kmPago.kmTotal;
+      const custoKmPeriodo = kmPago.valorTotal;
 
       // 4) Visitas do período (tabela date)
       const { data: visitasData, error: visitasErr } = await supabase
@@ -944,21 +1023,13 @@ export default function VendedoresPage() {
         };
       });
 
-      // 5) Comissão/meta do período:
-      //    Preferimos a regra do mês atual (quando aplicável) para consistência com o dashboard.
+      // 5) Comissão/meta do período
       let comissaoPeriodo = 0;
       let percentualMetaPeriodo = 0;
 
-      const { ano: anoAtual, mes: mesAtual } = getAnoMesAtualUtc();
       const m = metricasByVendedorId.get(vendedorSelecionado.id);
 
-      if (
-        (tipoPeriodoRelatorio === 'MES_ATUAL' && m && m.ano === anoAtual && m.mes === mesAtual) ||
-        (tipoPeriodoRelatorio === 'MES_ANTERIOR' && m) ||
-        (tipoPeriodoRelatorio === 'ULTIMOS_30' && m) ||
-        (tipoPeriodoRelatorio === 'PERSONALIZADO' && m && tipoPeriodoRelatorio !== 'PERSONALIZADO')
-      ) {
-        // Se existir métrica carregada, usamos a regra dela (faixas + meta usada) e recalculamos sobre o período.
+      if (m) {
         comissaoPeriodo = calcComissaoProgressivaFromRegra(faturacaoPeriodo, {
           faixa1_limite: m.faixa1_limite,
           faixa1_percent: m.faixa1_percent,
@@ -968,7 +1039,6 @@ export default function VendedoresPage() {
         });
         percentualMetaPeriodo = calcPercentualMeta(faturacaoPeriodo, m.meta_mensal_usada);
       } else {
-        // Fallback global (aqui pode não refletir overrides mensais do vendedor em períodos “fora do mês atual”)
         comissaoPeriodo = calcComissaoProgressivaFromRegra(faturacaoPeriodo, {
           faixa1_limite: safeNum((configFinanceira as any).faixa1_limite),
           faixa1_percent: safeNum((configFinanceira as any).comissao_faixa1 ?? (configFinanceira as any).comissao_faixa1),
@@ -987,20 +1057,13 @@ export default function VendedoresPage() {
       };
 
       const resumo = {
-        vendasMes: faturacaoPeriodo, // SEM IVA
+        vendasMes: faturacaoPeriodo,
         frascosMes: frascosPeriodo,
         comissaoMes: comissaoPeriodo,
         clientesAtivos: vendedorSelecionado.clientesAtivos,
         kmRodadosMes: kmRodadosPeriodo,
         custoKmMes: custoKmPeriodo,
         percentualMeta: percentualMetaPeriodo,
-
-        vendasPeriodo: faturacaoPeriodo,
-        frascosPeriodo,
-        comissaoPeriodo,
-        kmRodadosPeriodo,
-        custoKmPeriodo,
-        percentualMetaPeriodo,
       };
 
       await gerarRelatorioVendedorPdf({
@@ -1164,8 +1227,7 @@ export default function VendedoresPage() {
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Faturas Emitidas (Mês)</span>
                     <span className="font-bold text-purple-600">
-                      {vendedor.vendasMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}
-                      €
+                      {vendedor.vendasMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                     </span>
                   </div>
 
@@ -1177,17 +1239,14 @@ export default function VendedoresPage() {
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Comissão (progressiva)</span>
                     <span className="font-bold text-green-600">
-                      {vendedor.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}
-                      €
+                      {vendedor.comissaoMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                     </span>
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-sm text-gray-600">Meta Mensal</span>
-                      <span className="text-sm font-semibold text-gray-900">
-                        {vendedor.percentualMeta.toFixed(0)}%
-                      </span>
+                      <span className="text-sm font-semibold text-gray-900">{vendedor.percentualMeta.toFixed(0)}%</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
                       <div
@@ -1410,10 +1469,13 @@ export default function VendedoresPage() {
 
                     <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-orange-600 font-medium">Km rodados no mês</span>
+                        <span className="text-sm text-orange-600 font-medium">Km rodados no mês (PAGO)</span>
                         <MapPin className="w-5 h-5 text-orange-600" />
                       </div>
                       <p className="text-2xl font-bold text-orange-900">{vendedorSelecionado.kmRodadosMes.toFixed(0)} km</p>
+                      <p className="text-xs text-orange-700 mt-1">
+                        Custo pago: {vendedorSelecionado.custoKmMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                      </p>
                     </div>
                   </div>
 
@@ -1550,7 +1612,7 @@ export default function VendedoresPage() {
                 </div>
               )}
 
-              {/* ABA: QUILOMETRAGEM & VISITAS */}
+              {/* ABA: QUILOMETRAGEM & VISITAS (tela antiga/manual) */}
               {abaAtiva === 'km' && (
                 <div className="space-y-6">
                   <div>
