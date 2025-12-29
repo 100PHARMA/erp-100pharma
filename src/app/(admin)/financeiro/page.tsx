@@ -274,8 +274,9 @@ export default function FinanceiroPage() {
         vendaItensData = (data || []) as VendaItem[];
       }
 
-      // 6) Quilometragem do mês (NOVA FONTE: vendedor_km_lancamentos)
-      // Regra: só entra em custo depois de aprovado (ou pago).
+      // 6) Quilometragem do mês (FONTE: vendedor_km_lancamentos)
+      // Regra de negócio: Financeiro reflete custo apenas quando STATUS = 'PAGO'
+      // (aprovado ainda não é custo realizado).
       const dataInicio = startOfMonthDate(anoSelecionado, mesSelecionado);
       const dataFimExclusivo = endOfMonthDateExclusive(anoSelecionado, mesSelecionado);
 
@@ -284,7 +285,7 @@ export default function FinanceiroPage() {
         .select('id, vendedor_id, data, km, valor_km, valor_total, status')
         .gte('data', dataInicio)
         .lt('data', dataFimExclusivo)
-        .in('status', ['APROVADO', 'PAGO']);
+        .eq('status', 'PAGO');
 
       if (kmError) throw kmError;
 
@@ -627,7 +628,9 @@ export default function FinanceiroPage() {
           }`}
         >
           <div className="flex items-center justify-between mb-4">
-            <span className={`text-sm font-semibold ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`}>
+            <span
+              className={`text-sm font-semibold ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`}
+            >
               Resultado Operacional
             </span>
             <Calculator className={`w-6 h-6 ${dados.resultadoOperacional >= 0 ? 'text-purple-600' : 'text-red-600'}`} />
@@ -657,7 +660,7 @@ export default function FinanceiroPage() {
             <MapPin className="w-6 h-6 text-orange-600" />
           </div>
           <p className="text-2xl font-bold text-orange-900">{formatarMoeda(dados.custoKmTotal)}€</p>
-          <p className="text-xs text-orange-600 mt-2">KM aprovados/pagos</p>
+          <p className="text-xs text-orange-600 mt-2">KM pagos</p>
         </div>
 
         <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-6 rounded-2xl shadow-lg">
@@ -696,7 +699,9 @@ export default function FinanceiroPage() {
             }`}
           >
             <div className="flex items-center justify-between mb-4">
-              <span className={`text-sm font-semibold ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              <span
+                className={`text-sm font-semibold ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}
+              >
                 Resultado Líquido
               </span>
               <TrendingUp className={`w-6 h-6 ${(dados.resultadoLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`} />
@@ -920,3 +925,4 @@ export default function FinanceiroPage() {
     </div>
   );
 }
+
