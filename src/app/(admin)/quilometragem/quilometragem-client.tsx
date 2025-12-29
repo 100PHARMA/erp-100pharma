@@ -19,14 +19,13 @@ type KmLancRow = {
   visita_id: string;
   vendedor_id: string;
   cliente_id: string | null;
-  data: string; // YYYY-MM-DD
+  data: string;
   km: number;
   valor_km: number;
   valor_total: number;
   status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO';
   motivo_rejeicao: string | null;
   criado_em: string;
-
   vendedores?: { id: string; nome?: string | null } | null;
   clientes?: { id: string; nome?: string | null } | null;
 };
@@ -39,12 +38,13 @@ function safeNumber(n: any): number {
 function yyyyMmToDateRange(yyyymm: string) {
   const [yStr, mStr] = yyyymm.split('-');
   const y = Number(yStr);
-  const m = Number(mStr); // 1..12
+  const m = Number(mStr);
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-  const end = new Date(Date.UTC(y, m, 1, 0, 0, 0)); // exclusivo
-  const startDate = start.toISOString().slice(0, 10);
-  const endDate = end.toISOString().slice(0, 10);
-  return { startDate, endDate };
+  const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
+  };
 }
 
 function formatEUR(valor: number) {
@@ -114,11 +114,7 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
       .order('data', { ascending: false })
       .order('criado_em', { ascending: false });
 
-    if (error) {
-      // Aqui é onde aparece RLS/perm real, e não “sem sessão”
-      throw new Error(`Erro ao ler vendedor_km_lancamentos: ${error.message}`);
-    }
-
+    if (error) throw new Error(`Erro ao ler vendedor_km_lancamentos: ${error.message}`);
     setRows((data ?? []) as KmLancRow[]);
   };
 
@@ -126,7 +122,6 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     setLoading(true);
     setErro(null);
     try {
-      // Confirma que o browser tem user via cookies (sem depender de localStorage)
       const { data: u, error: uErr } = await supabase.auth.getUser();
       if (uErr || !u?.user) {
         throw new Error('Sessão não encontrada no browser (cookies). Faça login novamente.');
@@ -190,25 +185,18 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
   const totalValor = filtered.reduce((acc, r) => acc + safeNumber(r.valor_total), 0);
   const pendentes = filtered.filter((r) => r.status === 'PENDENTE').length;
 
-  const recarregar = async () => {
-    await bootstrap();
-  };
+  const recarregar = async () => bootstrap();
 
   const aprovarLancamento = async (id: string) => {
     if (!confirm('Aprovar este lançamento de KM?')) return;
     try {
       setLoading(true);
-
       const { data: u } = await supabase.auth.getUser();
       const userId = u?.user?.id ?? null;
 
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
-        .update({
-          status: 'APROVADO',
-          aprovado_em: new Date().toISOString(),
-          aprovado_por: userId,
-        })
+        .update({ status: 'APROVADO', aprovado_em: new Date().toISOString(), aprovado_por: userId })
         .eq('id', id);
 
       if (error) throw new Error(error.message);
@@ -227,7 +215,6 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
 
     try {
       setLoading(true);
-
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
         .update({ status: 'REJEITADO', motivo_rejeicao: motivo.trim() })
@@ -248,17 +235,12 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
 
     try {
       setLoading(true);
-
       const { data: u } = await supabase.auth.getUser();
       const userId = u?.user?.id ?? null;
 
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
-        .update({
-          status: 'PAGO',
-          pago_em: new Date().toISOString(),
-          pago_por: userId,
-        })
+        .update({ status: 'PAGO', pago_em: new Date().toISOString(), pago_por: userId })
         .eq('id', id);
 
       if (error) throw new Error(error.message);
@@ -300,14 +282,6 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
               <p className="text-red-700 font-bold text-lg">Erro ao carregar quilometragem</p>
               <p className="text-gray-700 mt-2 whitespace-pre-wrap">{erro}</p>
 
-              <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-900">
-                <p className="font-semibold">Checklist objetivo</p>
-                <ol className="list-decimal ml-5 mt-2 space-y-1">
-                  <li>Se o erro mencionar RLS/permission, a policy de ADMIN em <b>vendedor_km_lancamentos</b> está a bloquear SELECT/UPDATE.</li>
-                  <li>Se o erro mencionar sessão/cookies, o login não está a criar cookies Supabase (ver “Cookies” no DevTools).</li>
-                </ol>
-              </div>
-
               <div className="mt-5 flex gap-3">
                 <button
                   type="button"
@@ -325,6 +299,10 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
                   Tentar novamente
                 </button>
               </div>
+
+              <p className="mt-4 text-xs text-gray-500">
+                Se o erro mencionar <b>RLS/permission</b>, a policy do ADMIN em <b>vendedor_km_lancamentos</b> está a bloquear.
+              </p>
             </div>
           </div>
         </div>
@@ -552,8 +530,6 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
             </div>
           </div>
         </div>
-
-        {/* Futuro: export / batch approvals / detalhe por visita */}
       </div>
     </div>
   );
