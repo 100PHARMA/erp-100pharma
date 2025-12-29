@@ -14,44 +14,37 @@ interface DadosVendedor {
 
 interface IntervaloRelatorio {
   dataInicio: string; // 'YYYY-MM-DD'
-  dataFim: string;    // 'YYYY-MM-DD'
+  dataFim: string; // 'YYYY-MM-DD'
 }
 
 interface ResumoPeriodo {
-  vendasMes: number;
-  frascosMes: number;
-  comissaoMes: number;
-  percentualMeta: number;
+  vendasMes: number; // faturação no período (SEM IVA)
+  frascosMes: number; // frascos vendidos
+  comissaoMes: number; // comissão no período
+  percentualMeta: number; // %
   clientesAtivos: number;
-
-  kmRodadosMes: number;
-
-  // Novo (Opção B): separar total vs pago vs pendente
-  custoKmTotalMes: number;
-  custoKmPagoMes: number;
-  custoKmPendenteMes: number;
+  kmRodadosMes: number; // KM PAGO no período
+  custoKmMes: number; // € PAGO no período
 }
 
 interface VendaRelatorio {
   id: string;
-  data: string;          // ISO ou 'YYYY-MM-DD'
+  data: string; // 'YYYY-MM-DD'
   cliente_nome: string;
   frascos: number;
-  total_com_iva: number; // aqui você usa SEM IVA no teu fluxo (mantém por compat)
+  total_com_iva: number; // aqui, no teu caso, é SEM IVA (mantido por compatibilidade)
 }
 
 interface QuilometragemRelatorio {
   id: string;
-  data: string;          // 'YYYY-MM-DD'
+  data: string; // 'YYYY-MM-DD'
   km: number;
   valor: number;
-  estado?: string | null;
-  data_pagamento?: string | null; // 'YYYY-MM-DD'
 }
 
 interface VisitaRelatorio {
   id: string;
-  data_visita: string;   // 'YYYY-MM-DD'
+  data_visita: string; // 'YYYY-MM-DD'
   estado: string;
   notas: string;
   cliente_nome: string;
@@ -73,10 +66,12 @@ interface DadosRelatorioVendedor {
 function formatDate(iso: string): string {
   if (!iso) return '-';
 
-  // Se vier timestamptz (ex: 2025-12-04T00:00:00+00:00), corta para data
-  const datePart = iso.includes('T') ? iso.split('T')[0] : iso;
+  // aceita YYYY-MM-DD e ignora resto se vier algo maior
+  const clean = iso.includes('T') ? iso.slice(0, 10) : iso;
+  const parts = clean.split('-');
+  if (parts.length !== 3) return iso;
 
-  const [year, month, day] = datePart.split('-');
+  const [year, month, day] = parts;
   if (!year || !month || !day) return iso;
   return `${day}/${month}/${year}`;
 }
@@ -103,16 +98,6 @@ function formatPercent(value: number | undefined | null): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   })} %`;
-}
-
-function normalizarEstadoKm(estado?: string | null) {
-  const e = (estado || '').toUpperCase().trim();
-  if (!e) return 'N/A';
-  if (e === 'PENDENTE') return 'PENDENTE';
-  if (e === 'APROVADO') return 'APROVADO';
-  if (e === 'PAGO') return 'PAGO';
-  if (e === 'CANCELADO') return 'CANCELADO';
-  return e;
 }
 
 // ======================================================================
@@ -165,17 +150,12 @@ export async function gerarRelatorioVendedorPdf(dados: DadosRelatorioVendedor): 
     startY: cursorY + 4,
     head: [['Indicador', 'Valor']],
     body: [
-      ['Faturação no período', formatCurrency(resumo.vendasMes)],
+      ['Faturação no período (sem IVA)', formatCurrency(resumo.vendasMes)],
       ['Comissão no período', formatCurrency(resumo.comissaoMes)],
       ['Frascos vendidos', `${resumo.frascosMes ?? 0}`],
       ['Clientes ativos', `${resumo.clientesAtivos ?? 0}`],
-      ['Km rodados', formatKm(resumo.kmRodadosMes)],
-
-      // Opção B: separar custo km
-      ['Custo KM (total)', formatCurrency(resumo.custoKmTotalMes)],
-      ['Custo KM (pago)', formatCurrency(resumo.custoKmPagoMes)],
-      ['Custo KM (pendente)', formatCurrency(resumo.custoKmPendenteMes)],
-
+      ['Km rodados (PAGO)', formatKm(resumo.kmRodadosMes)],
+      ['Custo de km (PAGO)', formatCurrency(resumo.custoKmMes)],
       ['Percentual da meta', formatPercent(resumo.percentualMeta)],
     ],
     styles: {
@@ -218,7 +198,7 @@ export async function gerarRelatorioVendedorPdf(dados: DadosRelatorioVendedor): 
 
     autoTable(doc, {
       startY: cursorY + 4,
-      head: [['Data', 'Cliente', 'Frascos', 'Total (com IVA)']],
+      head: [['Data', 'Cliente', 'Frascos', 'Total (sem IVA)']],
       body: corpoVendas,
       styles: {
         font: 'helvetica',
@@ -243,26 +223,20 @@ export async function gerarRelatorioVendedorPdf(dados: DadosRelatorioVendedor): 
   // --------------------------------------------------
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.text('Quilometragem no período', marginLeft, cursorY);
+  doc.text('Quilometragem no período (PAGO)', marginLeft, cursorY);
   cursorY += 12;
 
   if (!quilometragens || quilometragens.length === 0) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.text('Nenhum registo de quilometragem neste período.', marginLeft, cursorY + 10);
+    doc.text('Nenhum registo de quilometragem paga neste período.', marginLeft, cursorY + 10);
     cursorY += 30;
   } else {
-    const corpoKm = quilometragens.map((km) => [
-      formatDate(km.data),
-      `${km.km ?? 0}`,
-      formatCurrency(km.valor),
-      normalizarEstadoKm(km.estado),
-      km.data_pagamento ? formatDate(km.data_pagamento) : '-',
-    ]);
+    const corpoKm = quilometragens.map((km) => [formatDate(km.data), `${km.km ?? 0}`, formatCurrency(km.valor)]);
 
     autoTable(doc, {
       startY: cursorY + 4,
-      head: [['Data', 'Km', 'Valor', 'Estado', 'Pago em']],
+      head: [['Data', 'Km', 'Valor']],
       body: corpoKm,
       styles: {
         font: 'helvetica',
@@ -331,4 +305,3 @@ export async function gerarRelatorioVendedorPdf(dados: DadosRelatorioVendedor): 
 
   doc.save(nomeFicheiro);
 }
-
