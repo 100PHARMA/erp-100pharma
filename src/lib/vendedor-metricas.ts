@@ -365,27 +365,43 @@ export async function getVendedorMetricasMes(
     }
   }
 
-  // 6) KM do mês
-  const { data: kmData, error: kmErr } = await supabase
-    .from('vendedor_km')
-    .select('id, vendedor_id, data, km, valor')
-    .gte('data', periodo.inicioDate)
-    .lte('data', periodo.fimDate);
+  // 6) KM do mês (fonte única: vendedor_km_lancamentos)
+// Regra (Opção B):
+// - km_rodados: soma APROVADO + PAGO
+// - custo_km: soma APENAS PAGO (só vira custo quando pago)
+const { data: kmLancData, error: kmLancErr } = await supabase
+  .from('vendedor_km_lancamentos')
+  .select('id, vendedor_id, data, km, valor_total, status')
+  .gte('data', periodo.inicioDate)
+  .lte('data', periodo.fimDate)
+  .in('status', ['APROVADO', 'PAGO']); // PENDENTE e REJEITADO não entram no KM rodado do mês
 
-  if (kmErr) throw kmErr;
+if (kmLancErr) throw kmLancErr;
 
-  const kmRows = (kmData ?? []) as any[];
-  const kmAgg = new Map<string, { km: number; valor: number }>();
-  for (const r of kmRows) {
-    const vid = r.vendedor_id as string | undefined;
-    if (!vid) continue;
-    const km = safeNum(r.km);
-    const valor = safeNum(r.valor);
-    kmAgg.set(vid, {
-      km: (kmAgg.get(vid)?.km ?? 0) + km,
-      valor: (kmAgg.get(vid)?.valor ?? 0) + valor,
-    });
+const kmLancRows = (kmLancData ?? []) as any[];
+
+// kmAgg: km = APROVADO+PAGO, valor = SOMENTE PAGO
+const kmAgg = new Map<string, { km: number; valor: number }>();
+
+for (const r of kmLancRows) {
+  const vid = r.vendedor_id as string | undefined;
+  if (!vid) continue;
+
+  const km = safeNum(r.km);
+  const status = String(r.status ?? '').toUpperCase();
+
+  // Sempre soma km (APROVADO ou PAGO, porque filtramos no select)
+  const prev = kmAgg.get(vid) ?? { km: 0, valor: 0 };
+  prev.km += km;
+
+  // Só soma custo quando está PAGO
+  if (status === 'PAGO') {
+    prev.valor += safeNum(r.valor_total);
   }
+
+  kmAgg.set(vid, prev);
+}
+
 
   // 7) Visitas do mês
   const { data: visitasData, error: visitasErr } = await supabase
