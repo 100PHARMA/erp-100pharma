@@ -55,10 +55,9 @@ interface Vendedor {
   percentualMeta: number;
   clientesAtivos: number;
 
-  // Aqui: desempenho operacional (rodagem)
+  // IMPORTANTÍSSIMO:
+  // aqui vamos exibir KM + custo REALIZADO (PAGO) vindo de vendedor_km_lancamentos via RPC.
   kmRodadosMes: number;
-
-  // Aqui: custo "total" (na prática, depende do teu cálculo atual). Vamos recalcular no detalhe.
   custoKmMes: number;
 }
 
@@ -77,19 +76,12 @@ interface VendedorCliente {
   created_at: string;
 }
 
-type KmEstado = 'PENDENTE' | 'APROVADO' | 'PAGO' | 'CANCELADO';
-
 interface Quilometragem {
   id: string;
   vendedor_id: string;
-  data: string; // date
+  data: string;
   km: number;
   valor: number;
-
-  // Opção B
-  estado: KmEstado;
-  data_pagamento: string | null; // date
-  pagamento_id: string | null; // uuid
 }
 
 interface Visita {
@@ -112,6 +104,18 @@ type FaturaRow = {
   total_sem_iva: number | null;
   subtotal: number | null;
   vendas?: { id: string; vendedor_id: string } | null;
+};
+
+type RpcKmPagoMesRow = {
+  km_total: number | null;
+  valor_total: number | null;
+};
+
+type RpcKmPagoPeriodoRow = {
+  id: string;
+  data: string; // date
+  km: number | null;
+  valor_total: number | null;
 };
 
 // ======================================================================
@@ -155,13 +159,16 @@ function dayRangeUtcInclusive(inicioDate: string, fimDate: string) {
   return { inicioTsUtc: start.toISOString(), fimTsUtc: endExclusive.toISOString() };
 }
 
-function calcComissaoProgressivaFromRegra(base: number, regra: {
-  faixa1_limite: number;
-  faixa1_percent: number;
-  faixa2_limite: number;
-  faixa2_percent: number;
-  faixa3_percent: number;
-}) {
+function calcComissaoProgressivaFromRegra(
+  base: number,
+  regra: {
+    faixa1_limite: number;
+    faixa1_percent: number;
+    faixa2_limite: number;
+    faixa2_percent: number;
+    faixa3_percent: number;
+  },
+) {
   const b = Math.max(0, safeNum(base));
   const f1 = Math.max(0, safeNum(regra.faixa1_limite));
   const f2 = Math.max(0, safeNum(regra.faixa2_limite));
@@ -181,7 +188,7 @@ function calcComissaoProgressivaFromRegra(base: number, regra: {
 
   const c1 = f1 * (p1 / 100);
   const c2 = faixa2Valida ? (f2 - f1) * (p2 / 100) : 0;
-  const excedenteBase = faixa2Valida ? (b - f2) : (b - f1);
+  const excedenteBase = faixa2Valida ? (b - f2) : b - f1;
   const c3 = Math.max(0, excedenteBase) * (p3 / 100);
   return c1 + c2 + c3;
 }
@@ -194,17 +201,51 @@ function calcPercentualMeta(base: number, meta: number) {
   return Math.min(Math.max(pct, 0), 200);
 }
 
-function normalizarEstadoKm(estado: any): KmEstado {
-  const e = String(estado || '').toUpperCase().trim();
-  if (e === 'APROVADO') return 'APROVADO';
-  if (e === 'PAGO') return 'PAGO';
-  if (e === 'CANCELADO') return 'CANCELADO';
-  return 'PENDENTE';
+function toYmdFromTimestamptz(ts: string): string {
+  // garante YYYY-MM-DD para PDF/tabelas
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts?.slice(0, 10) || ts;
+  return d.toISOString().slice(0, 10);
 }
 
-function isDateBetweenInclusive(date: string, inicio: string, fim: string) {
-  // date/inicio/fim: 'YYYY-MM-DD'
-  return date >= inicio && date <= fim;
+async function buscarKmPagoMes(vendedorId: string, ano: number, mes: number) {
+  const { data, error } = await supabase.rpc('vendedor_km_pago_mes', {
+    p_vendedor_id: vendedorId,
+    p_ano: ano,
+    p_mes: mes,
+  });
+
+  if (error) throw error;
+
+  const row = (Array.isArray(data) ? data[0] : data) as RpcKmPagoMesRow | undefined;
+  return {
+    km: safeNum(row?.km_total ?? 0),
+    valor: safeNum(row?.valor_total ?? 0),
+  };
+}
+
+async function buscarKmPagoPeriodo(vendedorId: string, dataInicio: string, dataFim: string) {
+  const { data, error } = await supabase.rpc('vendedor_km_pago_periodo', {
+    p_vendedor_id: vendedorId,
+    p_data_inicio: dataInicio,
+    p_data_fim: dataFim,
+  });
+
+  if (error) throw error;
+
+  const rows = (data ?? []) as RpcKmPagoPeriodoRow[];
+  const quilometragens = rows.map((r) => ({
+    id: r.id,
+    vendedor_id: vendedorId,
+    data: r.data,
+    km: safeNum(r.km ?? 0),
+    valor: safeNum(r.valor_total ?? 0),
+  })) as Quilometragem[];
+
+  const kmTotal = quilometragens.reduce((t, r) => t + safeNum(r.km), 0);
+  const valorTotal = quilometragens.reduce((t, r) => t + safeNum(r.valor), 0);
+
+  return { quilometragens, kmTotal, valorTotal };
 }
 
 // ======================================================================
@@ -280,7 +321,7 @@ export default function VendedoresPage() {
   });
 
   // ======================================================================
-  // INTERVALO DO RELATÓRIO
+  // INTERVALO DO RELATÓRIO (datas em UTC)
   // ======================================================================
 
   const calcularIntervaloRelatorio = () => {
@@ -328,7 +369,7 @@ export default function VendedoresPage() {
   };
 
   // ======================================================================
-  // CARREGAMENTO
+  // CARREGAMENTO DE DADOS DO SUPABASE (FONTE ÚNICA = vendedor-metricas)
   // ======================================================================
 
   useEffect(() => {
@@ -345,15 +386,15 @@ export default function VendedoresPage() {
       const { ano, mes } = getAnoMesAtualUtc();
       const periodoMes = monthRangeUtc(ano, mes);
 
-      // 1) Config global
+      // 1) Config global (para telas e fallback)
       const cfg = await buscarConfiguracaoFinanceira();
       setConfigFinanceira(cfg);
 
-      // 2) Métricas do mês
+      // 2) Métricas do mês (SEM IVA, por faturas emitidas)
       const metricas = await getVendedorMetricasMes(ano, mes);
       setMetricasMes(metricas);
 
-      // 3) Vendedores
+      // 3) Vendedores (dados cadastrais)
       const { data: vendedoresData, error: vendedoresError } = await supabase
         .from('vendedores')
         .select('*')
@@ -376,10 +417,10 @@ export default function VendedoresPage() {
 
       if (vendedorClientesError) throw vendedorClientesError;
 
-      // 6) KM (agora com estado e data_pagamento)
+      // 6) KM (tela antiga / detalhes) — continua vindo de vendedor_km (manual)
       const { data: quilometragensData, error: quilometragensError } = await supabase
         .from('vendedor_km')
-        .select('id, vendedor_id, data, km, valor, estado, data_pagamento, pagamento_id')
+        .select('*')
         .order('data', { ascending: false });
 
       if (quilometragensError) throw quilometragensError;
@@ -392,10 +433,12 @@ export default function VendedoresPage() {
 
       if (visitasError) throw visitasError;
 
-      // 8) Faturas emitidas do mês atual
+      // 8) Faturas emitidas do mês atual (para lista "Vendas Recentes" no modal)
       const { data: faturasData, error: faturasErr } = await supabase
         .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .select(
+          'id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)',
+        )
         .eq('tipo', 'FATURA')
         .neq('estado', 'CANCELADA')
         .gte('data_emissao', periodoMes.inicioTsUtc)
@@ -429,7 +472,7 @@ export default function VendedoresPage() {
           if (itensErr) throw itensErr;
 
           for (const it of itensData ?? []) {
-            const vid = (it as any).venda_id as string;
+            const vid = it.venda_id as string;
             const q = safeNum((it as any).quantidade);
             frascosMap.set(vid, (frascosMap.get(vid) ?? 0) + q);
           }
@@ -437,7 +480,7 @@ export default function VendedoresPage() {
       }
       setFrascosPorVendaMes(frascosMap);
 
-      // 9) Merge: vendedores + métricas
+      // 9) Merge: vendedores + métricas (faturas emitidas)
       const metricasById = new Map<string, VendedorMetricasMes>();
       for (const r of metricas) metricasById.set(r.vendedor_id, r);
 
@@ -449,6 +492,9 @@ export default function VendedoresPage() {
         const frascosMes = Math.trunc(safeNum(m?.frascos ?? 0));
         const percentualMeta = safeNum(m?.percentual_meta ?? 0);
         const clientesAtivos = Math.trunc(safeNum(m?.clientes_unicos ?? 0));
+
+        // ATENÇÃO:
+        // métricas antigas podem não refletir KM PAGO; o resumo do MODAL será corrigido por RPC ao abrir detalhes.
         const kmRodadosMes = safeNum(m?.km_rodados ?? 0);
         const custoKmMes = safeNum(m?.custo_km ?? 0);
 
@@ -467,16 +513,7 @@ export default function VendedoresPage() {
       setVendedores(vendedoresComMetricas);
       setClientes((clientesData || []) as any);
       setVendedorClientes((vendedorClientesData || []) as any);
-
-      // normalizar estado
-      const kmsNorm = (quilometragensData || []).map((k: any) => ({
-        ...k,
-        estado: normalizarEstadoKm(k.estado),
-        data_pagamento: k.data_pagamento ?? null,
-        pagamento_id: k.pagamento_id ?? null,
-      })) as Quilometragem[];
-
-      setQuilometragens(kmsNorm);
+      setQuilometragens((quilometragensData || []) as any);
       setVisitas((visitasData || []) as any);
     } catch (error: any) {
       console.error('Erro ao carregar dados:', error);
@@ -509,9 +546,7 @@ export default function VendedoresPage() {
   const vendedoresFiltrados = useMemo(() => {
     const q = busca.trim().toLowerCase();
     if (!q) return vendedores;
-    return vendedores.filter(
-      (v) => v.nome.toLowerCase().includes(q) || (v.email || '').toLowerCase().includes(q),
-    );
+    return vendedores.filter((v) => v.nome.toLowerCase().includes(q) || (v.email || '').toLowerCase().includes(q));
   }, [busca, vendedores]);
 
   // ======================================================================
@@ -570,10 +605,27 @@ export default function VendedoresPage() {
     }
   };
 
-  const abrirDetalhes = (vendedor: Vendedor) => {
-    setVendedorSelecionado(vendedor);
-    setAbaAtiva('resumo');
-    setModalDetalhes(true);
+  const abrirDetalhes = async (vendedor: Vendedor) => {
+    try {
+      const { ano, mes } = getAnoMesAtualUtc();
+
+      // Ao abrir o modal: força KM + custo a vir do REALIZADO (PAGO)
+      const kmPago = await buscarKmPagoMes(vendedor.id, ano, mes);
+
+      setVendedorSelecionado({
+        ...vendedor,
+        kmRodadosMes: kmPago.km,
+        custoKmMes: kmPago.valor,
+      });
+      setAbaAtiva('resumo');
+      setModalDetalhes(true);
+    } catch (e: any) {
+      console.error('Erro ao buscar KM pago do mês:', e);
+      // Mesmo se falhar, abre o modal com o que já tinha
+      setVendedorSelecionado(vendedor);
+      setAbaAtiva('resumo');
+      setModalDetalhes(true);
+    }
   };
 
   const abrirModalAdicionarKm = () => {
@@ -598,7 +650,6 @@ export default function VendedoresPage() {
           data: novaKm.data,
           km: novaKm.km,
           valor: valorCalculado,
-          estado: 'PENDENTE', // Opção B: entra como pendente
         },
       ]);
 
@@ -608,7 +659,7 @@ export default function VendedoresPage() {
       setNovaKm({ data: new Date().toISOString().split('T')[0], km: 0 });
 
       await carregarDados();
-      alert('Quilometragem adicionada com sucesso (PENDENTE)!');
+      alert('Quilometragem adicionada com sucesso!');
     } catch (error: any) {
       console.error('Erro ao adicionar quilometragem:', error);
       alert('Erro ao adicionar quilometragem: ' + error.message);
@@ -631,12 +682,6 @@ export default function VendedoresPage() {
 
     try {
       const valorCalculado = novaKm.km * safeNum(vendedorSelecionado.custo_km);
-
-      // Só permitir editar se não estiver PAGO (disciplina financeira)
-      if (kmSelecionada.estado === 'PAGO') {
-        alert('Não é permitido editar KM com estado PAGO.');
-        return;
-      }
 
       const { error } = await supabase
         .from('vendedor_km')
@@ -668,31 +713,6 @@ export default function VendedoresPage() {
     } catch (error: any) {
       console.error('Erro ao excluir quilometragem:', error);
       alert('Erro ao excluir quilometragem: ' + error.message);
-    }
-  };
-
-  const aprovarKm = async (kmId: string) => {
-    try {
-      const { error } = await supabase.rpc('aprovar_km_registro', { p_km_id: kmId });
-      if (error) throw error;
-      await carregarDados();
-      alert('KM aprovado com sucesso!');
-    } catch (e: any) {
-      console.error(e);
-      alert('Erro ao aprovar KM: ' + (e.message || 'Erro desconhecido'));
-    }
-  };
-
-  const cancelarKm = async (kmId: string) => {
-    if (!confirm('Deseja cancelar este KM?')) return;
-    try {
-      const { error } = await supabase.rpc('cancelar_km_registro', { p_km_id: kmId });
-      if (error) throw error;
-      await carregarDados();
-      alert('KM cancelado com sucesso!');
-    } catch (e: any) {
-      console.error(e);
-      alert('Erro ao cancelar KM: ' + (e.message || 'Erro desconhecido'));
     }
   };
 
@@ -898,38 +918,7 @@ export default function VendedoresPage() {
   const valorCalculadoKm = vendedorSelecionado ? novaKm.km * safeNum(vendedorSelecionado.custo_km) : 0;
 
   // ======================================================================
-  // RESUMO KM (MÊS ATUAL) PARA O VENDEDOR SELECIONADO — Opção B
-  // ======================================================================
-
-  const resumoKmMesAtual = useMemo(() => {
-    if (!vendedorSelecionado) {
-      return { kmTotal: 0, valorTotal: 0, valorPago: 0, valorPendente: 0 };
-    }
-
-    const { ano, mes } = getAnoMesAtualUtc();
-    const periodo = monthRangeUtc(ano, mes);
-
-    const kmsDoMes = quilometragens
-      .filter((k) => k.vendedor_id === vendedorSelecionado.id)
-      .filter((k) => isDateBetweenInclusive(k.data, periodo.inicioDate, periodo.fimDate))
-      .filter((k) => k.estado !== 'CANCELADO');
-
-    const kmTotal = kmsDoMes.reduce((t, r) => t + safeNum(r.km), 0);
-    const valorTotal = kmsDoMes.reduce((t, r) => t + safeNum(r.valor), 0);
-
-    const valorPago = kmsDoMes
-      .filter((r) => r.estado === 'PAGO')
-      .reduce((t, r) => t + safeNum(r.valor), 0);
-
-    const valorPendente = kmsDoMes
-      .filter((r) => r.estado === 'PENDENTE' || r.estado === 'APROVADO')
-      .reduce((t, r) => t + safeNum(r.valor), 0);
-
-    return { kmTotal, valorTotal, valorPago, valorPendente };
-  }, [vendedorSelecionado, quilometragens]);
-
-  // ======================================================================
-  // RELATÓRIO DO VENDEDOR (SEM IVA / FATURAS EMITIDAS) + KM Opção B
+  // RELATÓRIO DO VENDEDOR (SEM IVA / FATURAS EMITIDAS)
   // ======================================================================
 
   const gerarRelatorioMensal = async () => {
@@ -946,7 +935,9 @@ export default function VendedoresPage() {
       // 1) Buscar faturas emitidas no período (SEM IVA)
       const { data: faturasData, error: faturasErr } = await supabase
         .from('faturas')
-        .select('id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)')
+        .select(
+          'id, numero, venda_id, cliente_id, tipo, estado, data_emissao, total_sem_iva, subtotal, vendas!inner(id, vendedor_id)',
+        )
         .eq('tipo', 'FATURA')
         .neq('estado', 'CANCELADA')
         .eq('vendas.vendedor_id', vendedorSelecionado.id)
@@ -980,7 +971,7 @@ export default function VendedoresPage() {
           if (itensErr) throw itensErr;
 
           for (const it of itensData ?? []) {
-            const vid = (it as any).venda_id as string;
+            const vid = it.venda_id as string;
             const q = safeNum((it as any).quantidade);
             frascosMap.set(vid, (frascosMap.get(vid) ?? 0) + q);
           }
@@ -991,11 +982,12 @@ export default function VendedoresPage() {
         const cliente = clientes.find((c) => c.id === fat.cliente_id);
         const frascos = fat.venda_id ? safeNum(frascosMap.get(fat.venda_id) ?? 0) : 0;
         const base = safeNum(fat.total_sem_iva ?? fat.subtotal ?? 0);
+
         return {
           id: fat.id,
-          data: fat.data_emissao,
+          data: toYmdFromTimestamptz(fat.data_emissao), // <-- CORREÇÃO: YYYY-MM-DD
           cliente_nome: cliente?.nome || 'N/A',
-          total_com_iva: base, // aqui é SEM IVA (mantemos o campo por compat)
+          total_com_iva: base, // campo do PDF, mas aqui é SEM IVA
           frascos,
         };
       });
@@ -1003,46 +995,13 @@ export default function VendedoresPage() {
       const faturacaoPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.total_com_iva), 0);
       const frascosPeriodo = vendasPeriodo.reduce((t, v) => t + safeNum(v.frascos), 0);
 
-      // 3) KM do período (Opção B: estado/pagamento)
-      const { data: kmData, error: kmErr } = await supabase
-        .from('vendedor_km')
-        .select('id, vendedor_id, data, km, valor, estado, data_pagamento, pagamento_id')
-        .eq('vendedor_id', vendedorSelecionado.id)
-        .gte('data', dataInicio)
-        .lte('data', dataFim)
-        .order('data', { ascending: true });
+      // 3) KM PAGO do período (FONTE FINAL): vendedor_km_lancamentos status=PAGO via RPC
+      const kmPago = await buscarKmPagoPeriodo(vendedorSelecionado.id, dataInicio, dataFim);
+      const quilometragensPeriodo = kmPago.quilometragens;
+      const kmRodadosPeriodo = kmPago.kmTotal;
+      const custoKmPeriodo = kmPago.valorTotal;
 
-      if (kmErr) throw kmErr;
-
-      const quilometragensPeriodo = ((kmData ?? []) as any[]).map((k) => ({
-        ...k,
-        estado: normalizarEstadoKm(k.estado),
-        data_pagamento: k.data_pagamento ?? null,
-        pagamento_id: k.pagamento_id ?? null,
-      })) as Quilometragem[];
-
-      // Regras:
-      // - Km rodados = tudo exceto CANCELADO
-      // - Custo total = soma valor exceto CANCELADO
-      // - Custo pago = soma valor onde estado=PAGO
-      // - Custo pendente = soma valor onde estado=PENDENTE/APROVADO
-      const kmRodadosPeriodo = quilometragensPeriodo
-        .filter((r) => r.estado !== 'CANCELADO')
-        .reduce((t, r) => t + safeNum(r.km), 0);
-
-      const custoKmTotalPeriodo = quilometragensPeriodo
-        .filter((r) => r.estado !== 'CANCELADO')
-        .reduce((t, r) => t + safeNum(r.valor), 0);
-
-      const custoKmPagoPeriodo = quilometragensPeriodo
-        .filter((r) => r.estado === 'PAGO')
-        .reduce((t, r) => t + safeNum(r.valor), 0);
-
-      const custoKmPendentePeriodo = quilometragensPeriodo
-        .filter((r) => r.estado === 'PENDENTE' || r.estado === 'APROVADO')
-        .reduce((t, r) => t + safeNum(r.valor), 0);
-
-      // 4) Visitas do período
+      // 4) Visitas do período (tabela date)
       const { data: visitasData, error: visitasErr } = await supabase
         .from('vendedor_visitas')
         .select('id, vendedor_id, cliente_id, data_visita, estado, notas')
@@ -1064,14 +1023,13 @@ export default function VendedoresPage() {
         };
       });
 
-      // 5) Comissão/meta do período:
+      // 5) Comissão/meta do período
       let comissaoPeriodo = 0;
       let percentualMetaPeriodo = 0;
 
-      const { ano: anoAtual, mes: mesAtual } = getAnoMesAtualUtc();
       const m = metricasByVendedorId.get(vendedorSelecionado.id);
 
-      if (tipoPeriodoRelatorio === 'MES_ATUAL' && m && m.ano === anoAtual && m.mes === mesAtual) {
+      if (m) {
         comissaoPeriodo = calcComissaoProgressivaFromRegra(faturacaoPeriodo, {
           faixa1_limite: m.faixa1_limite,
           faixa1_percent: m.faixa1_percent,
@@ -1098,21 +1056,13 @@ export default function VendedoresPage() {
         ativo: vendedorSelecionado.ativo,
       };
 
-      // IMPORTANTE:
-      // - clientesAtivos aqui mantém o valor do mês atual no teu objeto selecionado
-      //   Se você quiser “clientes únicos do período”, aí é outra query.
       const resumo = {
         vendasMes: faturacaoPeriodo,
         frascosMes: frascosPeriodo,
         comissaoMes: comissaoPeriodo,
         clientesAtivos: vendedorSelecionado.clientesAtivos,
-
         kmRodadosMes: kmRodadosPeriodo,
-
-        custoKmTotalMes: custoKmTotalPeriodo,
-        custoKmPagoMes: custoKmPagoPeriodo,
-        custoKmPendenteMes: custoKmPendentePeriodo,
-
+        custoKmMes: custoKmPeriodo,
         percentualMeta: percentualMetaPeriodo,
       };
 
@@ -1120,9 +1070,9 @@ export default function VendedoresPage() {
         vendedor: vendedorInfo,
         intervalo: { dataInicio, dataFim },
         resumo,
-        vendas: vendasPeriodo as any,
-        quilometragens: quilometragensPeriodo as any,
-        visitas: visitasPeriodo as any,
+        vendas: vendasPeriodo,
+        quilometragens: quilometragensPeriodo,
+        visitas: visitasPeriodo,
       });
     } catch (error: any) {
       console.error('Erro ao gerar relatório do vendedor:', error);
@@ -1517,17 +1467,14 @@ export default function VendedoresPage() {
                       <p className="text-xs text-emerald-600 mt-1">Progressiva, sem IVA</p>
                     </div>
 
-                    {/* Km rodados (operacional) */}
                     <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-orange-600 font-medium">Km rodados no mês</span>
+                        <span className="text-sm text-orange-600 font-medium">Km rodados no mês (PAGO)</span>
                         <MapPin className="w-5 h-5 text-orange-600" />
                       </div>
-                      <p className="text-2xl font-bold text-orange-900">{resumoKmMesAtual.kmTotal.toFixed(0)} km</p>
+                      <p className="text-2xl font-bold text-orange-900">{vendedorSelecionado.kmRodadosMes.toFixed(0)} km</p>
                       <p className="text-xs text-orange-700 mt-1">
-                        Total: {resumoKmMesAtual.valorTotal.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€ • Pago:{' '}
-                        {resumoKmMesAtual.valorPago.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€ • Pendente:{' '}
-                        {resumoKmMesAtual.valorPendente.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
+                        Custo pago: {vendedorSelecionado.custoKmMes.toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                       </p>
                     </div>
                   </div>
@@ -1665,7 +1612,7 @@ export default function VendedoresPage() {
                 </div>
               )}
 
-              {/* ABA: QUILOMETRAGEM & VISITAS */}
+              {/* ABA: QUILOMETRAGEM & VISITAS (tela antiga/manual) */}
               {abaAtiva === 'km' && (
                 <div className="space-y-6">
                   <div>
@@ -1692,58 +1639,20 @@ export default function VendedoresPage() {
                             <div className="flex items-center gap-3">
                               <MapPin className="w-5 h-5 text-gray-400" />
                               <div>
-                                <p className="font-medium text-gray-900">{new Date(km.data).toLocaleDateString('pt-PT')}</p>
-                                <p className="text-sm text-gray-600">
-                                  {km.km} km •{' '}
-                                  <span
-                                    className={`font-semibold ${
-                                      km.estado === 'PAGO'
-                                        ? 'text-green-700'
-                                        : km.estado === 'APROVADO'
-                                        ? 'text-blue-700'
-                                        : km.estado === 'CANCELADO'
-                                        ? 'text-red-700'
-                                        : 'text-yellow-700'
-                                    }`}
-                                  >
-                                    {km.estado}
-                                  </span>
-                                  {km.data_pagamento ? ` • pago em ${new Date(km.data_pagamento).toLocaleDateString('pt-PT')}` : ''}
+                                <p className="font-medium text-gray-900">
+                                  {new Date(km.data).toLocaleDateString('pt-PT')}
                                 </p>
+                                <p className="text-sm text-gray-600">{km.km} km</p>
                               </div>
                             </div>
-
                             <div className="flex items-center gap-2">
                               <p className="font-bold text-blue-600">
                                 {safeNum(km.valor).toLocaleString('pt-PT', { minimumFractionDigits: 2 })}€
                               </p>
-
-                              {/* Ações financeiras (Opção B) */}
-                              {km.estado === 'PENDENTE' && (
-                                <button
-                                  onClick={() => aprovarKm(km.id)}
-                                  className="px-3 py-2 text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg"
-                                  title="Aprovar KM"
-                                >
-                                  Aprovar
-                                </button>
-                              )}
-
-                              {(km.estado === 'PENDENTE' || km.estado === 'APROVADO') && (
-                                <button
-                                  onClick={() => cancelarKm(km.id)}
-                                  className="px-3 py-2 text-xs font-semibold bg-red-50 text-red-700 hover:bg-red-100 rounded-lg"
-                                  title="Cancelar KM"
-                                >
-                                  Cancelar
-                                </button>
-                              )}
-
                               <button
                                 onClick={() => abrirModalEditarKm(km)}
                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                 title="Editar"
-                                disabled={km.estado === 'PAGO'}
                               >
                                 <Edit className="w-4 h-4" />
                               </button>
@@ -1758,11 +1667,6 @@ export default function VendedoresPage() {
                           </div>
                         ))
                       )}
-                    </div>
-
-                    <div className="mt-4 text-sm text-gray-600">
-                      <strong>Nota (Opção B):</strong> KM entra como <strong>PENDENTE</strong>, depois vira <strong>APROVADO</strong>,
-                      e só vira custo financeiro quando estiver <strong>PAGO</strong> (pagamento via módulo Financeiro será o próximo passo).
                     </div>
                   </div>
 
@@ -2010,7 +1914,7 @@ export default function VendedoresPage() {
       )}
 
       {/* Modal Adicionar KM */}
-      {modalAdicionarKm && vendedorSelecionado && (
+      {modalAdicionarKm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
             <div className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white p-6 rounded-t-2xl">
@@ -2051,9 +1955,6 @@ export default function VendedoresPage() {
                 <p className="text-xs text-gray-500 mt-1">
                   Calculado automaticamente: {novaKm.km} km × {safeNum(vendedorSelecionado?.custo_km).toFixed(2)}€/km
                 </p>
-                <p className="text-xs text-blue-700 mt-1">
-                  Estado inicial: <strong>PENDENTE</strong> (precisa aprovação para pagamento)
-                </p>
               </div>
 
               <div className="flex gap-3 pt-4">
@@ -2076,7 +1977,7 @@ export default function VendedoresPage() {
       )}
 
       {/* Modal Editar KM */}
-      {modalEditarKm && kmSelecionada && vendedorSelecionado && (
+      {modalEditarKm && kmSelecionada && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
             <div className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white p-6 rounded-t-2xl">
@@ -2091,7 +1992,6 @@ export default function VendedoresPage() {
                   value={novaKm.data}
                   onChange={(e) => setNovaKm({ ...novaKm, data: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  disabled={kmSelecionada.estado === 'PAGO'}
                 />
               </div>
 
@@ -2103,7 +2003,6 @@ export default function VendedoresPage() {
                   onChange={(e) => setNovaKm({ ...novaKm, km: Number(e.target.value) })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   min="0"
-                  disabled={kmSelecionada.estado === 'PAGO'}
                 />
               </div>
 
@@ -2124,7 +2023,6 @@ export default function VendedoresPage() {
                 <button
                   onClick={salvarEdicaoKm}
                   className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-all"
-                  disabled={kmSelecionada.estado === 'PAGO'}
                 >
                   Salvar
                 </button>
@@ -2135,12 +2033,6 @@ export default function VendedoresPage() {
                   Cancelar
                 </button>
               </div>
-
-              {kmSelecionada.estado === 'PAGO' && (
-                <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                  Este KM está <strong>PAGO</strong>. Em ERP sério, editar após pagamento quebra auditoria.
-                </div>
-              )}
             </div>
           </div>
         </div>
