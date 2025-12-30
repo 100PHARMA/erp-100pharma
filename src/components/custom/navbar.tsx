@@ -62,7 +62,6 @@ const vendorMenuItems = [
 ];
 
 function isActivePath(pathname: string, href: string) {
-  // ativa exata ou por prefixo para subrotas
   if (pathname === href) return true;
   if (href !== '/' && pathname.startsWith(href + '/')) return true;
   return false;
@@ -78,59 +77,110 @@ export default function Navbar() {
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // NOVO: nome exibido no navbar
+  const [displayName, setDisplayName] = useState<string>('');
+  const [displayEmail, setDisplayEmail] = useState<string>('');
+
   const handleLogout = async () => {
     await signOut();
     router.push('/login');
   };
 
-  // Não mostrar navbar na página de login (o Gate também faz isso, mas manter aqui não custa)
+  // Não mostrar navbar na página de login
   if (pathname === '/login' || pathname.startsWith('/login/')) {
     return null;
   }
 
-  // Carrega role a partir de public.perfis (fonte única)
+  // Carrega role + nome para o navbar
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRole() {
+    async function loadRoleAndName() {
       try {
         // Preferência: usar user do hook; fallback para auth.getUser
-        const userId =
-          user?.id || (await supabase.auth.getUser()).data.user?.id;
+        const authUser = user?.id ? user : (await supabase.auth.getUser()).data.user;
+
+        const userId = authUser?.id;
+        const email = authUser?.email ?? '';
 
         if (!userId) {
-          if (!cancelled) setRole('UNKNOWN');
+          if (!cancelled) {
+            setRole('UNKNOWN');
+            setDisplayName('');
+            setDisplayEmail('');
+          }
           return;
         }
 
-        const { data: perfil, error } = await supabase
-          .from('perfis')
-          .select('role')
-          .eq('id', userId)
-          .maybeSingle();
+        if (!cancelled) setDisplayEmail(email);
 
-        if (error) {
-          if (!cancelled) setRole('UNKNOWN');
-          return;
+        // 1) PERFIS é a fonte única (role) e pode ser também a fonte do nome
+        //    (se a coluna "nome" existir). Se não existir, o select ainda pode falhar.
+        //    Então fazemos de forma tolerante: tentamos buscar role,nome; se falhar, buscamos só role.
+        let perfil: any = null;
+
+        {
+          const { data, error } = await supabase
+            .from('perfis')
+            .select('role, nome')
+            .eq('id', userId)
+            .maybeSingle();
+
+          if (!error) {
+            perfil = data;
+          } else {
+            const { data: data2 } = await supabase
+              .from('perfis')
+              .select('role')
+              .eq('id', userId)
+              .maybeSingle();
+            perfil = data2;
+          }
         }
 
         const r = String(perfil?.role ?? '').toUpperCase();
-        if (!cancelled) {
-          if (r === 'ADMIN') setRole('ADMIN');
-          else if (r === 'VENDEDOR') setRole('VENDEDOR');
-          else setRole('UNKNOWN');
+        const resolvedRole: Role =
+          r === 'ADMIN' ? 'ADMIN' : r === 'VENDEDOR' ? 'VENDEDOR' : 'UNKNOWN';
+
+        if (!cancelled) setRole(resolvedRole);
+
+        // Define um fallback imediato
+        const fallbackName = authUser?.user_metadata?.nome || email || 'Utilizador';
+        if (!cancelled) setDisplayName(fallbackName);
+
+        // 2) Se PERFIS tiver nome, preferimos ele (mais consistente)
+        if (perfil?.nome && String(perfil.nome).trim()) {
+          if (!cancelled) setDisplayName(String(perfil.nome).trim());
+          return;
+        }
+
+        // 3) Se for VENDEDOR, tenta puxar o nome da tabela vendedores pelo email
+        if (resolvedRole === 'VENDEDOR' && email) {
+          const { data: vend, error: vendErr } = await supabase
+            .from('vendedores')
+            .select('nome, email')
+            .eq('email', email)
+            .maybeSingle();
+
+          if (!cancelled && !vendErr && vend?.nome) {
+            setDisplayName(String(vend.nome).trim());
+          }
         }
       } catch {
-        if (!cancelled) setRole('UNKNOWN');
+        if (!cancelled) {
+          setRole('UNKNOWN');
+          setDisplayName('');
+          setDisplayEmail('');
+        }
       }
     }
 
-    loadRole();
+    loadRoleAndName();
 
     return () => {
       cancelled = true;
     };
-  }, [supabase, user?.id]);
+  }, [supabase, user?.id, user?.email]);
 
   // Evita “flash” de navbar errada antes de sabermos o role
   if (role === 'UNKNOWN') {
@@ -139,9 +189,9 @@ export default function Navbar() {
 
   const isVendor = role === 'VENDEDOR';
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
-
-  // Para o link do logo:
   const homeHref = isVendor ? '/portal' : '/dashboard';
+
+  const roleLabel = isVendor ? 'Vendedor' : 'Admin';
 
   return (
     <>
@@ -186,16 +236,17 @@ export default function Navbar() {
 
             {/* User Info & Logout */}
             <div className="flex items-center gap-3">
-              {user && (
-                <div className="text-sm text-right">
+              {(displayName || displayEmail) && (
+                <div className="text-sm text-right leading-tight">
                   <p className="font-medium">
-                    {user.user_metadata?.nome || user.email}
+                    {displayName || displayEmail}
                   </p>
                   <p className="text-xs opacity-90">
-                    {isVendor ? 'Vendedor' : 'Admin'}
+                    {roleLabel}{displayEmail ? ` • ${displayEmail}` : ''}
                   </p>
                 </div>
               )}
+
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white hover:bg-red-500/30 transition-colors"
@@ -228,11 +279,7 @@ export default function Navbar() {
               className="p-2 rounded-lg hover:bg-blue-500/30 transition-colors"
               aria-label="Abrir menu"
             >
-              {mobileMenuOpen ? (
-                <X className="w-6 h-6" />
-              ) : (
-                <Menu className="w-6 h-6" />
-              )}
+              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
           </div>
         </div>
@@ -242,13 +289,13 @@ export default function Navbar() {
           <div className="border-t border-blue-500/30 bg-blue-700/95 backdrop-blur-sm">
             <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
               {/* User Info */}
-              {user && (
+              {(displayName || displayEmail) && (
                 <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
                   <p className="text-sm font-medium">
-                    {user.user_metadata?.nome || user.email}
+                    {displayName || displayEmail}
                   </p>
                   <p className="text-xs opacity-90">
-                    {isVendor ? 'Vendedor' : 'Admin'}
+                    {roleLabel}{displayEmail ? ` • ${displayEmail}` : ''}
                   </p>
                 </div>
               )}
