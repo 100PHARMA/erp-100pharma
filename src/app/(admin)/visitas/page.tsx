@@ -18,7 +18,6 @@ import {
   Ban,
   BadgeCheck,
   Receipt,
-  Lock,
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
@@ -42,7 +41,10 @@ const statusLabels: Record<EstadoVisita, string> = {
   CANCELADA: 'Cancelada',
 };
 
-type ClienteRow = { id: string; nome: string };
+type ClienteRow = {
+  id: string;
+  nome: string;
+};
 
 type VendedorRow = {
   id: string;
@@ -77,66 +79,42 @@ type KmLancamentoRow = {
   valor_total: number | null;
 };
 
-function parseNum(str: string): number | null {
-  if (!str) return null;
-  const n = Number(String(str).replace(',', '.'));
-  if (Number.isNaN(n)) return null;
-  return n;
-}
-
-function buildNotas(params: {
-  hora_inicio?: string;
-  hora_fim?: string;
-  objetivo?: string;
-  resultado?: string;
-  proxima_acao?: string;
-}) {
-  const parts: string[] = [];
-  if (params.hora_inicio || params.hora_fim) {
-    parts.push(`Horário: ${params.hora_inicio || '—'} - ${params.hora_fim || '—'}`);
-  }
-  if (params.objetivo) parts.push(`Objetivo: ${params.objetivo}`);
-  if (params.resultado) parts.push(`Resultado: ${params.resultado}`);
-  if (params.proxima_acao) parts.push(`Próxima ação: ${params.proxima_acao}`);
-  return parts.join('\n');
-}
-
 export default function VisitasPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [loading, setLoading] = useState(true);
 
-  const [filterStatus, setFilterStatus] = useState<'TODOS' | EstadoVisita>('TODOS');
+  const [filterStatus, setFilterStatus] = useState<
+    'TODOS' | 'AGENDADA' | 'REALIZADA' | 'CANCELADA'
+  >('TODOS');
   const [busca, setBusca] = useState('');
 
   const [clientes, setClientes] = useState<ClienteRow[]>([]);
   const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
-  const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>({});
-  const [kmLancReadFailed, setKmLancReadFailed] = useState(false);
+  // map visita_id -> km_lancamento
+  const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>(
+    {}
+  );
 
+  // Modal
   const [showModal, setShowModal] = useState(false);
   const [modoEdicao, setModoEdicao] = useState(false);
   const [visitaEditandoId, setVisitaEditandoId] = useState<string | null>(null);
-  const [visitaEditandoOriginal, setVisitaEditandoOriginal] = useState<VisitaRow | null>(null);
 
   const [form, setForm] = useState<{
     vendedor_id: string;
     cliente_id: string;
     data_visita: string;
-
     hora_inicio: string; // UI only
     hora_fim: string; // UI only
-
-    objetivo: string;
-    resultado: string;
-    proxima_acao: string;
-
-    km_informado: string;
-    km_referencia: string;
-
-    estado: 'AGENDADA' | 'CANCELADA';
+    objetivo: string; // gravamos em notas
+    resultado: string; // gravamos em notas
+    proxima_acao: string; // gravamos em notas
+    km_informado: string; // input
+    km_referencia: string; // input
+    estado: EstadoVisita;
   }>({
     vendedor_id: '',
     cliente_id: '',
@@ -150,6 +128,10 @@ export default function VisitasPage() {
     km_referencia: '',
     estado: 'AGENDADA',
   });
+
+  // =========================================================
+  // LOAD
+  // =========================================================
 
   useEffect(() => {
     (async () => {
@@ -196,6 +178,7 @@ export default function VisitasPage() {
         )
         .order('data_visita', { ascending: false })
         .order('created_at', { ascending: false });
+
       if (visErr) throw visErr;
 
       const rows = (visitasData ?? []) as any as VisitaRow[];
@@ -210,10 +193,8 @@ export default function VisitasPage() {
 
         if (kmErr) {
           console.warn('Aviso: não consegui ler vendedor_km_lancamentos:', kmErr);
-          setKmLancReadFailed(true);
           setKmLancMap({});
         } else {
-          setKmLancReadFailed(false);
           const map: Record<string, KmLancamentoRow> = {};
           (kmData ?? []).forEach((k: any) => {
             map[k.visita_id] = k as KmLancamentoRow;
@@ -221,7 +202,6 @@ export default function VisitasPage() {
           setKmLancMap(map);
         }
       } else {
-        setKmLancReadFailed(false);
         setKmLancMap({});
       }
     } catch (e: any) {
@@ -231,6 +211,10 @@ export default function VisitasPage() {
       setLoading(false);
     }
   }
+
+  // =========================================================
+  // HELPERS
+  // =========================================================
 
   function resetForm() {
     setForm({
@@ -248,7 +232,6 @@ export default function VisitasPage() {
     });
     setModoEdicao(false);
     setVisitaEditandoId(null);
-    setVisitaEditandoOriginal(null);
   }
 
   function abrirModalNova() {
@@ -256,27 +239,19 @@ export default function VisitasPage() {
     setShowModal(true);
   }
 
-  function isPago(visitaId: string) {
-    const lanc = kmLancMap[visitaId];
-    return (lanc?.status ?? '').toUpperCase() === 'PAGO';
-  }
-
-  function canEditVisita(visita: VisitaRow) {
-    if (!kmLancReadFailed && isPago(visita.id)) return false;
-    return true;
-  }
-
   function abrirModalEditar(visita: VisitaRow) {
-    if (!canEditVisita(visita)) {
-      alert('Edição bloqueada: esta visita tem lançamento de KM com estado PAGO.');
+    const kmLanc = kmLancMap[visita.id];
+    const kmStatus = (kmLanc?.status ?? '').toUpperCase();
+
+    // Regra: só bloqueia edição se o KM estiver PAGO
+    if (kmStatus === 'PAGO') {
+      alert('Esta visita não pode ser editada porque a quilometragem já está PAGA (auditoria).');
       return;
     }
 
     setModoEdicao(true);
     setVisitaEditandoId(visita.id);
-    setVisitaEditandoOriginal(visita);
 
-    const estadoAtual = (visita.estado ?? 'AGENDADA') as EstadoVisita;
     const notas = visita.notas ?? '';
 
     setForm({
@@ -285,22 +260,49 @@ export default function VisitasPage() {
       data_visita: visita.data_visita,
       hora_inicio: '',
       hora_fim: '',
-      objetivo: notas,
+      objetivo: notas, // mantemos simples: tudo vai para notas
       resultado: '',
       proxima_acao: '',
       km_informado: visita.km_informado != null ? String(visita.km_informado) : '',
       km_referencia: visita.km_referencia != null ? String(visita.km_referencia) : '',
-      estado: estadoAtual === 'CANCELADA' ? 'CANCELADA' : 'AGENDADA',
+      estado: (visita.estado ?? 'AGENDADA') as EstadoVisita,
     });
 
     setShowModal(true);
   }
 
+  function parseNum(str: string): number | null {
+    if (!str) return null;
+    const n = Number(String(str).replace(',', '.'));
+    if (Number.isNaN(n)) return null;
+    return n;
+  }
+
+  function buildNotas() {
+    const parts: string[] = [];
+    if (form.hora_inicio || form.hora_fim) {
+      parts.push(`Horário: ${form.hora_inicio || '—'} - ${form.hora_fim || '—'}`);
+    }
+    if (form.objetivo) parts.push(`Objetivo: ${form.objetivo}`);
+    if (form.resultado) parts.push(`Resultado: ${form.resultado}`);
+    if (form.proxima_acao) parts.push(`Próxima ação: ${form.proxima_acao}`);
+    return parts.join('\n');
+  }
+
+  // =========================================================
+  // SUBMIT (CREATE/UPDATE)
+  // =========================================================
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!form.vendedor_id || !form.cliente_id || !form.data_visita || !form.objetivo) {
-      alert('Preencha: Vendedor, Cliente, Data e Objetivo.');
+    if (!form.vendedor_id || !form.data_visita || !form.objetivo) {
+      alert('Preencha: Vendedor, Data e Objetivo.');
+      return;
+    }
+
+    if (!form.cliente_id) {
+      alert('Selecione um cliente/farmácia.');
       return;
     }
 
@@ -316,42 +318,30 @@ export default function VisitasPage() {
       return;
     }
 
-    if (modoEdicao && visitaEditandoId && visitaEditandoOriginal && !kmLancReadFailed) {
-      if (isPago(visitaEditandoId)) {
-        alert('Edição bloqueada: esta visita está vinculada a um lançamento de KM PAGO.');
-        return;
-      }
-    }
-
     setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const userId = auth?.user?.id ?? null;
-
-      const originalEstado = (visitaEditandoOriginal?.estado ?? null) as EstadoVisita | null;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       const payload: any = {
         vendedor_id: form.vendedor_id,
         cliente_id: form.cliente_id,
         data_visita: form.data_visita,
-        notas: buildNotas({
-          hora_inicio: form.hora_inicio,
-          hora_fim: form.hora_fim,
-          objetivo: form.objetivo,
-          resultado: form.resultado,
-          proxima_acao: form.proxima_acao,
-        }),
+        estado: form.estado,
+        notas: buildNotas(),
         km_informado: kmInformado,
         km_referencia: kmReferencia,
         origem: 'ADMIN',
-        updated_by: userId,
+        updated_by: user?.id ?? null,
       };
 
       if (modoEdicao && visitaEditandoId) {
-        if (originalEstado === 'REALIZADA') {
-          // mantém REALIZADA
-        } else {
-          payload.estado = form.estado;
+        // Regra adicional no front: se já estiver com KM PAGO, não deixa salvar
+        const kmLanc = kmLancMap[visitaEditandoId];
+        if ((kmLanc?.status ?? '').toUpperCase() === 'PAGO') {
+          alert('Não é possível salvar: quilometragem já está PAGA (auditoria).');
+          return;
         }
 
         const { error } = await supabase
@@ -360,15 +350,12 @@ export default function VisitasPage() {
           .eq('id', visitaEditandoId);
 
         if (error) throw error;
-
         alert('Visita atualizada.');
       } else {
-        payload.estado = form.estado;
-        payload.created_by = userId;
+        payload.created_by = user?.id ?? null;
 
         const { error } = await supabase.from('vendedor_visitas').insert(payload);
         if (error) throw error;
-
         alert('Visita agendada.');
       }
 
@@ -383,13 +370,13 @@ export default function VisitasPage() {
     }
   }
 
+  // =========================================================
+  // AÇÕES (CONCLUIR / CANCELAR)
+  // =========================================================
+
   async function concluirVisita(visita: VisitaRow) {
-    const estado = (visita.estado ?? 'AGENDADA') as EstadoVisita;
-    if (estado === 'REALIZADA') return;
-    if (estado === 'CANCELADA') {
-      alert('Não é possível concluir uma visita CANCELADA.');
-      return;
-    }
+    const estadoAtual = (visita.estado ?? 'AGENDADA') as EstadoVisita;
+    if (estadoAtual === 'REALIZADA') return;
 
     const km = visita.km_informado ?? null;
     if (km == null || Number(km) <= 0) {
@@ -401,17 +388,17 @@ export default function VisitasPage() {
 
     setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const userId = auth?.user?.id ?? null;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       const { error } = await supabase
         .from('vendedor_visitas')
         .update({
           estado: 'REALIZADA',
           concluida_em: new Date().toISOString(),
-          concluida_por: userId,
-          origem: 'ADMIN',
-          updated_by: userId,
+          concluida_por: user?.id ?? null,
+          updated_by: user?.id ?? null,
         })
         .eq('id', visita.id);
 
@@ -428,25 +415,26 @@ export default function VisitasPage() {
   }
 
   async function cancelarVisita(visita: VisitaRow) {
-    const estado = (visita.estado ?? 'AGENDADA') as EstadoVisita;
-    if (estado === 'REALIZADA') {
+    const estadoAtual = (visita.estado ?? 'AGENDADA') as EstadoVisita;
+
+    if (estadoAtual === 'CANCELADA') return;
+    if (estadoAtual === 'REALIZADA') {
       alert('Visita REALIZADA não deve ser cancelada neste fluxo.');
       return;
     }
-    if (estado === 'CANCELADA') return;
     if (!confirm('Cancelar esta visita?')) return;
 
     setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const userId = auth?.user?.id ?? null;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       const { error } = await supabase
         .from('vendedor_visitas')
         .update({
           estado: 'CANCELADA',
-          origem: 'ADMIN',
-          updated_by: userId,
+          updated_by: user?.id ?? null,
         })
         .eq('id', visita.id);
 
@@ -461,6 +449,10 @@ export default function VisitasPage() {
       setLoading(false);
     }
   }
+
+  // =========================================================
+  // FILTRO + STATS
+  // =========================================================
 
   const visitasFiltradas = useMemo(() => {
     const term = busca.trim().toLowerCase();
@@ -494,6 +486,10 @@ export default function VisitasPage() {
     return { total, agendadas, realizadas, totalKm };
   }, [visitas]);
 
+  // =========================================================
+  // RENDER
+  // =========================================================
+
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
@@ -507,20 +503,17 @@ export default function VisitasPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      {/* Header */}
       <div className="mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-1">Visitas (Admin)</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-1">
+              Visitas (Admin)
+            </h1>
             <p className="text-gray-600 text-sm sm:text-base">
-              Agendamento, edição, conclusão e quilometragem por visita (edição bloqueada quando KM estiver PAGO)
+              Agendamento, conclusão e quilometragem por visita (gera lançamento de KM ao concluir)
             </p>
-            {kmLancReadFailed && (
-              <p className="mt-1 text-xs text-amber-700">
-                Aviso: não foi possível ler lançamentos de KM (RLS). O bloqueio por “PAGO” pode não ser aplicado.
-              </p>
-            )}
           </div>
-
           <button
             onClick={abrirModalNova}
             className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
@@ -531,6 +524,7 @@ export default function VisitasPage() {
         </div>
       </div>
 
+      {/* Search + Filters */}
       <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6">
         <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="relative flex-1">
@@ -561,6 +555,7 @@ export default function VisitasPage() {
         </div>
       </div>
 
+      {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
           <div className="flex items-center gap-3 mb-2">
@@ -599,10 +594,13 @@ export default function VisitasPage() {
             </div>
             <span className="text-sm text-gray-600">Total KM (realizadas)</span>
           </div>
-          <p className="text-2xl sm:text-3xl font-bold text-purple-600">{stats.totalKm.toLocaleString('pt-PT')}</p>
+          <p className="text-2xl sm:text-3xl font-bold text-purple-600">
+            {stats.totalKm.toLocaleString('pt-PT')}
+          </p>
         </div>
       </div>
 
+      {/* List */}
       <div className="space-y-4">
         {visitasFiltradas.map((visita) => {
           const estado = (visita.estado ?? 'AGENDADA') as EstadoVisita;
@@ -610,18 +608,22 @@ export default function VisitasPage() {
 
           const kmLanc = kmLancMap[visita.id];
           const kmStatus = (kmLanc?.status ?? '').toUpperCase();
-          const bloqueadaPorPago = !kmLancReadFailed && kmStatus === 'PAGO';
+          const canEdit = kmStatus !== 'PAGO';
 
-          const kmLancBadge = kmLanc?.status ? (
-            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-800">
-              <Receipt className="w-3 h-3" />
-              KM: {kmLanc.status}
-              {kmLanc?.valor_total != null ? ` (€${Number(kmLanc.valor_total).toFixed(2)})` : ''}
-            </span>
-          ) : null;
+          const kmLancBadge =
+            kmLanc?.status ? (
+              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-800">
+                <Receipt className="w-3 h-3" />
+                KM: {kmLanc.status}
+                {kmLanc?.valor_total != null ? ` (€${Number(kmLanc.valor_total).toFixed(2)})` : ''}
+              </span>
+            ) : null;
 
           return (
-            <div key={visita.id} className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
+            <div
+              key={visita.id}
+              className="bg-white rounded-xl shadow-lg p-4 sm:p-6 hover:shadow-xl transition-all duration-300"
+            >
               <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-start gap-3 mb-3">
@@ -630,21 +632,22 @@ export default function VisitasPage() {
                     </div>
 
                     <div className="flex-1">
-                      <h3 className="font-bold text-gray-900 mb-1">{visita.clientes?.nome ?? '—'}</h3>
-                      <p className="text-sm text-gray-600">Vendedor: {visita.vendedores?.nome ?? visita.vendedor_id}</p>
-                      {bloqueadaPorPago && (
-                        <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
-                          <Lock className="w-3 h-3" />
-                          Bloqueada: lançamento de KM está PAGO.
-                        </p>
-                      )}
+                      <h3 className="font-bold text-gray-900 mb-1">
+                        {visita.clientes?.nome ?? '—'}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        Vendedor: {visita.vendedores?.nome ?? visita.vendedor_id}
+                      </p>
                     </div>
 
                     <div className="flex flex-col items-end gap-2">
-                      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${statusColors[estado]}`}>
+                      <span
+                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${statusColors[estado]}`}
+                      >
                         <StatusIcon className="w-3 h-3" />
                         {statusLabels[estado]}
                       </span>
+
                       {kmLancBadge}
                     </div>
                   </div>
@@ -659,7 +662,9 @@ export default function VisitasPage() {
                       <Navigation className="w-4 h-4" />
                       <span>
                         KM informado:{' '}
-                        <span className="font-semibold text-gray-900">{Number(visita.km_informado ?? 0).toLocaleString('pt-PT')} km</span>
+                        <span className="font-semibold text-gray-900">
+                          {Number(visita.km_informado ?? 0).toLocaleString('pt-PT')} km
+                        </span>
                       </span>
                     </div>
 
@@ -667,7 +672,9 @@ export default function VisitasPage() {
                       <BadgeCheck className="w-4 h-4" />
                       <span>
                         KM ref.:{' '}
-                        <span className="font-semibold text-gray-900">{Number(visita.km_referencia ?? 0).toLocaleString('pt-PT')} km</span>
+                        <span className="font-semibold text-gray-900">
+                          {Number(visita.km_referencia ?? 0).toLocaleString('pt-PT')} km
+                        </span>
                       </span>
                     </div>
 
@@ -676,7 +683,9 @@ export default function VisitasPage() {
                       <span>
                         Concluída em:{' '}
                         <span className="font-semibold text-gray-900">
-                          {visita.concluida_em ? new Date(visita.concluida_em).toLocaleString('pt-PT') : '—'}
+                          {visita.concluida_em
+                            ? new Date(visita.concluida_em).toLocaleString('pt-PT')
+                            : '—'}
                         </span>
                       </span>
                     </div>
@@ -685,7 +694,9 @@ export default function VisitasPage() {
                   {visita.notas ? (
                     <div className="bg-slate-50 rounded-lg p-3">
                       <p className="text-xs text-gray-600 mb-1">Notas</p>
-                      <pre className="text-sm text-gray-900 whitespace-pre-wrap font-sans">{visita.notas}</pre>
+                      <pre className="text-sm text-gray-900 whitespace-pre-wrap font-sans">
+                        {visita.notas}
+                      </pre>
                     </div>
                   ) : (
                     <div className="bg-slate-50 rounded-lg p-3">
@@ -694,20 +705,23 @@ export default function VisitasPage() {
                   )}
                 </div>
 
+                {/* Actions */}
                 <div className="flex flex-row lg:flex-col gap-2 justify-end">
-                  <button
-                    onClick={() => abrirModalEditar(visita)}
-                    disabled={bloqueadaPorPago}
-                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm ${
-                      bloqueadaPorPago
-                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-900'
-                    }`}
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    Editar
-                  </button>
+                  {canEdit ? (
+                    <button
+                      onClick={() => abrirModalEditar(visita)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-sm"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      Editar
+                    </button>
+                  ) : (
+                    <div className="text-xs text-gray-500 max-w-[240px]">
+                      KM está PAGO: edição bloqueada (auditoria).
+                    </div>
+                  )}
 
+                  {/* Só mostra Concluir/Cancelar se NÃO estiver REALIZADA */}
                   {estado !== 'REALIZADA' && (
                     <>
                       <button
@@ -728,8 +742,8 @@ export default function VisitasPage() {
                     </>
                   )}
 
-                  {estado === 'REALIZADA' && (
-                    <div className="text-xs text-gray-500 max-w-[220px]">
+                  {estado === 'REALIZADA' && canEdit && (
+                    <div className="text-xs text-gray-500 max-w-[240px]">
                       Realizada: edição permitida (Admin) enquanto KM não estiver PAGO.
                     </div>
                   )}
@@ -747,37 +761,32 @@ export default function VisitasPage() {
         </div>
       )}
 
-      {/* MODAL CORRIGIDO: header fixo + corpo com scroll + footer sticky com botões */}
+      {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
-            {/* Header fixo */}
-            <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-5 flex items-center justify-between shrink-0">
-              <h2 className="text-xl sm:text-2xl font-bold">{modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}</h2>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
+              <h2 className="text-2xl font-bold">
+                {modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}
+              </h2>
               <button
                 onClick={() => {
                   setShowModal(false);
                   resetForm();
                 }}
                 className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-                aria-label="Fechar"
               >
                 <X className="w-6 h-6" />
               </button>
             </div>
 
-            {/* Corpo com scroll */}
-            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
-              {modoEdicao && visitaEditandoOriginal?.estado === 'REALIZADA' && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                  Esta visita está <strong>REALIZADA</strong>. Você pode editar os dados, mas o estado não é alterado aqui.
-                  O bloqueio total só acontece quando o lançamento de KM estiver <strong>PAGO</strong>.
-                </div>
-              )}
-
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Cliente */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Cliente/Farmácia *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Cliente/Farmácia *
+                  </label>
                   <select
                     value={form.cliente_id}
                     onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
@@ -793,8 +802,11 @@ export default function VisitasPage() {
                   </select>
                 </div>
 
+                {/* Vendedor */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Vendedor *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Vendedor *
+                  </label>
                   <select
                     value={form.vendedor_id}
                     onChange={(e) => setForm({ ...form, vendedor_id: e.target.value })}
@@ -804,16 +816,18 @@ export default function VisitasPage() {
                     <option value="">Selecione...</option>
                     {vendedores.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.nome}
-                        {v.email ? ` (${v.email})` : ''}
+                        {v.nome}{v.email ? ` (${v.email})` : ''}
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
 
+              {/* Data */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Data da Visita *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data da Visita *
+                </label>
                 <input
                   type="date"
                   value={form.data_visita}
@@ -823,9 +837,12 @@ export default function VisitasPage() {
                 />
               </div>
 
+              {/* Horas */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Hora Início (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Hora Início (opcional)
+                  </label>
                   <input
                     type="time"
                     value={form.hora_inicio}
@@ -833,8 +850,11 @@ export default function VisitasPage() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Hora Fim (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Hora Fim (opcional)
+                  </label>
                   <input
                     type="time"
                     value={form.hora_fim}
@@ -844,9 +864,12 @@ export default function VisitasPage() {
                 </div>
               </div>
 
+              {/* KM */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">KM informado</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    KM informado
+                  </label>
                   <input
                     type="number"
                     step="0.1"
@@ -856,11 +879,15 @@ export default function VisitasPage() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Para concluir como REALIZADA, precisa ser &gt; 0.</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Regra: para concluir como REALIZADA, precisa ser &gt; 0.
+                  </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">KM referência (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    KM referência (opcional)
+                  </label>
                   <input
                     type="number"
                     step="0.1"
@@ -870,23 +897,33 @@ export default function VisitasPage() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
                   />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Depois podemos automatizar “Farmácia X = 15km”.
+                  </p>
                 </div>
               </div>
 
+              {/* Objetivo */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Objetivo *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Objetivo *
+                </label>
                 <textarea
                   value={form.objetivo}
                   onChange={(e) => setForm({ ...form, objetivo: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Descreva o objetivo da visita..."
                   rows={4}
                   required
                 />
               </div>
 
+              {/* opcionais */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Resultado (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Resultado (opcional)
+                  </label>
                   <textarea
                     value={form.resultado}
                     onChange={(e) => setForm({ ...form, resultado: e.target.value })}
@@ -894,8 +931,11 @@ export default function VisitasPage() {
                     rows={3}
                   />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Próxima ação (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Próxima ação (opcional)
+                  </label>
                   <textarea
                     value={form.proxima_acao}
                     onChange={(e) => setForm({ ...form, proxima_acao: e.target.value })}
@@ -905,27 +945,26 @@ export default function VisitasPage() {
                 </div>
               </div>
 
-              <div className="pb-24">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
-                {modoEdicao && visitaEditandoOriginal?.estado === 'REALIZADA' ? (
-                  <div className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-slate-50 text-slate-700">
-                    REALIZADA (travado no modal)
-                  </div>
-                ) : (
-                  <select
-                    value={form.estado}
-                    onChange={(e) => setForm({ ...form, estado: e.target.value as 'AGENDADA' | 'CANCELADA' })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="AGENDADA">Agendada</option>
-                    <option value="CANCELADA">Cancelada</option>
-                  </select>
-                )}
-                <p className="text-xs text-gray-500 mt-1">REALIZADA é via botão “Concluir”. PAGO bloqueia edição.</p>
+              {/* Estado */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Estado
+                </label>
+                <select
+                  value={form.estado}
+                  onChange={(e) => setForm({ ...form, estado: e.target.value as EstadoVisita })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="AGENDADA">Agendada</option>
+                  <option value="CANCELADA">Cancelada</option>
+                  <option value="REALIZADA">Realizada</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Dica: o botão “Concluir” continua a ser o fluxo padrão para marcar como REALIZADA e gerar o KM, mas o Admin pode ajustar aqui.
+                </p>
               </div>
 
-              {/* Footer sticky dentro do form para garantir submit */}
-              <div className="sticky bottom-0 -mx-6 px-6 py-4 bg-white border-t border-gray-200 flex gap-3">
+              <div className="flex gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -934,7 +973,7 @@ export default function VisitasPage() {
                   }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold transition-colors"
                 >
-                  Voltar
+                  Fechar
                 </button>
 
                 <button
