@@ -77,7 +77,6 @@ export default function Navbar() {
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // NOVO: nome exibido no navbar
   const [displayName, setDisplayName] = useState<string>('');
   const [displayEmail, setDisplayEmail] = useState<string>('');
 
@@ -86,18 +85,15 @@ export default function Navbar() {
     router.push('/login');
   };
 
-  // Não mostrar navbar na página de login
   if (pathname === '/login' || pathname.startsWith('/login/')) {
     return null;
   }
 
-  // Carrega role + nome para o navbar
   useEffect(() => {
     let cancelled = false;
 
     async function loadRoleAndName() {
       try {
-        // Preferência: usar user do hook; fallback para auth.getUser
         const authUser = user?.id ? user : (await supabase.auth.getUser()).data.user;
 
         const userId = authUser?.id;
@@ -112,30 +108,21 @@ export default function Navbar() {
           return;
         }
 
-        if (!cancelled) setDisplayEmail(email);
+        if (!cancelled) {
+          setDisplayEmail(email);
+          setDisplayName(authUser?.user_metadata?.nome || email || 'Utilizador');
+        }
 
-        // 1) PERFIS é a fonte única (role) e pode ser também a fonte do nome
-        //    (se a coluna "nome" existir). Se não existir, o select ainda pode falhar.
-        //    Então fazemos de forma tolerante: tentamos buscar role,nome; se falhar, buscamos só role.
-        let perfil: any = null;
+        // PERFIS: role + vendedor_id (é isso que você tem no schema)
+        const { data: perfil, error: pErr } = await supabase
+          .from('perfis')
+          .select('role, vendedor_id')
+          .eq('id', userId)
+          .maybeSingle();
 
-        {
-          const { data, error } = await supabase
-            .from('perfis')
-            .select('role, nome')
-            .eq('id', userId)
-            .maybeSingle();
-
-          if (!error) {
-            perfil = data;
-          } else {
-            const { data: data2 } = await supabase
-              .from('perfis')
-              .select('role')
-              .eq('id', userId)
-              .maybeSingle();
-            perfil = data2;
-          }
+        if (pErr) {
+          if (!cancelled) setRole('UNKNOWN');
+          return;
         }
 
         const r = String(perfil?.role ?? '').toUpperCase();
@@ -144,26 +131,30 @@ export default function Navbar() {
 
         if (!cancelled) setRole(resolvedRole);
 
-        // Define um fallback imediato
-        const fallbackName = authUser?.user_metadata?.nome || email || 'Utilizador';
-        if (!cancelled) setDisplayName(fallbackName);
+        // Se for vendedor e houver vendedor_id, buscamos o nome pelo ID (fonte correta)
+        if (resolvedRole === 'VENDEDOR' && perfil?.vendedor_id) {
+          const { data: vend, error: vErr } = await supabase
+            .from('vendedores')
+            .select('nome')
+            .eq('id', perfil.vendedor_id)
+            .maybeSingle();
 
-        // 2) Se PERFIS tiver nome, preferimos ele (mais consistente)
-        if (perfil?.nome && String(perfil.nome).trim()) {
-          if (!cancelled) setDisplayName(String(perfil.nome).trim());
-          return;
+          if (!cancelled && !vErr && vend?.nome) {
+            setDisplayName(String(vend.nome).trim());
+            return;
+          }
         }
 
-        // 3) Se for VENDEDOR, tenta puxar o nome da tabela vendedores pelo email
+        // Fallback (menos confiável): tentar por email (caso vendedor_id esteja null)
         if (resolvedRole === 'VENDEDOR' && email) {
-          const { data: vend, error: vendErr } = await supabase
+          const { data: vend2, error: vErr2 } = await supabase
             .from('vendedores')
-            .select('nome, email')
+            .select('nome')
             .eq('email', email)
             .maybeSingle();
 
-          if (!cancelled && !vendErr && vend?.nome) {
-            setDisplayName(String(vend.nome).trim());
+          if (!cancelled && !vErr2 && vend2?.nome) {
+            setDisplayName(String(vend2.nome).trim());
           }
         }
       } catch {
@@ -176,13 +167,11 @@ export default function Navbar() {
     }
 
     loadRoleAndName();
-
     return () => {
       cancelled = true;
     };
   }, [supabase, user?.id, user?.email]);
 
-  // Evita “flash” de navbar errada antes de sabermos o role
   if (role === 'UNKNOWN') {
     return null;
   }
@@ -190,16 +179,14 @@ export default function Navbar() {
   const isVendor = role === 'VENDEDOR';
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
   const homeHref = isVendor ? '/portal' : '/dashboard';
-
   const roleLabel = isVendor ? 'Vendedor' : 'Admin';
 
   return (
     <>
-      {/* Desktop Navbar */}
+      {/* Desktop */}
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
             <Link href={homeHref} className="flex items-center gap-3 group">
               <img
                 src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
@@ -208,7 +195,6 @@ export default function Navbar() {
               />
             </Link>
 
-            {/* Menu Items */}
             <div className="flex items-center gap-1 overflow-x-auto">
               {menuItems.map((item) => {
                 const Icon = item.icon;
@@ -220,11 +206,7 @@ export default function Navbar() {
                     className={`
                       flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium
                       transition-all duration-200 whitespace-nowrap
-                      ${
-                        active
-                          ? 'bg-white text-blue-600 shadow-lg'
-                          : 'text-white hover:bg-blue-500/30'
-                      }
+                      ${active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-500/30'}
                     `}
                   >
                     <Icon className="w-4 h-4" />
@@ -234,13 +216,10 @@ export default function Navbar() {
               })}
             </div>
 
-            {/* User Info & Logout */}
             <div className="flex items-center gap-3">
               {(displayName || displayEmail) && (
                 <div className="text-sm text-right leading-tight">
-                  <p className="font-medium">
-                    {displayName || displayEmail}
-                  </p>
+                  <p className="font-medium">{displayName || displayEmail}</p>
                   <p className="text-xs opacity-90">
                     {roleLabel}{displayEmail ? ` • ${displayEmail}` : ''}
                   </p>
@@ -260,11 +239,10 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* Mobile Navbar */}
+      {/* Mobile */}
       <nav className="lg:hidden bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="px-4">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
             <Link href={homeHref} className="flex items-center gap-2">
               <img
                 src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
@@ -273,7 +251,6 @@ export default function Navbar() {
               />
             </Link>
 
-            {/* Mobile Menu Button */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg hover:bg-blue-500/30 transition-colors"
@@ -284,16 +261,12 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* Mobile Menu Dropdown */}
         {mobileMenuOpen && (
           <div className="border-t border-blue-500/30 bg-blue-700/95 backdrop-blur-sm">
             <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
-              {/* User Info */}
               {(displayName || displayEmail) && (
                 <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
-                  <p className="text-sm font-medium">
-                    {displayName || displayEmail}
-                  </p>
+                  <p className="text-sm font-medium">{displayName || displayEmail}</p>
                   <p className="text-xs opacity-90">
                     {roleLabel}{displayEmail ? ` • ${displayEmail}` : ''}
                   </p>
@@ -311,11 +284,7 @@ export default function Navbar() {
                     className={`
                       flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium
                       transition-all duration-200
-                      ${
-                        active
-                          ? 'bg-white text-blue-600 shadow-lg'
-                          : 'text-white hover:bg-blue-600/50'
-                      }
+                      ${active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-600/50'}
                     `}
                   >
                     <Icon className="w-5 h-5" />
@@ -324,7 +293,6 @@ export default function Navbar() {
                 );
               })}
 
-              {/* Logout Button */}
               <button
                 onClick={handleLogout}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium text-white hover:bg-red-500/30 transition-colors mt-2"
