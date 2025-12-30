@@ -256,26 +256,26 @@ export default function Navbar() {
               )}
             </div>
 
-            {/* Direita: identidade + sair (sem "a carregar...") */}
-            <div className="flex items-center gap-3 shrink-0">
-              <div className="text-sm text-right leading-tight">
-                <div className="font-semibold">
-                  {loadingIdentity ? (displayName || email || '—') : (displayName || email || '—')}
-                </div>
-                <div className="text-xs opacity-90">
-                  {loadingIdentity ? '' : isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-                </div>
-              </div>
+            {/* Direita: identidade + sair (isolado do menu) */}
+<div className="ml-auto flex items-center gap-4 pl-4 border-l border-white/20 shrink-0">
+  <div className="text-sm text-right leading-tight hidden xl:block">
+    <div className="font-semibold">
+      {displayName || email || '—'}
+    </div>
+    <div className="text-xs opacity-90">
+      {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
+    </div>
+  </div>
 
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
-                title="Sair"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="hidden xl:inline">Sair</span>
-              </button>
-            </div>
+  <button
+    onClick={handleLogout}
+    className="min-w-[88px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
+    title="Sair"
+  >
+    <LogOut className="w-4 h-4" />
+    <span>Sair</span>
+  </button>
+</div>
           </div>
         </div>
       </nav>
