@@ -1,3 +1,4 @@
+// src/components/custom/navbar.tsx
 'use client';
 
 import Link from 'next/link';
@@ -76,14 +77,16 @@ export default function Navbar() {
 
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
   const [displayName, setDisplayName] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
+  const [loadingIdentity, setLoadingIdentity] = useState(true);
 
   const handleLogout = async () => {
     await signOut();
     router.push('/login');
   };
 
+  // Se estiver em /login, não renderiza navbar.
   if (pathname === '/login' || pathname.startsWith('/login/')) {
     return null;
   }
@@ -91,76 +94,85 @@ export default function Navbar() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRoleAndName() {
-      try {
-        const userId = user?.id || (await supabase.auth.getUser()).data.user?.id;
-        const email = user?.email || (await supabase.auth.getUser()).data.user?.email || '';
+    async function loadIdentity() {
+      setLoadingIdentity(true);
 
-        if (!userId) {
-          if (!cancelled) {
-            setRole('UNKNOWN');
-            setDisplayName('');
-          }
-          return;
-        }
+      // 1) pega user do hook OU do supabase
+      const userFromHook = user ?? null;
 
-        const { data: perfil, error } = await supabase
-          .from('perfis')
-          .select('role, vendedor_id')
-          .eq('id', userId)
-          .maybeSingle();
+      const { data: uRes } = await supabase.auth.getUser();
+      const userFromClient = uRes.user ?? null;
 
-        if (error) {
-          if (!cancelled) {
-            setRole('UNKNOWN');
-            setDisplayName(email);
-          }
-          return;
-        }
+      const u = userFromHook ?? userFromClient;
 
-        const r = String(perfil?.role ?? '').toUpperCase();
-        const resolvedRole: Role =
-          r === 'ADMIN' ? 'ADMIN' : r === 'VENDEDOR' ? 'VENDEDOR' : 'UNKNOWN';
-
-        let name = String(user?.user_metadata?.nome ?? '').trim();
-
-        if (resolvedRole === 'VENDEDOR' && perfil?.vendedor_id) {
-          const { data: vend, error: vErr } = await supabase
-            .from('vendedores')
-            .select('nome')
-            .eq('id', perfil.vendedor_id)
-            .maybeSingle();
-
-          if (!vErr) {
-            const vendNome = String(vend?.nome ?? '').trim();
-            if (vendNome) name = vendNome;
-          }
-        }
-
-        if (!name) name = email;
-
-        if (!cancelled) {
-          setRole(resolvedRole);
-          setDisplayName(name);
-        }
-      } catch {
+      if (!u) {
         if (!cancelled) {
           setRole('UNKNOWN');
-          setDisplayName(user?.email ?? '');
+          setDisplayName('');
+          setEmail('');
+          setLoadingIdentity(false);
         }
+        return;
+      }
+
+      const userId = u.id;
+      const userEmail = u.email ?? '';
+      if (!cancelled) setEmail(userEmail);
+
+      // 2) busca perfil
+      const { data: perfil, error } = await supabase
+        .from('perfis')
+        .select('role, vendedor_id')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error || !perfil?.role) {
+        // Segurança: não assume ADMIN.
+        // UI: não some; mostra fallback.
+        if (!cancelled) {
+          setRole('UNKNOWN');
+          setDisplayName((u.user_metadata as any)?.nome?.trim?.() || userEmail);
+          setLoadingIdentity(false);
+        }
+        return;
+      }
+
+      const r = String(perfil.role).toUpperCase();
+      const resolvedRole: Role = r === 'ADMIN' ? 'ADMIN' : r === 'VENDEDOR' ? 'VENDEDOR' : 'UNKNOWN';
+
+      // 3) nome
+      let name = String((u.user_metadata as any)?.nome ?? '').trim();
+
+      if (resolvedRole === 'VENDEDOR' && perfil.vendedor_id) {
+        const { data: vend } = await supabase
+          .from('vendedores')
+          .select('nome')
+          .eq('id', perfil.vendedor_id)
+          .maybeSingle();
+
+        const vendNome = String(vend?.nome ?? '').trim();
+        if (vendNome) name = vendNome;
+      }
+
+      if (!name) name = userEmail;
+
+      if (!cancelled) {
+        setRole(resolvedRole);
+        setDisplayName(name);
+        setLoadingIdentity(false);
       }
     }
 
-    loadRoleAndName();
+    loadIdentity();
+
+    // também reage a mudanças de sessão (login/logout)
+    const { data: sub } = supabase.auth.onAuthStateChange(() => loadIdentity());
 
     return () => {
       cancelled = true;
+      sub?.subscription?.unsubscribe();
     };
-  }, [supabase, user?.id, user?.email, user?.user_metadata]);
-
-  if (role === 'UNKNOWN') {
-    return null;
-  }
+  }, [supabase, user?.id]);
 
   const isVendor = role === 'VENDEDOR';
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
@@ -173,11 +185,20 @@ export default function Navbar() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <Link href={homeHref} className="flex items-center gap-3 group">
-              <img
-                src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
-                alt="100PHARMA Logo"
-                className="h-12 w-auto group-hover:scale-110 transition-transform duration-300"
-              />
+              {/* LOGO (corrigido: container fixo + object-contain) */}
+              <div className="h-12 w-12 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
+                <img
+                  src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
+                  alt="100PHARMA Logo"
+                  className="h-full w-full object-contain p-1"
+                />
+              </div>
+              <div className="leading-tight">
+                <div className="text-sm font-semibold">100PHARMA</div>
+                <div className="text-xs opacity-90">
+                  {loadingIdentity ? 'A carregar…' : isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : 'Sem perfil'}
+                </div>
+              </div>
             </Link>
 
             <div className="flex items-center gap-1 overflow-x-auto">
@@ -202,12 +223,15 @@ export default function Navbar() {
             </div>
 
             <div className="flex items-center gap-3">
-              {user && (
-                <div className="text-sm text-right">
-                  <p className="font-medium">{displayName || user.email}</p>
-                  <p className="text-xs opacity-90">{isVendor ? 'Vendedor' : 'Admin'}</p>
-                </div>
-              )}
+              <div className="text-sm text-right">
+                <p className="font-medium">
+                  {loadingIdentity ? '…' : (displayName || email || '—')}
+                </p>
+                <p className="text-xs opacity-90">
+                  {loadingIdentity ? '' : isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : 'Sem perfil (perfis)'}
+                </p>
+              </div>
+
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white hover:bg-red-500/30 transition-colors"
@@ -226,11 +250,13 @@ export default function Navbar() {
         <div className="px-4">
           <div className="flex items-center justify-between h-16">
             <Link href={homeHref} className="flex items-center gap-2">
-              <img
-                src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
-                alt="100PHARMA Logo"
-                className="h-10 w-auto"
-              />
+              <div className="h-10 w-10 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
+                <img
+                  src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
+                  alt="100PHARMA Logo"
+                  className="h-full w-full object-contain p-1"
+                />
+              </div>
             </Link>
 
             <button
@@ -246,12 +272,12 @@ export default function Navbar() {
         {mobileMenuOpen && (
           <div className="border-t border-blue-500/30 bg-blue-700/95 backdrop-blur-sm">
             <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
-              {user && (
-                <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
-                  <p className="text-sm font-medium">{displayName || user.email}</p>
-                  <p className="text-xs opacity-90">{isVendor ? 'Vendedor' : 'Admin'}</p>
-                </div>
-              )}
+              <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
+                <p className="text-sm font-medium">{loadingIdentity ? '…' : (displayName || email || '—')}</p>
+                <p className="text-xs opacity-90">
+                  {loadingIdentity ? '' : isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : 'Sem perfil'}
+                </p>
+              </div>
 
               {menuItems.map((item) => {
                 const Icon = item.icon;
