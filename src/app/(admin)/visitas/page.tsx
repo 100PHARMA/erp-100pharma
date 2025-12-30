@@ -93,7 +93,6 @@ export default function VisitasPage() {
   const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
-  // map visita_id -> km_lancamento
   const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>(
     {}
   );
@@ -109,11 +108,11 @@ export default function VisitasPage() {
     data_visita: string;
     hora_inicio: string; // UI only
     hora_fim: string; // UI only
-    objetivo: string; // gravamos em notas
-    resultado: string; // gravamos em notas
-    proxima_acao: string; // gravamos em notas
-    km_informado: string; // input
-    km_referencia: string; // input
+    objetivo: string; // notas
+    resultado: string; // notas
+    proxima_acao: string; // notas
+    km_informado: string;
+    km_referencia: string;
     estado: EstadoVisita;
   }>({
     vendedor_id: '',
@@ -147,6 +146,7 @@ export default function VisitasPage() {
         .from('clientes')
         .select('id, nome')
         .order('nome', { ascending: true });
+
       if (cErr) throw cErr;
       setClientes((clientesData ?? []) as any);
 
@@ -154,6 +154,7 @@ export default function VisitasPage() {
         .from('vendedores')
         .select('id, nome, email')
         .order('nome', { ascending: true });
+
       if (vErr) throw vErr;
       setVendedores((vendedoresData ?? []) as any);
 
@@ -240,15 +241,6 @@ export default function VisitasPage() {
   }
 
   function abrirModalEditar(visita: VisitaRow) {
-    const kmLanc = kmLancMap[visita.id];
-    const kmStatus = (kmLanc?.status ?? '').toUpperCase();
-
-    // Regra: só bloqueia edição se o KM estiver PAGO
-    if (kmStatus === 'PAGO') {
-      alert('Esta visita não pode ser editada porque a quilometragem já está PAGA (auditoria).');
-      return;
-    }
-
     setModoEdicao(true);
     setVisitaEditandoId(visita.id);
 
@@ -260,11 +252,13 @@ export default function VisitasPage() {
       data_visita: visita.data_visita,
       hora_inicio: '',
       hora_fim: '',
-      objetivo: notas, // mantemos simples: tudo vai para notas
+      objetivo: notas, // por enquanto reaproveita
       resultado: '',
       proxima_acao: '',
-      km_informado: visita.km_informado != null ? String(visita.km_informado) : '',
-      km_referencia: visita.km_referencia != null ? String(visita.km_referencia) : '',
+      km_informado:
+        visita.km_informado != null ? String(visita.km_informado) : '',
+      km_referencia:
+        visita.km_referencia != null ? String(visita.km_referencia) : '',
       estado: (visita.estado ?? 'AGENDADA') as EstadoVisita,
     });
 
@@ -289,18 +283,59 @@ export default function VisitasPage() {
     return parts.join('\n');
   }
 
+  // KM PAGO? (trava tudo exceto notas)
+  const kmPago = useMemo(() => {
+    if (!modoEdicao || !visitaEditandoId) return false;
+    const st = String(kmLancMap?.[visitaEditandoId]?.status ?? '').toUpperCase();
+    return st === 'PAGO';
+  }, [modoEdicao, visitaEditandoId, kmLancMap]);
+
   // =========================================================
-  // SUBMIT (CREATE/UPDATE)
+  // SUBMIT
   // =========================================================
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
+    // Se estiver PAGO e estamos editando, só permitimos atualizar NOTAS.
+    if (modoEdicao && visitaEditandoId && kmPago) {
+      setLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        const notasSomente = buildNotas();
+
+        const { error } = await supabase
+          .from('vendedor_visitas')
+          .update({
+            notas: notasSomente,
+            updated_by: user?.id ?? null,
+            origem: 'ADMIN',
+          })
+          .eq('id', visitaEditandoId);
+
+        if (error) throw error;
+
+        alert('Notas atualizadas (KM PAGO: demais campos bloqueados).');
+        setShowModal(false);
+        resetForm();
+        await carregarTudo();
+      } catch (e: any) {
+        console.error(e);
+        alert('Erro ao salvar notas: ' + (e?.message ?? 'Erro desconhecido'));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Fluxo normal (AGENDADA/REALIZADA/CANCELADA não pago)
     if (!form.vendedor_id || !form.data_visita || !form.objetivo) {
       alert('Preencha: Vendedor, Data e Objetivo.');
       return;
     }
-
     if (!form.cliente_id) {
       alert('Selecione um cliente/farmácia.');
       return;
@@ -337,13 +372,6 @@ export default function VisitasPage() {
       };
 
       if (modoEdicao && visitaEditandoId) {
-        // Regra adicional no front: se já estiver com KM PAGO, não deixa salvar
-        const kmLanc = kmLancMap[visitaEditandoId];
-        if ((kmLanc?.status ?? '').toUpperCase() === 'PAGO') {
-          alert('Não é possível salvar: quilometragem já está PAGA (auditoria).');
-          return;
-        }
-
         const { error } = await supabase
           .from('vendedor_visitas')
           .update(payload)
@@ -353,7 +381,6 @@ export default function VisitasPage() {
         alert('Visita atualizada.');
       } else {
         payload.created_by = user?.id ?? null;
-
         const { error } = await supabase.from('vendedor_visitas').insert(payload);
         if (error) throw error;
         alert('Visita agendada.');
@@ -371,12 +398,11 @@ export default function VisitasPage() {
   }
 
   // =========================================================
-  // AÇÕES (CONCLUIR / CANCELAR)
+  // AÇÕES
   // =========================================================
 
   async function concluirVisita(visita: VisitaRow) {
-    const estadoAtual = (visita.estado ?? 'AGENDADA') as EstadoVisita;
-    if (estadoAtual === 'REALIZADA') return;
+    if ((visita.estado ?? 'AGENDADA') === 'REALIZADA') return;
 
     const km = visita.km_informado ?? null;
     if (km == null || Number(km) <= 0) {
@@ -399,13 +425,14 @@ export default function VisitasPage() {
           concluida_em: new Date().toISOString(),
           concluida_por: user?.id ?? null,
           updated_by: user?.id ?? null,
+          origem: 'ADMIN',
         })
         .eq('id', visita.id);
 
       if (error) throw error;
 
       await carregarTudo();
-      alert('Visita concluída. Verifique o lançamento de KM (PENDENTE).');
+      alert('Visita concluída. Verifique o lançamento de KM (PENDENTE/APROVADO).');
     } catch (e: any) {
       console.error(e);
       alert('Erro ao concluir visita: ' + (e?.message ?? 'Erro desconhecido'));
@@ -415,13 +442,8 @@ export default function VisitasPage() {
   }
 
   async function cancelarVisita(visita: VisitaRow) {
-    const estadoAtual = (visita.estado ?? 'AGENDADA') as EstadoVisita;
+    if ((visita.estado ?? 'AGENDADA') === 'CANCELADA') return;
 
-    if (estadoAtual === 'CANCELADA') return;
-    if (estadoAtual === 'REALIZADA') {
-      alert('Visita REALIZADA não deve ser cancelada neste fluxo.');
-      return;
-    }
     if (!confirm('Cancelar esta visita?')) return;
 
     setLoading(true);
@@ -435,6 +457,7 @@ export default function VisitasPage() {
         .update({
           estado: 'CANCELADA',
           updated_by: user?.id ?? null,
+          origem: 'ADMIN',
         })
         .eq('id', visita.id);
 
@@ -458,6 +481,7 @@ export default function VisitasPage() {
     const term = busca.trim().toLowerCase();
     return visitas.filter((v) => {
       const estado = (v.estado ?? 'AGENDADA') as EstadoVisita;
+
       const matchStatus = filterStatus === 'TODOS' || estado === filterStatus;
 
       const clienteNome = (v.clientes?.nome ?? '').toLowerCase();
@@ -607,9 +631,6 @@ export default function VisitasPage() {
           const StatusIcon = statusIcons[estado];
 
           const kmLanc = kmLancMap[visita.id];
-          const kmStatus = (kmLanc?.status ?? '').toUpperCase();
-          const canEdit = kmStatus !== 'PAGO';
-
           const kmLancBadge =
             kmLanc?.status ? (
               <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-800">
@@ -647,7 +668,6 @@ export default function VisitasPage() {
                         <StatusIcon className="w-3 h-3" />
                         {statusLabels[estado]}
                       </span>
-
                       {kmLancBadge}
                     </div>
                   </div>
@@ -707,46 +727,31 @@ export default function VisitasPage() {
 
                 {/* Actions */}
                 <div className="flex flex-row lg:flex-col gap-2 justify-end">
-                  {canEdit ? (
+                  <button
+                    onClick={() => abrirModalEditar(visita)}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-sm"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    Editar
+                  </button>
+
+                  {(visita.estado ?? 'AGENDADA') !== 'REALIZADA' && (
                     <button
-                      onClick={() => abrirModalEditar(visita)}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-sm"
+                      onClick={() => concluirVisita(visita)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-sm"
                     >
-                      <Edit3 className="w-4 h-4" />
-                      Editar
+                      <CheckCircle className="w-4 h-4" />
+                      Concluir
                     </button>
-                  ) : (
-                    <div className="text-xs text-gray-500 max-w-[240px]">
-                      KM está PAGO: edição bloqueada (auditoria).
-                    </div>
                   )}
 
-                  {/* Só mostra Concluir/Cancelar se NÃO estiver REALIZADA */}
-                  {estado !== 'REALIZADA' && (
-                    <>
-                      <button
-                        onClick={() => concluirVisita(visita)}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-sm"
-                      >
-                        <CheckCircle className="w-4 h-4" />
-                        Concluir
-                      </button>
-
-                      <button
-                        onClick={() => cancelarVisita(visita)}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm"
-                      >
-                        <Ban className="w-4 h-4" />
-                        Cancelar
-                      </button>
-                    </>
-                  )}
-
-                  {estado === 'REALIZADA' && canEdit && (
-                    <div className="text-xs text-gray-500 max-w-[240px]">
-                      Realizada: edição permitida (Admin) enquanto KM não estiver PAGO.
-                    </div>
-                  )}
+                  <button
+                    onClick={() => cancelarVisita(visita)}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm"
+                  >
+                    <Ban className="w-4 h-4" />
+                    Cancelar
+                  </button>
                 </div>
               </div>
             </div>
@@ -780,6 +785,22 @@ export default function VisitasPage() {
               </button>
             </div>
 
+            {/* ALERTA quando KM está PAGO */}
+            {modoEdicao && kmPago && (
+              <div className="mx-6 mt-6 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 mt-0.5 text-amber-700" />
+                  <div>
+                    <p className="font-semibold">KM está PAGO</p>
+                    <p className="mt-1">
+                      Para auditoria, apenas <span className="font-semibold">Notas</span> pode ser editado.
+                      Os demais campos estão bloqueados.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Cliente */}
@@ -792,6 +813,7 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
+                    disabled={kmPago}
                   >
                     <option value="">Selecione...</option>
                     {clientes.map((c) => (
@@ -812,6 +834,7 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, vendedor_id: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
+                    disabled={kmPago}
                   >
                     <option value="">Selecione...</option>
                     {vendedores.map((v) => (
@@ -834,10 +857,11 @@ export default function VisitasPage() {
                   onChange={(e) => setForm({ ...form, data_visita: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
+                  disabled={kmPago}
                 />
               </div>
 
-              {/* Horas */}
+              {/* Horas (UI) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -848,6 +872,7 @@ export default function VisitasPage() {
                     value={form.hora_inicio}
                     onChange={(e) => setForm({ ...form, hora_inicio: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={kmPago}
                   />
                 </div>
 
@@ -860,6 +885,7 @@ export default function VisitasPage() {
                     value={form.hora_fim}
                     onChange={(e) => setForm({ ...form, hora_fim: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={kmPago}
                   />
                 </div>
               </div>
@@ -878,10 +904,8 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, km_informado: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
+                    disabled={kmPago}
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Regra: para concluir como REALIZADA, precisa ser &gt; 0.
-                  </p>
                 </div>
 
                 <div>
@@ -896,29 +920,31 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, km_referencia: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
+                    disabled={kmPago}
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Depois podemos automatizar “Farmácia X = 15km”.
-                  </p>
                 </div>
               </div>
 
-              {/* Objetivo */}
+              {/* Objetivo / Notas (EDITÁVEL mesmo quando PAGO) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Objetivo *
+                  Notas *
                 </label>
                 <textarea
                   value={form.objetivo}
                   onChange={(e) => setForm({ ...form, objetivo: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Descreva o objetivo da visita..."
                   rows={4}
                   required
                 />
+                {kmPago && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    KM PAGO: apenas este campo será salvo.
+                  </p>
+                )}
               </div>
 
-              {/* opcionais */}
+              {/* Resultado / Próxima ação (bloqueia quando PAGO) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -929,6 +955,7 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, resultado: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     rows={3}
+                    disabled={kmPago}
                   />
                 </div>
 
@@ -941,11 +968,12 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, proxima_acao: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     rows={3}
+                    disabled={kmPago}
                   />
                 </div>
               </div>
 
-              {/* Estado */}
+              {/* Estado (bloqueia quando PAGO) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Estado
@@ -954,14 +982,12 @@ export default function VisitasPage() {
                   value={form.estado}
                   onChange={(e) => setForm({ ...form, estado: e.target.value as EstadoVisita })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={kmPago}
                 >
                   <option value="AGENDADA">Agendada</option>
-                  <option value="CANCELADA">Cancelada</option>
                   <option value="REALIZADA">Realizada</option>
+                  <option value="CANCELADA">Cancelada</option>
                 </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  Dica: o botão “Concluir” continua a ser o fluxo padrão para marcar como REALIZADA e gerar o KM, mas o Admin pode ajustar aqui.
-                </p>
               </div>
 
               <div className="flex gap-3 pt-2">
@@ -981,7 +1007,7 @@ export default function VisitasPage() {
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:shadow-lg font-semibold transition-all flex items-center justify-center gap-2"
                 >
                   <Save className="w-5 h-5" />
-                  {modoEdicao ? 'Salvar alterações' : 'Agendar visita'}
+                  {modoEdicao ? (kmPago ? 'Salvar notas' : 'Salvar alterações') : 'Agendar visita'}
                 </button>
               </div>
             </form>
