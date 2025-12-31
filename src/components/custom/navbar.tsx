@@ -177,7 +177,7 @@ export default function Navbar() {
       {/* Desktop */}
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 gap-3">
+          <div className="flex items-center h-16 gap-3">
             {/* LOGO apenas (sem texto 100PHARMA) */}
             <Link href={homeHref} className="flex items-center gap-3">
               <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
