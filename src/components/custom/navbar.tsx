@@ -86,7 +86,6 @@ export default function Navbar() {
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [displayName, setDisplayName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
-  const [loadingIdentity, setLoadingIdentity] = useState(true);
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -103,8 +102,6 @@ export default function Navbar() {
     let cancelled = false;
 
     async function loadIdentity() {
-      setLoadingIdentity(true);
-
       const { data: uRes } = await supabase.auth.getUser();
       const u = user ?? uRes.user ?? null;
 
@@ -113,7 +110,6 @@ export default function Navbar() {
           setRole('UNKNOWN');
           setDisplayName('');
           setEmail('');
-          setLoadingIdentity(false);
         }
         return;
       }
@@ -150,7 +146,6 @@ export default function Navbar() {
       if (!cancelled) {
         setRole(resolvedRole);
         setDisplayName(name);
-        setLoadingIdentity(false);
       }
     }
 
@@ -168,7 +163,7 @@ export default function Navbar() {
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
   const homeHref = isVendor ? '/portal' : '/dashboard';
 
-  // ERP real: poucos itens visíveis + "Mais"
+  // poucos itens visíveis + "Mais" no admin
   const primaryItems = isVendor ? menuItems : menuItems.slice(0, 9);
   const moreItems = isVendor ? [] : menuItems.slice(9);
 
@@ -177,9 +172,10 @@ export default function Navbar() {
       {/* Desktop */}
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* SEM justify-between. A direita fica fixa via ml-auto */}
           <div className="flex items-center h-16 gap-3">
-            {/* LOGO apenas (sem texto 100PHARMA) */}
-            <Link href={homeHref} className="flex items-center gap-3">
+            {/* Logo */}
+            <Link href={homeHref} className="flex items-center">
               <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
                 <img
                   src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png"
@@ -189,93 +185,90 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Menus principais */}
-            <div className="flex items-center gap-1 min-w-0">
-              {primaryItems.map((item) => {
-                const Icon = item.icon;
-                const active = isActivePath(pathname, item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cx(
-                      'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
-                      active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-500/30'
-                    )}
-                  >
-                    <Icon className="w-4 h-4" />
-                    <span className="hidden xl:inline">{item.label}</span>
-                  </Link>
-                );
-              })}
-
-              {/* Dropdown "Mais" (remove aqueles “…” feios de overflow) */}
-              {!isVendor && moreItems.length > 0 && (
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setMoreOpen((v) => !v)}
-                    className={cx(
-                      'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
-                      'text-white hover:bg-blue-500/30'
-                    )}
-                  >
-                    <MoreHorizontal className="w-4 h-4" />
-                    <span className="hidden xl:inline">Mais</span>
-                    <ChevronDown className="w-4 h-4 opacity-90" />
-                  </button>
-
-                  {moreOpen && (
-                    <div
-                      className="absolute left-0 mt-2 w-72 rounded-xl bg-white text-gray-900 shadow-xl ring-1 ring-black/10 overflow-hidden z-50"
-                      onMouseLeave={() => setMoreOpen(false)}
+            {/* Menu (flexível e rolável) — ISSO impede colisão com o "Sair" */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1 overflow-x-auto pr-2">
+                {primaryItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = isActivePath(pathname, item.href);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cx(
+                        'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
+                        active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-500/30'
+                      )}
                     >
-                      <div className="p-2">
-                        {moreItems.map((item) => {
-                          const Icon = item.icon;
-                          const active = isActivePath(pathname, item.href);
-                          return (
-                            <Link
-                              key={item.href}
-                              href={item.href}
-                              onClick={() => setMoreOpen(false)}
-                              className={cx(
-                                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition',
-                                active ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50'
-                              )}
-                            >
-                              <Icon className="w-4 h-4" />
-                              <span>{item.label}</span>
-                            </Link>
-                          );
-                        })}
+                      <Icon className="w-4 h-4" />
+                      <span className="hidden xl:inline">{item.label}</span>
+                    </Link>
+                  );
+                })}
+
+                {!isVendor && moreItems.length > 0 && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setMoreOpen((v) => !v)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap text-white hover:bg-blue-500/30"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
+                      <span className="hidden xl:inline">Mais</span>
+                      <ChevronDown className="w-4 h-4 opacity-90" />
+                    </button>
+
+                    {moreOpen && (
+                      <div
+                        className="absolute left-0 mt-2 w-72 rounded-xl bg-white text-gray-900 shadow-xl ring-1 ring-black/10 overflow-hidden z-50"
+                        onMouseLeave={() => setMoreOpen(false)}
+                      >
+                        <div className="p-2">
+                          {moreItems.map((item) => {
+                            const Icon = item.icon;
+                            const active = isActivePath(pathname, item.href);
+                            return (
+                              <Link
+                                key={item.href}
+                                href={item.href}
+                                onClick={() => setMoreOpen(false)}
+                                className={cx(
+                                  'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition',
+                                  active ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50'
+                                )}
+                              >
+                                <Icon className="w-4 h-4" />
+                                <span>{item.label}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Direita: identidade + sair (isolado do menu) */}
-<div className="ml-auto flex items-center gap-4 pl-4 border-l border-white/20 shrink-0">
-  <div className="text-sm text-right leading-tight hidden xl:block">
-    <div className="font-semibold">
-      {displayName || email || '—'}
-    </div>
-    <div className="text-xs opacity-90">
-      {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-    </div>
-  </div>
+            {/* Direita fixa */}
+            <div className="ml-auto flex-none flex items-center gap-4 pl-4 border-l border-white/20">
+              {/* Identidade (somente em telas maiores, para não apertar) */}
+              <div className="text-sm text-right leading-tight hidden xl:block">
+                <div className="font-semibold">{displayName || email || '—'}</div>
+                <div className="text-xs opacity-90">
+                  {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
+                </div>
+              </div>
 
-  <button
-    onClick={handleLogout}
-    className="min-w-[88px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
-    title="Sair"
-  >
-    <LogOut className="w-4 h-4" />
-    <span>Sair</span>
-  </button>
-</div>
+              <button
+                onClick={handleLogout}
+                className="min-w-[92px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
+                title="Sair"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sair</span>
+              </button>
+            </div>
           </div>
         </div>
       </nav>
