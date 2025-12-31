@@ -10,7 +10,6 @@ import {
   FileText,
   Users,
   UserCircle,
-  TrendingUp,
   MapPin,
   Target,
   DollarSign,
@@ -28,6 +27,7 @@ import {
   Home,
   MoreHorizontal,
   ChevronDown,
+  TrendingUp,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
@@ -37,6 +37,8 @@ type Role = 'ADMIN' | 'VENDEDOR' | 'UNKNOWN';
 
 const LOGO_URL =
   'https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png';
+
+/* ================= MENUS ================= */
 
 const adminMenuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -48,7 +50,7 @@ const adminMenuItems = [
   { href: '/vendas', label: 'Vendas', icon: ShoppingCart },
   { href: '/faturas', label: 'Faturas', icon: FileText },
 
-  // a partir daqui: dropdown "Mais"
+  // Dropdown "Mais"
   { href: '/comissoes', label: 'Comissões', icon: TrendingUp },
   { href: '/financeiro', label: 'Financeiro', icon: Wallet },
   { href: '/tarefas', label: 'Tarefas', icon: Calendar },
@@ -69,6 +71,8 @@ const vendorMenuItems = [
   { href: '/portal/metas', label: 'Metas', icon: Target },
 ];
 
+/* ================= HELPERS ================= */
+
 function isActivePath(pathname: string, href: string) {
   if (pathname === href) return true;
   if (href !== '/' && pathname.startsWith(href + '/')) return true;
@@ -79,6 +83,8 @@ function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
 
+/* ================= COMPONENT ================= */
+
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -86,8 +92,8 @@ export default function Navbar() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [role, setRole] = useState<Role>('UNKNOWN');
-  const [displayName, setDisplayName] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
+  const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -100,30 +106,22 @@ export default function Navbar() {
 
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
+  /* ---------- identidade ---------- */
   useEffect(() => {
     let cancelled = false;
 
     async function loadIdentity() {
-      const { data: uRes } = await supabase.auth.getUser();
-      const u = user ?? uRes.user ?? null;
+      const { data } = await supabase.auth.getUser();
+      const u = user ?? data.user;
 
-      if (!u) {
-        if (!cancelled) {
-          setRole('UNKNOWN');
-          setDisplayName('');
-          setEmail('');
-        }
-        return;
-      }
+      if (!u) return;
 
-      const userId = u.id;
-      const userEmail = u.email ?? '';
-      if (!cancelled) setEmail(userEmail);
+      setEmail(u.email ?? '');
 
       const { data: perfil } = await supabase
         .from('perfis')
         .select('role, vendedor_id')
-        .eq('id', userId)
+        .eq('id', u.id)
         .maybeSingle();
 
       const r = String(perfil?.role ?? '').toUpperCase();
@@ -139,20 +137,17 @@ export default function Navbar() {
           .eq('id', perfil.vendedor_id)
           .maybeSingle();
 
-        const vendNome = String(vend?.nome ?? '').trim();
-        if (vendNome) name = vendNome;
+        if (vend?.nome) name = vend.nome;
       }
-
-      if (!name) name = userEmail;
 
       if (!cancelled) {
         setRole(resolvedRole);
-        setDisplayName(name);
+        setDisplayName(name || u.email || '');
       }
     }
 
     loadIdentity();
-    const { data: sub } = supabase.auth.onAuthStateChange(() => loadIdentity());
+    const { data: sub } = supabase.auth.onAuthStateChange(loadIdentity);
 
     return () => {
       cancelled = true;
@@ -160,11 +155,12 @@ export default function Navbar() {
     };
   }, [supabase, user?.id]);
 
+  /* ---------- fechar dropdown ---------- */
   useEffect(() => {
     function onDown(e: MouseEvent) {
-      if (!moreOpen) return;
-      const target = e.target as Node;
-      if (moreRef.current && !moreRef.current.contains(target)) setMoreOpen(false);
+      if (moreOpen && moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        setMoreOpen(false);
+      }
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setMoreOpen(false);
@@ -179,100 +175,83 @@ export default function Navbar() {
 
   const isVendor = role === 'VENDEDOR';
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
-  const homeHref = isVendor ? '/portal' : '/dashboard';
 
-  // Admin: visível só até Faturas
   const primaryItems = isVendor ? menuItems : menuItems.slice(0, 8);
   const moreItems = isVendor ? [] : menuItems.slice(8);
 
-  const nameToShow = displayName || email || '';
+  /* ================= RENDER ================= */
 
   return (
     <>
-      {/* Desktop */}
+      {/* ========== DESKTOP ========== */}
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto px-6">
           <div className="flex items-center h-16 gap-3">
-            <Link href={homeHref} className="flex items-center">
-              <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
+            {/* Logo */}
+            <Link href={isVendor ? '/portal' : '/dashboard'}>
+              <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 flex items-center justify-center">
                 <img src={LOGO_URL} alt="100PHARMA" className="h-full w-full object-contain p-1" />
               </div>
             </Link>
 
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1 overflow-x-auto pr-2">
-                {primaryItems.map((item) => {
-                  const Icon = item.icon;
-                  const active = isActivePath(pathname, item.href);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cx(
-                        'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
-                        active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-500/30'
-                      )}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span className="hidden xl:inline">{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
+            {/* Menu principal SEM overflow */}
+            <div className="flex items-center gap-1">
+              {primaryItems.map((item) => {
+                const Icon = item.icon;
+                const active = isActivePath(pathname, item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cx(
+                      'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
+                      active ? 'bg-white text-blue-600 shadow-lg' : 'hover:bg-blue-500/30'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="hidden xl:inline">{item.label}</span>
+                  </Link>
+                );
+              })}
             </div>
 
-            <div className="ml-auto flex-none flex items-center gap-2 pl-4 border-l border-white/20">
-              {!isVendor && moreItems.length > 0 && (
+            {/* Direita */}
+            <div className="ml-auto flex items-center gap-2 border-l border-white/20 pl-4">
+              {!isVendor && (
                 <div className="relative" ref={moreRef}>
                   <button
-                    type="button"
                     onClick={() => setMoreOpen((v) => !v)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition whitespace-nowrap text-white hover:bg-blue-500/30"
-                    aria-haspopup="menu"
-                    aria-expanded={moreOpen}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-blue-500/30"
                   >
                     <MoreHorizontal className="w-4 h-4" />
                     <span className="hidden xl:inline">Mais</span>
-                    <ChevronDown className="w-4 h-4 opacity-90" />
+                    <ChevronDown className="w-4 h-4" />
                   </button>
 
                   {moreOpen && (
-                    <div className="absolute right-0 mt-2 w-80 rounded-xl bg-white text-gray-900 shadow-xl ring-1 ring-black/10 overflow-hidden z-[9999]">
+                    <div className="absolute right-0 mt-2 w-80 rounded-xl bg-white text-gray-900 shadow-xl ring-1 ring-black/10 z-50">
                       <div className="p-2">
-                        <div className="px-3 py-2 text-xs font-semibold text-gray-500">
-                          Atalhos
-                        </div>
-
                         {moreItems.map((item) => {
                           const Icon = item.icon;
-                          const active = isActivePath(pathname, item.href);
                           return (
                             <Link
                               key={item.href}
                               href={item.href}
                               onClick={() => setMoreOpen(false)}
-                              className={cx(
-                                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition',
-                                active ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50'
-                              )}
+                              className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
                             >
                               <Icon className="w-4 h-4" />
-                              <span>{item.label}</span>
+                              {item.label}
                             </Link>
                           );
                         })}
 
                         <div className="my-2 h-px bg-gray-200" />
 
-                        {nameToShow && (
-                          <div className="px-3 py-2">
-                            <div className="text-sm font-semibold">{nameToShow}</div>
-                            <div className="text-xs text-gray-600">
-                              {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-                            </div>
-                            {email && <div className="text-xs text-gray-500 mt-1">{email}</div>}
-                          </div>
-                        )}
+                        <div className="px-3 py-2 text-sm">
+                          <div className="font-semibold">{displayName}</div>
+                          <div className="text-xs text-gray-500">{email}</div>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -281,76 +260,52 @@ export default function Navbar() {
 
               <button
                 onClick={handleLogout}
-                className="min-w-[96px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
-                title="Sair"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-red-500/30"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Sair</span>
+                Sair
               </button>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* Mobile */}
+      {/* ========== MOBILE ========== */}
       <nav className="lg:hidden bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
-        <div className="px-4">
-          <div className="flex items-center justify-between h-16">
-            <Link href={homeHref} className="flex items-center gap-2">
-              <div className="h-10 w-10 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
-                <img src={LOGO_URL} alt="100PHARMA" className="h-full w-full object-contain p-1" />
-              </div>
-            </Link>
+        <div className="px-4 flex items-center justify-between h-16">
+          <Link href={isVendor ? '/portal' : '/dashboard'}>
+            <img src={LOGO_URL} alt="100PHARMA" className="h-9 w-9" />
+          </Link>
 
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-lg hover:bg-blue-500/30 transition-colors"
-              aria-label="Abrir menu"
-            >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
+          <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            {mobileMenuOpen ? <X /> : <Menu />}
+          </button>
         </div>
 
         {mobileMenuOpen && (
-          <div className="border-t border-blue-500/30 bg-blue-700/95 backdrop-blur-sm">
-            <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
-              {(displayName || email) && (
-                <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
-                  <p className="text-sm font-semibold">{displayName || email}</p>
-                  <p className="text-xs opacity-90">
-                    {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-                  </p>
-                </div>
-              )}
+          <div className="bg-blue-700 px-4 py-4 space-y-1">
+            {menuItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-3 px-3 py-3 rounded-lg hover:bg-blue-600"
+                >
+                  <Icon className="w-5 h-5" />
+                  {item.label}
+                </Link>
+              );
+            })}
 
-              {menuItems.map((item) => {
-                const Icon = item.icon;
-                const active = isActivePath(pathname, item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={cx(
-                      'flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition',
-                      active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-600/50'
-                    )}
-                  >
-                    <Icon className="w-5 h-5" />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors mt-2"
-              >
-                <LogOut className="w-5 h-5" />
-                <span>Sair</span>
-              </button>
-            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full mt-2 flex items-center gap-3 px-3 py-3 rounded-lg hover:bg-red-500/30"
+            >
+              <LogOut className="w-5 h-5" />
+              Sair
+            </button>
           </div>
         )}
       </nav>
