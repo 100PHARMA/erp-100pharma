@@ -47,9 +47,9 @@ const adminMenuItems = [
   { href: '/vendedores', label: 'Vendedores', icon: UserCircle },
   { href: '/vendas', label: 'Vendas', icon: ShoppingCart },
   { href: '/faturas', label: 'Faturas', icon: FileText },
-  { href: '/comissoes', label: 'Comissões', icon: TrendingUp },
 
-  // Mais
+  // a partir daqui: dropdown "Mais"
+  { href: '/comissoes', label: 'Comissões', icon: TrendingUp },
   { href: '/financeiro', label: 'Financeiro', icon: Wallet },
   { href: '/tarefas', label: 'Tarefas', icon: Calendar },
   { href: '/visitas', label: 'Visitas', icon: MapPin },
@@ -91,7 +91,6 @@ export default function Navbar() {
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-
   const moreRef = useRef<HTMLDivElement | null>(null);
 
   const handleLogout = async () => {
@@ -99,7 +98,6 @@ export default function Navbar() {
     router.push('/login');
   };
 
-  // Não renderiza no /login
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
   useEffect(() => {
@@ -162,7 +160,6 @@ export default function Navbar() {
     };
   }, [supabase, user?.id]);
 
-  // Fechar dropdown ao clicar fora / ESC
   useEffect(() => {
     function onDown(e: MouseEvent) {
       if (!moreOpen) return;
@@ -184,11 +181,10 @@ export default function Navbar() {
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
   const homeHref = isVendor ? '/portal' : '/dashboard';
 
-  // Admin: principais + Mais
-  const primaryItems = isVendor ? menuItems : menuItems.slice(0, 9);
-  const moreItems = isVendor ? [] : menuItems.slice(9);
+  // Admin: visível só até Faturas
+  const primaryItems = isVendor ? menuItems : menuItems.slice(0, 8);
+  const moreItems = isVendor ? [] : menuItems.slice(8);
 
-  // Nome a mostrar (evita “—” feio)
   const nameToShow = displayName || email || '';
 
   return (
@@ -197,14 +193,12 @@ export default function Navbar() {
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center h-16 gap-3">
-            {/* Logo */}
             <Link href={homeHref} className="flex items-center">
               <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
                 <img src={LOGO_URL} alt="100PHARMA" className="h-full w-full object-contain p-1" />
               </div>
             </Link>
 
-            {/* Menu rolável (somente LINKS PRINCIPAIS) */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1 overflow-x-auto pr-2">
                 {primaryItems.map((item) => {
@@ -227,9 +221,7 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Ações à direita (FORA do overflow) */}
             <div className="ml-auto flex-none flex items-center gap-2 pl-4 border-l border-white/20">
-              {/* Mais (fora do overflow -> não corta o dropdown) */}
               {!isVendor && moreItems.length > 0 && (
                 <div className="relative" ref={moreRef}>
                   <button
@@ -250,6 +242,7 @@ export default function Navbar() {
                         <div className="px-3 py-2 text-xs font-semibold text-gray-500">
                           Atalhos
                         </div>
+
                         {moreItems.map((item) => {
                           const Icon = item.icon;
                           const active = isActivePath(pathname, item.href);
@@ -271,16 +264,13 @@ export default function Navbar() {
 
                         <div className="my-2 h-px bg-gray-200" />
 
-                        {/* Identidade compacta aqui dentro (fica mais limpo na barra) */}
                         {nameToShow && (
                           <div className="px-3 py-2">
                             <div className="text-sm font-semibold">{nameToShow}</div>
                             <div className="text-xs text-gray-600">
                               {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
                             </div>
-                            {email && (
-                              <div className="text-xs text-gray-500 mt-1">{email}</div>
-                            )}
+                            {email && <div className="text-xs text-gray-500 mt-1">{email}</div>}
                           </div>
                         )}
                       </div>
@@ -289,7 +279,6 @@ export default function Navbar() {
                 </div>
               )}
 
-              {/* Botão Sair (fixo e sempre clicável) */}
               <button
                 onClick={handleLogout}
                 className="min-w-[96px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
