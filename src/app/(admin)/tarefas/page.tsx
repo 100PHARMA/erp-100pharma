@@ -10,6 +10,7 @@ import {
   AlertCircle,
   XCircle,
   X,
+  Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -19,16 +20,16 @@ type Estado = 'PENDENTE' | 'EM_ANDAMENTO' | 'CONCLUIDA' | 'CANCELADA';
 interface Vendedor {
   id: string;
   nome: string;
-  email?: string;
+  email?: string | null;
 }
 
 interface Cliente {
   id: string;
   nome: string;
-  tipo?: string;
+  tipo?: string | null;
 }
 
-interface TarefaDB {
+interface TarefaRow {
   id: string;
   titulo: string;
   descricao: string;
@@ -36,18 +37,24 @@ interface TarefaDB {
   estado: Estado;
   responsavel_vendedor_id: string | null;
   cliente_id: string | null;
-  data_vencimento: string; // yyyy-mm-dd
-  created_at: string;
-  updated_at: string;
+  data_vencimento: string; // YYYY-MM-DD
+  created_at?: string;
+  updated_at?: string;
+}
 
-  vendedores?: Vendedor | null;
-  clientes?: Cliente | null;
+interface TarefaUI extends TarefaRow {
+  responsavel_nome?: string;
+  cliente_nome?: string;
+}
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(' ');
 }
 
 export default function TarefasPage() {
   const [carregando, setCarregando] = useState(true);
 
-  const [tarefas, setTarefas] = useState<TarefaDB[]>([]);
+  const [tarefas, setTarefas] = useState<TarefaUI[]>([]);
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
 
@@ -56,23 +63,24 @@ export default function TarefasPage() {
   const [filtroPrioridade, setFiltroPrioridade] = useState<string>('TODOS');
 
   const [showModal, setShowModal] = useState(false);
+  const [salvando, setSalvando] = useState(false);
 
   const [novaTarefa, setNovaTarefa] = useState<{
     titulo: string;
     descricao: string;
     prioridade: Prioridade;
-    estado: Estado;
     responsavel_vendedor_id: string;
     cliente_id: string;
     data_vencimento: string;
+    estado: Estado;
   }>({
     titulo: '',
     descricao: '',
     prioridade: 'MEDIA',
-    estado: 'PENDENTE',
     responsavel_vendedor_id: '',
     cliente_id: '',
     data_vencimento: '',
+    estado: 'PENDENTE',
   });
 
   // =========================================================
@@ -80,6 +88,7 @@ export default function TarefasPage() {
   // =========================================================
   useEffect(() => {
     carregarTudo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const carregarTudo = async () => {
@@ -90,32 +99,40 @@ export default function TarefasPage() {
         supabase
           .from('tarefas')
           .select(
-            `
-              id, titulo, descricao, prioridade, estado,
-              responsavel_vendedor_id, cliente_id, data_vencimento,
-              created_at, updated_at,
-              vendedores:responsavel_vendedor_id (id, nome, email),
-              clientes:cliente_id (id, nome, tipo)
-            `
+            'id,titulo,descricao,prioridade,estado,responsavel_vendedor_id,cliente_id,data_vencimento,created_at,updated_at'
           )
           .order('data_vencimento', { ascending: true })
           .order('created_at', { ascending: false }),
 
-        supabase.from('vendedores').select('id, nome, email').order('nome'),
+        supabase.from('vendedores').select('id,nome,email').order('nome'),
 
-        supabase.from('clientes').select('id, nome, tipo').order('nome'),
+        supabase.from('clientes').select('id,nome,tipo').order('nome'),
       ]);
 
       if (tarefasRes.error) throw tarefasRes.error;
       if (vendedoresRes.error) throw vendedoresRes.error;
       if (clientesRes.error) throw clientesRes.error;
 
-      setTarefas((tarefasRes.data as any) || []);
-      setVendedores(vendedoresRes.data || []);
-      setClientes(clientesRes.data || []);
+      const vend = (vendedoresRes.data || []) as Vendedor[];
+      const cli = (clientesRes.data || []) as Cliente[];
+      setVendedores(vend);
+      setClientes(cli);
+
+      const vendMap = new Map(vend.map((v) => [v.id, v.nome]));
+      const cliMap = new Map(cli.map((c) => [c.id, c.nome]));
+
+      const rows = ((tarefasRes.data || []) as any as TarefaRow[]).map((t) => ({
+        ...t,
+        responsavel_nome: t.responsavel_vendedor_id
+          ? vendMap.get(t.responsavel_vendedor_id) ?? undefined
+          : undefined,
+        cliente_nome: t.cliente_id ? cliMap.get(t.cliente_id) ?? undefined : undefined,
+      }));
+
+      setTarefas(rows);
     } catch (e: any) {
-      console.error('Erro ao carregar dados de tarefas:', e);
-      alert('Erro ao carregar dados: ' + (e?.message ?? 'Erro desconhecido'));
+      console.error('Erro ao carregar tarefas:', e);
+      alert('Erro ao carregar tarefas: ' + (e?.message ?? 'Erro desconhecido'));
     } finally {
       setCarregando(false);
     }
@@ -127,13 +144,13 @@ export default function TarefasPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!novaTarefa.titulo || !novaTarefa.descricao || !novaTarefa.data_vencimento) {
-      alert('Por favor, preencha Título, Descrição e Data de Vencimento.');
+    if (!novaTarefa.titulo.trim() || !novaTarefa.descricao.trim() || !novaTarefa.data_vencimento) {
+      alert('Preencha Título, Descrição e Data de Vencimento.');
       return;
     }
 
     try {
-      setCarregando(true);
+      setSalvando(true);
 
       const payload = {
         titulo: novaTarefa.titulo.trim(),
@@ -146,7 +163,6 @@ export default function TarefasPage() {
       };
 
       const { error } = await supabase.from('tarefas').insert(payload);
-
       if (error) throw error;
 
       setShowModal(false);
@@ -154,10 +170,10 @@ export default function TarefasPage() {
         titulo: '',
         descricao: '',
         prioridade: 'MEDIA',
-        estado: 'PENDENTE',
         responsavel_vendedor_id: '',
         cliente_id: '',
         data_vencimento: '',
+        estado: 'PENDENTE',
       });
 
       await carregarTudo();
@@ -165,7 +181,7 @@ export default function TarefasPage() {
       console.error('Erro ao criar tarefa:', e);
       alert('Erro ao criar tarefa: ' + (e?.message ?? 'Erro desconhecido'));
     } finally {
-      setCarregando(false);
+      setSalvando(false);
     }
   };
 
@@ -196,17 +212,12 @@ export default function TarefasPage() {
     const term = searchTerm.trim().toLowerCase();
 
     return tarefas.filter((t) => {
-      const titulo = (t.titulo ?? '').toLowerCase();
-      const descricao = (t.descricao ?? '').toLowerCase();
-      const clienteNome = (t.clientes?.nome ?? '').toLowerCase();
-      const responsavelNome = (t.vendedores?.nome ?? '').toLowerCase();
-
       const matchSearch =
         !term ||
-        titulo.includes(term) ||
-        descricao.includes(term) ||
-        clienteNome.includes(term) ||
-        responsavelNome.includes(term);
+        t.titulo.toLowerCase().includes(term) ||
+        t.descricao.toLowerCase().includes(term) ||
+        (t.cliente_nome ? t.cliente_nome.toLowerCase().includes(term) : false) ||
+        (t.responsavel_nome ? t.responsavel_nome.toLowerCase().includes(term) : false);
 
       const matchEstado = filtroEstado === 'TODOS' || t.estado === filtroEstado;
       const matchPrioridade = filtroPrioridade === 'TODOS' || t.prioridade === filtroPrioridade;
@@ -223,7 +234,7 @@ export default function TarefasPage() {
   }, [tarefas]);
 
   // =========================================================
-  // RENDER LOADING
+  // LOADING
   // =========================================================
   if (carregando) {
     return (
@@ -245,13 +256,10 @@ export default function TarefasPage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-gray-900">
-              Agenda e Tarefas
-            </h1>
-            <p className="text-gray-600 mt-1">
-              Gestão de tarefas e compromissos
-            </p>
+            <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Agenda e Tarefas</h1>
+            <p className="text-gray-600 mt-1">Gestão de tarefas e compromissos</p>
           </div>
+
           <button
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105"
@@ -352,7 +360,7 @@ export default function TarefasPage() {
           </div>
         </div>
 
-        {/* Tarefas List */}
+        {/* List */}
         <div className="grid grid-cols-1 gap-4">
           {filteredTarefas.length === 0 ? (
             <div className="bg-white rounded-xl shadow-md p-10 text-center text-gray-600">
@@ -368,25 +376,23 @@ export default function TarefasPage() {
                 <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="flex-1 space-y-3">
-                      <div className="flex items-start gap-3">
-                        <div className="flex-1">
-                          <h3 className="text-lg font-semibold text-gray-900">{tarefa.titulo}</h3>
-                          <p className="text-sm text-gray-600 mt-1">{tarefa.descricao}</p>
-                        </div>
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900">{tarefa.titulo}</h3>
+                        <p className="text-sm text-gray-600 mt-1">{tarefa.descricao}</p>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-4 text-sm">
                         <div className="flex items-center gap-2">
                           <span className="text-gray-600">Responsável:</span>
                           <span className="font-medium text-gray-900">
-                            {tarefa.vendedores?.nome || '—'}
+                            {tarefa.responsavel_nome || '—'}
                           </span>
                         </div>
 
-                        {tarefa.clientes?.nome && (
+                        {tarefa.cliente_nome && (
                           <div className="flex items-center gap-2">
                             <span className="text-gray-600">Cliente:</span>
-                            <span className="font-medium text-gray-900">{tarefa.clientes.nome}</span>
+                            <span className="font-medium text-gray-900">{tarefa.cliente_nome}</span>
                           </div>
                         )}
 
@@ -400,11 +406,18 @@ export default function TarefasPage() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <span className={`inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${estadoConfig.color}`}>
+                      <span className={cx(
+                        'inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium',
+                        estadoConfig.color
+                      )}>
                         <EstadoIcon className="w-3 h-3" />
                         {estadoConfig.label}
                       </span>
-                      <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium ${prioridadeConfig.color}`}>
+
+                      <span className={cx(
+                        'inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium',
+                        prioridadeConfig.color
+                      )}>
                         {prioridadeConfig.label}
                       </span>
                     </div>
@@ -416,7 +429,7 @@ export default function TarefasPage() {
         </div>
       </div>
 
-      {/* Modal Nova Tarefa */}
+      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -432,9 +445,7 @@ export default function TarefasPage() {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Título *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Título *</label>
                 <input
                   type="text"
                   value={novaTarefa.titulo}
@@ -446,9 +457,7 @@ export default function TarefasPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Descrição *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Descrição *</label>
                 <textarea
                   value={novaTarefa.descricao}
                   onChange={(e) => setNovaTarefa({ ...novaTarefa, descricao: e.target.value })}
@@ -461,12 +470,12 @@ export default function TarefasPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Prioridade *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Prioridade *</label>
                   <select
                     value={novaTarefa.prioridade}
-                    onChange={(e) => setNovaTarefa({ ...novaTarefa, prioridade: e.target.value as Prioridade })}
+                    onChange={(e) =>
+                      setNovaTarefa({ ...novaTarefa, prioridade: e.target.value as Prioridade })
+                    }
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   >
@@ -478,12 +487,12 @@ export default function TarefasPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Estado *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Estado *</label>
                   <select
                     value={novaTarefa.estado}
-                    onChange={(e) => setNovaTarefa({ ...novaTarefa, estado: e.target.value as Estado })}
+                    onChange={(e) =>
+                      setNovaTarefa({ ...novaTarefa, estado: e.target.value as Estado })
+                    }
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   >
@@ -497,12 +506,12 @@ export default function TarefasPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Responsável (Vendedor)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Responsável (vendedor)</label>
                   <select
                     value={novaTarefa.responsavel_vendedor_id}
-                    onChange={(e) => setNovaTarefa({ ...novaTarefa, responsavel_vendedor_id: e.target.value })}
+                    onChange={(e) =>
+                      setNovaTarefa({ ...novaTarefa, responsavel_vendedor_id: e.target.value })
+                    }
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="">— Sem responsável —</option>
@@ -513,14 +522,12 @@ export default function TarefasPage() {
                     ))}
                   </select>
                   <p className="text-xs text-gray-500 mt-2">
-                    Nota: nesta fase o responsável está ligado a vendedores. Depois expandimos para funcionários/cargos.
+                    Depois vamos expandir para funcionários/cargos. Agora é vendedor para integrar rápido com o /portal.
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Cliente (Opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Cliente (opcional)</label>
                   <select
                     value={novaTarefa.cliente_id}
                     onChange={(e) => setNovaTarefa({ ...novaTarefa, cliente_id: e.target.value })}
@@ -537,13 +544,13 @@ export default function TarefasPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Data de Vencimento *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Data de Vencimento *</label>
                 <input
                   type="date"
                   value={novaTarefa.data_vencimento}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, data_vencimento: e.target.value })}
+                  onChange={(e) =>
+                    setNovaTarefa({ ...novaTarefa, data_vencimento: e.target.value })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
                 />
@@ -557,11 +564,20 @@ export default function TarefasPage() {
                 >
                   Cancelar
                 </button>
+
                 <button
                   type="submit"
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:shadow-lg font-medium transition-all"
+                  disabled={salvando}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:shadow-lg font-medium transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Criar Tarefa
+                  {salvando ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Criando...
+                    </>
+                  ) : (
+                    'Criar Tarefa'
+                  )}
                 </button>
               </div>
             </form>
