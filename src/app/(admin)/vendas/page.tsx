@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { 
-  Plus, Search, Eye, Edit, Trash2, 
+import { useState, useEffect, useMemo } from 'react';
+import {
+  Plus, Search, Eye, Edit, Trash2,
   FileText, CheckCircle, X, ChevronRight,
   AlertCircle, TrendingUp, Package, Save
 } from 'lucide-react';
@@ -110,26 +110,30 @@ export default function VendasPage() {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [produtos, setProdutos] = useState<Produto[]>([]);
-  
+
   // Modal
   const [modalAberto, setModalAberto] = useState(false);
   const [vendaEditando, setVendaEditando] = useState<Venda | null>(null);
   const [etapaAtual, setEtapaAtual] = useState(1);
-  
+
   // Formulário
   const [clienteSelecionado, setClienteSelecionado] = useState('');
   const [vendedorSelecionado, setVendedorSelecionado] = useState('');
   const [dataVenda, setDataVenda] = useState(new Date().toISOString().split('T')[0]);
   const [observacoes, setObservacoesVenda] = useState('');
   const [itensVenda, setItensVenda] = useState<ItemVenda[]>([]);
-  
+
   // Item sendo adicionado
   const [produtoSelecionado, setProdutoSelecionado] = useState('');
   const [quantidade, setQuantidade] = useState(1);
-  
+
   // Filtros
   const [filtroEstado, setFiltroEstado] = useState<EstadoVenda | 'TODOS'>('TODOS');
   const [busca, setBusca] = useState('');
+
+  // NOVO: filtro por Ano
+  const anoAtual = new Date().getFullYear();
+  const [filtroAno, setFiltroAno] = useState<number | 'TODOS'>(anoAtual);
 
   // ======================================================================
   // CARREGAMENTO INICIAL
@@ -142,7 +146,7 @@ export default function VendasPage() {
   const carregarDados = async () => {
     try {
       setCarregando(true);
-      
+
       // Carregar vendas com relacionamentos
       const { data: vendasData, error: vendasError } = await supabase
         .from('vendas')
@@ -295,201 +299,201 @@ export default function VendasPage() {
     }
   };
 
-    // ======================================================================
-// SALVAR VENDA (SEMPRE COMO ABERTA)
-// ======================================================================
+  // ======================================================================
+  // SALVAR VENDA (SEMPRE COMO ABERTA)
+  // ======================================================================
 
-const salvarVenda = async () => {
-  try {
-    if (!clienteSelecionado || !vendedorSelecionado) {
-      alert('Selecione cliente e vendedor');
-      return;
-    }
+  const salvarVenda = async () => {
+    try {
+      if (!clienteSelecionado || !vendedorSelecionado) {
+        alert('Selecione cliente e vendedor');
+        return;
+      }
 
-    if (itensVenda.length === 0) {
-      alert('Adicione pelo menos um produto');
-      return;
-    }
+      if (itensVenda.length === 0) {
+        alert('Adicione pelo menos um produto');
+        return;
+      }
 
-    setCarregando(true);
+      setCarregando(true);
 
-    // 1) Descobrir qual podologista está associado a este cliente
-    let podologistaIdParaGravar: string | null = null;
+      // 1) Descobrir qual podologista está associado a este cliente
+      let podologistaIdParaGravar: string | null = null;
 
-    // Tenta primeiro a coluna direta em CLIENTES
-    const { data: clienteData, error: clienteError } = await supabase
-      .from('clientes')
-      .select('podologista_id')
-      .eq('id', clienteSelecionado)
-      .maybeSingle();
-
-    if (clienteError) throw clienteError;
-
-    if (clienteData?.podologista_id) {
-      podologistaIdParaGravar = clienteData.podologista_id;
-    } else {
-      // Fallback: relacionamento na tabela podologista_farmacia
-      const { data: podoRel, error: podoRelError } = await supabase
-        .from('podologista_farmacia')
+      // Tenta primeiro a coluna direta em CLIENTES
+      const { data: clienteData, error: clienteError } = await supabase
+        .from('clientes')
         .select('podologista_id')
-        .eq('farmacia_id', clienteSelecionado) // nome correto da coluna
-        .eq('ativo', true)
-        .limit(1)
+        .eq('id', clienteSelecionado)
         .maybeSingle();
 
-      // PGRST116 = nenhuma linha encontrada; não é erro “grave”
-      if (podoRelError && (podoRelError as any).code !== 'PGRST116') {
-        throw podoRelError;
+      if (clienteError) throw clienteError;
+
+      if (clienteData?.podologista_id) {
+        podologistaIdParaGravar = clienteData.podologista_id;
+      } else {
+        // Fallback: relacionamento na tabela podologista_farmacia
+        const { data: podoRel, error: podoRelError } = await supabase
+          .from('podologista_farmacia')
+          .select('podologista_id')
+          .eq('farmacia_id', clienteSelecionado) // nome correto da coluna
+          .eq('ativo', true)
+          .limit(1)
+          .maybeSingle();
+
+        // PGRST116 = nenhuma linha encontrada; não é erro “grave”
+        if (podoRelError && (podoRelError as any).code !== 'PGRST116') {
+          throw podoRelError;
+        }
+
+        if (podoRel?.podologista_id) {
+          podologistaIdParaGravar = podoRel.podologista_id;
+        }
       }
 
-      if (podoRel?.podologista_id) {
-        podologistaIdParaGravar = podoRel.podologista_id;
+      // 2) Cálculos financeiros
+      const totais = calcularTotais(itensVenda);
+
+      const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
+      // Comissão sempre sobre o valor SEM IVA
+      const valorComissao = totais.subtotal * (percentualComissao / 100);
+
+      const totalFrascos = itensVenda.reduce(
+        (acc, item) => acc + item.quantidade,
+        0
+      );
+
+      const incentivoFarmaciaTotal =
+        totalFrascos * INCENTIVO_FARMACIA_PADRAO;
+      const incentivoPodologistaTotal =
+        totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
+
+      const metaMensalVendedor = await obterMetaMensalDoVendedor(
+        vendedorSelecionado,
+        dataVenda
+      );
+
+      if (vendaEditando) {
+        // ==========================================================
+        // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
+        // ==========================================================
+
+        const { error: vendaError } = await supabase
+          .from('vendas')
+          .update({
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: 'ABERTA',
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes,
+
+            // campos congelados (sem podologista aqui)
+            taxa_iva: TAXA_IVA,
+            percentual_comissao_vendedor: percentualComissao,
+            valor_total_comissao: valorComissao,
+            incentivo_farmacia_total: incentivoFarmaciaTotal,
+            incentivo_podologista_total: incentivoPodologistaTotal,
+            meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            custo_km_no_momento: CUSTO_KM_PADRAO,
+
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', vendaEditando.id);
+
+        if (vendaError) throw vendaError;
+
+        // Deletar itens antigos
+        const { error: deleteError } = await supabase
+          .from('venda_itens')
+          .delete()
+          .eq('venda_id', vendaEditando.id);
+
+        if (deleteError) throw deleteError;
+
+        // Inserir novos itens, congelando podologista_id por linha
+        const itensParaInserir = itensVenda.map(item => ({
+          venda_id: vendaEditando.id,
+          produto_id: item.produto_id,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha,
+          taxa_iva: TAXA_IVA,
+          podologista_id: podologistaIdParaGravar
+        }));
+
+        const { error: itensError } = await supabase
+          .from('venda_itens')
+          .insert(itensParaInserir);
+
+        if (itensError) throw itensError;
+
+        alert('Venda atualizada com sucesso!');
+      } else {
+        // ==========================================================
+        // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
+        // ==========================================================
+
+        const numeroVenda = `VD${Date.now()}`;
+
+        const { data: vendaData, error: vendaError } = await supabase
+          .from('vendas')
+          .insert({
+            numero: numeroVenda,
+            cliente_id: clienteSelecionado,
+            vendedor_id: vendedorSelecionado,
+            data: dataVenda,
+            estado: 'ABERTA',
+            subtotal: totais.subtotal,
+            iva: totais.iva,
+            total_com_iva: totais.total_com_iva,
+            observacoes,
+
+            // campos congelados (sem podologista aqui)
+            taxa_iva: TAXA_IVA,
+            percentual_comissao_vendedor: percentualComissao,
+            valor_total_comissao: valorComissao,
+            incentivo_farmacia_total: incentivoFarmaciaTotal,
+            incentivo_podologista_total: incentivoPodologistaTotal,
+            meta_mensal_vendedor_no_momento: metaMensalVendedor,
+            custo_km_no_momento: CUSTO_KM_PADRAO
+          })
+          .select()
+          .single();
+
+        if (vendaError) throw vendaError;
+
+        // Inserir itens com podologista congelado
+        const itensParaInserir = itensVenda.map(item => ({
+          venda_id: vendaData.id,
+          produto_id: item.produto_id,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          total_linha: item.total_linha,
+          taxa_iva: TAXA_IVA,
+          podologista_id: podologistaIdParaGravar
+        }));
+
+        const { error: itensError } = await supabase
+          .from('venda_itens')
+          .insert(itensParaInserir);
+
+        if (itensError) throw itensError;
+
+        alert('Venda criada com sucesso!');
       }
+
+      fecharModal();
+      await carregarDados();
+    } catch (error: any) {
+      console.error('Erro ao salvar venda:', error);
+      alert('Erro ao salvar venda: ' + error.message);
+    } finally {
+      setCarregando(false);
     }
-
-    // 2) Cálculos financeiros
-    const totais = calcularTotais(itensVenda);
-
-    const percentualComissao = PERCENTUAL_COMISSAO_VENDEDOR_PADRAO;
-    // Comissão sempre sobre o valor SEM IVA
-    const valorComissao = totais.subtotal * (percentualComissao / 100);
-
-    const totalFrascos = itensVenda.reduce(
-      (acc, item) => acc + item.quantidade,
-      0
-    );
-
-    const incentivoFarmaciaTotal =
-      totalFrascos * INCENTIVO_FARMACIA_PADRAO;
-    const incentivoPodologistaTotal =
-      totalFrascos * INCENTIVO_PODOLOGISTA_PADRAO;
-
-    const metaMensalVendedor = await obterMetaMensalDoVendedor(
-      vendedorSelecionado,
-      dataVenda
-    );
-
-    if (vendaEditando) {
-      // ==========================================================
-      // ATUALIZAR VENDA EXISTENTE - SEMPRE COMO ABERTA
-      // ==========================================================
-
-      const { error: vendaError } = await supabase
-        .from('vendas')
-        .update({
-          cliente_id: clienteSelecionado,
-          vendedor_id: vendedorSelecionado,
-          data: dataVenda,
-          estado: 'ABERTA',
-          subtotal: totais.subtotal,
-          iva: totais.iva,
-          total_com_iva: totais.total_com_iva,
-          observacoes,
-
-          // campos congelados (sem podologista aqui)
-          taxa_iva: TAXA_IVA,
-          percentual_comissao_vendedor: percentualComissao,
-          valor_total_comissao: valorComissao,
-          incentivo_farmacia_total: incentivoFarmaciaTotal,
-          incentivo_podologista_total: incentivoPodologistaTotal,
-          meta_mensal_vendedor_no_momento: metaMensalVendedor,
-          custo_km_no_momento: CUSTO_KM_PADRAO,
-
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', vendaEditando.id);
-
-      if (vendaError) throw vendaError;
-
-      // Deletar itens antigos
-      const { error: deleteError } = await supabase
-        .from('venda_itens')
-        .delete()
-        .eq('venda_id', vendaEditando.id);
-
-      if (deleteError) throw deleteError;
-
-      // Inserir novos itens, congelando podologista_id por linha
-      const itensParaInserir = itensVenda.map(item => ({
-        venda_id: vendaEditando.id,
-        produto_id: item.produto_id,
-        quantidade: item.quantidade,
-        preco_unitario: item.preco_unitario,
-        total_linha: item.total_linha,
-        taxa_iva: TAXA_IVA,
-        podologista_id: podologistaIdParaGravar
-      }));
-
-      const { error: itensError } = await supabase
-        .from('venda_itens')
-        .insert(itensParaInserir);
-
-      if (itensError) throw itensError;
-
-      alert('Venda atualizada com sucesso!');
-    } else {
-      // ==========================================================
-      // CRIAR NOVA VENDA - SEMPRE COMO ABERTA
-      // ==========================================================
-
-      const numeroVenda = `VD${Date.now()}`;
-
-      const { data: vendaData, error: vendaError } = await supabase
-        .from('vendas')
-        .insert({
-          numero: numeroVenda,
-          cliente_id: clienteSelecionado,
-          vendedor_id: vendedorSelecionado,
-          data: dataVenda,
-          estado: 'ABERTA',
-          subtotal: totais.subtotal,
-          iva: totais.iva,
-          total_com_iva: totais.total_com_iva,
-          observacoes,
-
-          // campos congelados (sem podologista aqui)
-          taxa_iva: TAXA_IVA,
-          percentual_comissao_vendedor: percentualComissao,
-          valor_total_comissao: valorComissao,
-          incentivo_farmacia_total: incentivoFarmaciaTotal,
-          incentivo_podologista_total: incentivoPodologistaTotal,
-          meta_mensal_vendedor_no_momento: metaMensalVendedor,
-          custo_km_no_momento: CUSTO_KM_PADRAO
-        })
-        .select()
-        .single();
-
-      if (vendaError) throw vendaError;
-
-      // Inserir itens com podologista congelado
-      const itensParaInserir = itensVenda.map(item => ({
-        venda_id: vendaData.id,
-        produto_id: item.produto_id,
-        quantidade: item.quantidade,
-        preco_unitario: item.preco_unitario,
-        total_linha: item.total_linha,
-        taxa_iva: TAXA_IVA,
-        podologista_id: podologistaIdParaGravar
-      }));
-
-      const { error: itensError } = await supabase
-        .from('venda_itens')
-        .insert(itensParaInserir);
-
-      if (itensError) throw itensError;
-
-      alert('Venda criada com sucesso!');
-    }
-
-    fecharModal();
-    await carregarDados();
-  } catch (error: any) {
-    console.error('Erro ao salvar venda:', error);
-    alert('Erro ao salvar venda: ' + error.message);
-  } finally {
-    setCarregando(false);
-  }
-};
+  };
 
   // ======================================================================
   // DELETAR VENDA
@@ -545,7 +549,7 @@ const salvarVenda = async () => {
       setVendedorSelecionado(venda.vendedor_id);
       setDataVenda(venda.data);
       setObservacoesVenda(venda.observacoes || '');
-      
+
       // Carregar itens da venda
       const { data: itensData, error: itensError } = await supabase
         .from('venda_itens')
@@ -563,7 +567,7 @@ const salvarVenda = async () => {
 
       const itens: ItemVenda[] = (itensData || []).map((item: any) => {
         const produtoData = Array.isArray(item.produtos) ? item.produtos[0] : item.produtos;
-        
+
         return {
           id: item.id,
           venda_id: venda.id,
@@ -579,11 +583,11 @@ const salvarVenda = async () => {
           total_linha: item.total_linha
         };
       });
-      
+
       setItensVenda(itens);
       setEtapaAtual(1);
       setModalAberto(true);
-      
+
     } catch (error: any) {
       console.error('Erro ao abrir modal de edição:', error);
       alert('Erro ao carregar dados da venda: ' + error.message);
@@ -608,7 +612,7 @@ const salvarVenda = async () => {
       alert('Adicione pelo menos um produto');
       return;
     }
-    
+
     setEtapaAtual(etapaAtual + 1);
   };
 
@@ -617,25 +621,44 @@ const salvarVenda = async () => {
   };
 
   // ======================================================================
+  // ANOS DISPONÍVEIS (para o filtro)
+  // ======================================================================
+
+  const anosDisponiveis = useMemo(() => {
+    const set = new Set<number>();
+    for (const v of vendas) {
+      const y = new Date(v.data).getFullYear();
+      if (!Number.isNaN(y)) set.add(y);
+    }
+    set.add(anoAtual); // garante o ano atual no dropdown
+    return Array.from(set).sort((a, b) => b - a);
+  }, [vendas, anoAtual]);
+
+  // ======================================================================
   // FILTROS
   // ======================================================================
 
-  const vendasFiltradas = vendas.filter(venda => {
+  const vendasDoAno = useMemo(() => {
+    if (filtroAno === 'TODOS') return vendas;
+    return vendas.filter(v => new Date(v.data).getFullYear() === filtroAno);
+  }, [vendas, filtroAno]);
+
+  const vendasFiltradas = vendasDoAno.filter(venda => {
     const matchEstado = filtroEstado === 'TODOS' || venda.estado === filtroEstado;
-    const matchBusca = !busca || 
+    const matchBusca = !busca ||
       venda.numero.toLowerCase().includes(busca.toLowerCase()) ||
-      venda.clientes?.nome.toLowerCase().includes(busca.toLowerCase());
+      (venda.clientes?.nome ?? '').toLowerCase().includes(busca.toLowerCase());
     return matchEstado && matchBusca;
   });
 
   // ======================================================================
-  // ESTATÍSTICAS
+  // ESTATÍSTICAS (respeitam o ano selecionado)
   // ======================================================================
 
-  const totalVendas = vendas.length;
-  const vendasFechadas = vendas.filter(v => v.estado === 'FECHADA').length;
-  const vendasAbertas = vendas.filter(v => v.estado === 'ABERTA').length;
-  const totalFaturado = vendas
+  const totalVendas = vendasDoAno.length;
+  const vendasFechadas = vendasDoAno.filter(v => v.estado === 'FECHADA').length;
+  const vendasAbertas = vendasDoAno.filter(v => v.estado === 'ABERTA').length;
+  const totalFaturado = vendasDoAno
     .filter(v => v.estado === 'FECHADA')
     .reduce((acc, v) => acc + v.total_com_iva, 0);
 
@@ -754,6 +777,23 @@ const salvarVenda = async () => {
               <option value="FECHADA">Fechada</option>
               <option value="CANCELADA">Cancelada</option>
             </select>
+
+            {/* NOVO: filtro por Ano */}
+            <select
+              value={String(filtroAno)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setFiltroAno(v === 'TODOS' ? 'TODOS' : Number(v));
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="TODOS">Todos os Anos</option>
+              {anosDisponiveis.map((ano) => (
+                <option key={ano} value={String(ano)}>
+                  {ano}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -778,7 +818,7 @@ const salvarVenda = async () => {
                     <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                       <Package className="w-16 h-16 mx-auto mb-4 text-gray-300" />
                       <p className="text-lg font-semibold mb-2">Nenhuma venda encontrada</p>
-                      <p className="text-sm">Clique em "Nova Venda" para começar</p>
+                      <p className="text-sm">Ajuste os filtros ou clique em "Nova Venda" para começar</p>
                     </td>
                   </tr>
                 ) : (
@@ -811,27 +851,27 @@ const salvarVenda = async () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2">
-                          <button 
+                          <button
                             onClick={() => router.push(`/vendas/${venda.id}`)}
-                            className="p-2 hover:bg-blue-100 rounded-lg transition-colors" 
+                            className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
                             title="Ver Detalhes"
                           >
                             <Eye className="w-4 h-4 text-blue-600" />
                           </button>
-                          
+
                           {venda.estado !== 'FECHADA' && (
                             <>
-                              <button 
+                              <button
                                 onClick={() => abrirModalEditar(venda)}
-                                className="p-2 hover:bg-green-100 rounded-lg transition-colors" 
+                                className="p-2 hover:bg-green-100 rounded-lg transition-colors"
                                 title="Editar"
                               >
                                 <Edit className="w-4 h-4 text-green-600" />
                               </button>
-                              
-                              <button 
+
+                              <button
                                 onClick={() => deletarVenda(venda.id)}
-                                className="p-2 hover:bg-red-100 rounded-lg transition-colors" 
+                                className="p-2 hover:bg-red-100 rounded-lg transition-colors"
                                 title="Eliminar"
                               >
                                 <Trash2 className="w-4 h-4 text-red-600" />
