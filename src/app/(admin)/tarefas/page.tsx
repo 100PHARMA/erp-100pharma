@@ -16,74 +16,121 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 type Prioridade = 'BAIXA' | 'MEDIA' | 'ALTA' | 'URGENTE';
 type Estado = 'PENDENTE' | 'EM_ANDAMENTO' | 'CONCLUIDA' | 'CANCELADA';
 
+interface Cliente {
+  id: string;
+  nome: string;
+}
+
+interface Vendedor {
+  id: string;
+  nome: string;
+  email?: string | null;
+}
+
 interface Tarefa {
   id: string;
   titulo: string;
   descricao: string;
   prioridade: Prioridade;
-  responsavel: string;
-  cliente: string | null;
-  data_vencimento: string; // ISO yyyy-mm-dd
   estado: Estado;
+  responsavel_vendedor_id: string | null;
+  cliente_id: string | null;
+  data_vencimento: string; // yyyy-mm-dd
   created_at?: string;
   updated_at?: string;
+
+  // relacionamentos (select com join)
+  clientes?: Cliente | null;
+  vendedores?: Vendedor | null;
 }
 
 export default function TarefasPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
   const [tarefas, setTarefas] = useState<Tarefa[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | Estado>('TODOS');
   const [filtroPrioridade, setFiltroPrioridade] = useState<'TODOS' | Prioridade>('TODOS');
 
   const [showModal, setShowModal] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   const [novaTarefa, setNovaTarefa] = useState<{
     titulo: string;
     descricao: string;
     prioridade: Prioridade;
-    responsavel: string;
-    cliente: string;
-    data_vencimento: string;
     estado: Estado;
+    responsavel_vendedor_id: string; // obrigatório no UI (seleção)
+    cliente_id: string; // opcional (seleção)
+    data_vencimento: string;
   }>({
     titulo: '',
     descricao: '',
     prioridade: 'MEDIA',
-    responsavel: '',
-    cliente: '',
-    data_vencimento: '',
     estado: 'PENDENTE',
+    responsavel_vendedor_id: '',
+    cliente_id: '',
+    data_vencimento: '',
   });
 
   // ======================================================================
   // LOAD
   // ======================================================================
 
-  async function carregarTarefas() {
+  async function carregarTudo() {
     setLoading(true);
     try {
-      // Diagnóstico (não remove): confirma se está autenticado
+      // Diagnóstico simples: se user for null aqui, você está anon (RLS vai falhar)
       const { data: userData } = await supabase.auth.getUser();
-      // Se isso vier null, você está anon e qualquer RLS vai falhar.
       console.log('USER no /tarefas:', userData.user?.id, userData.user?.email);
 
-      const { data, error } = await supabase
+      // Carregar clientes (para dropdown)
+      const { data: clientesData, error: clientesError } = await supabase
+        .from('clientes')
+        .select('id,nome')
+        .order('nome', { ascending: true });
+
+      if (clientesError) throw clientesError;
+      setClientes((clientesData as Cliente[]) || []);
+
+      // Carregar vendedores (para dropdown)
+      const { data: vendedoresData, error: vendedoresError } = await supabase
+        .from('vendedores')
+        .select('id,nome,email')
+        .order('nome', { ascending: true });
+
+      if (vendedoresError) throw vendedoresError;
+      setVendedores((vendedoresData as Vendedor[]) || []);
+
+      // Carregar tarefas com joins
+      const { data: tarefasData, error: tarefasError } = await supabase
         .from('tarefas')
-        .select(
-          'id,titulo,descricao,prioridade,responsavel,cliente,data_vencimento,estado,created_at,updated_at'
-        )
+        .select(`
+          id,
+          titulo,
+          descricao,
+          prioridade,
+          estado,
+          responsavel_vendedor_id,
+          cliente_id,
+          data_vencimento,
+          created_at,
+          updated_at,
+          clientes:cliente_id ( id, nome ),
+          vendedores:responsavel_vendedor_id ( id, nome, email )
+        `)
         .order('data_vencimento', { ascending: true });
 
-      if (error) throw error;
+      if (tarefasError) throw tarefasError;
 
-      setTarefas((data as Tarefa[]) || []);
+      setTarefas((tarefasData as Tarefa[]) || []);
     } catch (e: any) {
-      console.error('Erro ao carregar tarefas:', e);
+      console.error('Erro ao carregar dados:', e);
       alert(`Erro ao carregar tarefas: ${e?.message || 'Erro desconhecido'}`);
     } finally {
       setLoading(false);
@@ -91,7 +138,7 @@ export default function TarefasPage() {
   }
 
   useEffect(() => {
-    carregarTarefas();
+    carregarTudo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -110,10 +157,7 @@ export default function TarefasPage() {
   };
 
   const getEstadoConfig = (estado: Estado) => {
-    const configs: Record<
-      Estado,
-      { color: string; icon: any; label: string }
-    > = {
+    const configs: Record<Estado, { color: string; icon: any; label: string }> = {
       PENDENTE: { color: 'bg-yellow-100 text-yellow-700', icon: Clock, label: 'Pendente' },
       EM_ANDAMENTO: { color: 'bg-blue-100 text-blue-700', icon: AlertCircle, label: 'Em Andamento' },
       CONCLUIDA: { color: 'bg-green-100 text-green-700', icon: CheckCircle, label: 'Concluída' },
@@ -129,12 +173,15 @@ export default function TarefasPage() {
   const filteredTarefas = tarefas.filter((t) => {
     const term = searchTerm.trim().toLowerCase();
 
+    const responsavelNome = t.vendedores?.nome ?? '';
+    const clienteNome = t.clientes?.nome ?? '';
+
     const matchSearch =
       !term ||
       t.titulo.toLowerCase().includes(term) ||
       t.descricao.toLowerCase().includes(term) ||
-      (t.cliente ? t.cliente.toLowerCase().includes(term) : false) ||
-      (t.responsavel ? t.responsavel.toLowerCase().includes(term) : false);
+      responsavelNome.toLowerCase().includes(term) ||
+      clienteNome.toLowerCase().includes(term);
 
     const matchEstado = filtroEstado === 'TODOS' || t.estado === filtroEstado;
     const matchPrioridade = filtroPrioridade === 'TODOS' || t.prioridade === filtroPrioridade;
@@ -153,7 +200,7 @@ export default function TarefasPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!novaTarefa.titulo || !novaTarefa.descricao || !novaTarefa.responsavel || !novaTarefa.data_vencimento) {
+    if (!novaTarefa.titulo || !novaTarefa.descricao || !novaTarefa.responsavel_vendedor_id || !novaTarefa.data_vencimento) {
       alert('Por favor, preencha todos os campos obrigatórios');
       return;
     }
@@ -164,10 +211,10 @@ export default function TarefasPage() {
         titulo: novaTarefa.titulo.trim(),
         descricao: novaTarefa.descricao.trim(),
         prioridade: novaTarefa.prioridade,
-        responsavel: novaTarefa.responsavel.trim(),
-        cliente: novaTarefa.cliente.trim() ? novaTarefa.cliente.trim() : null,
-        data_vencimento: novaTarefa.data_vencimento,
         estado: novaTarefa.estado,
+        responsavel_vendedor_id: novaTarefa.responsavel_vendedor_id,
+        cliente_id: novaTarefa.cliente_id ? novaTarefa.cliente_id : null,
+        data_vencimento: novaTarefa.data_vencimento,
       };
 
       const { error } = await supabase.from('tarefas').insert(payload);
@@ -178,13 +225,13 @@ export default function TarefasPage() {
         titulo: '',
         descricao: '',
         prioridade: 'MEDIA',
-        responsavel: '',
-        cliente: '',
-        data_vencimento: '',
         estado: 'PENDENTE',
+        responsavel_vendedor_id: '',
+        cliente_id: '',
+        data_vencimento: '',
       });
 
-      await carregarTarefas();
+      await carregarTudo();
     } catch (e: any) {
       console.error('Erro ao criar tarefa:', e);
       alert(`Erro ao criar tarefa: ${e?.message || 'Erro desconhecido'}`);
@@ -329,10 +376,7 @@ export default function TarefasPage() {
             const EstadoIcon = estadoConfig.icon;
 
             return (
-              <div
-                key={tarefa.id}
-                className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow"
-              >
+              <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                   <div className="flex-1 space-y-3">
                     <div className="flex items-start gap-3">
@@ -345,13 +389,15 @@ export default function TarefasPage() {
                     <div className="flex flex-wrap items-center gap-4 text-sm">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-600">Responsável:</span>
-                        <span className="font-medium text-gray-900">{tarefa.responsavel}</span>
+                        <span className="font-medium text-gray-900">
+                          {tarefa.vendedores?.nome || '-'}
+                        </span>
                       </div>
 
-                      {tarefa.cliente && (
+                      {tarefa.clientes?.nome && (
                         <div className="flex items-center gap-2">
                           <span className="text-gray-600">Cliente:</span>
-                          <span className="font-medium text-gray-900">{tarefa.cliente}</span>
+                          <span className="font-medium text-gray-900">{tarefa.clientes.nome}</span>
                         </div>
                       )}
 
@@ -365,15 +411,11 @@ export default function TarefasPage() {
                   </div>
 
                   <div className="flex flex-col gap-2">
-                    <span
-                      className={`inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${estadoConfig.color}`}
-                    >
+                    <span className={`inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${estadoConfig.color}`}>
                       <EstadoIcon className="w-3 h-3" />
                       {estadoConfig.label}
                     </span>
-                    <span
-                      className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium ${prioridadeConfig.color}`}
-                    >
+                    <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium ${prioridadeConfig.color}`}>
                       {prioridadeConfig.label}
                     </span>
                   </div>
@@ -381,6 +423,12 @@ export default function TarefasPage() {
               </div>
             );
           })}
+
+          {filteredTarefas.length === 0 && (
+            <div className="bg-white rounded-xl shadow-md p-10 text-center text-gray-500">
+              Nenhuma tarefa encontrada com os filtros atuais.
+            </div>
+          )}
         </div>
       </div>
 
@@ -408,7 +456,6 @@ export default function TarefasPage() {
                   value={novaTarefa.titulo}
                   onChange={(e) => setNovaTarefa({ ...novaTarefa, titulo: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Ex: Follow-up com cliente"
                   required
                 />
               </div>
@@ -422,7 +469,6 @@ export default function TarefasPage() {
                   onChange={(e) => setNovaTarefa({ ...novaTarefa, descricao: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   rows={3}
-                  placeholder="Descreva a tarefa..."
                   required
                 />
               </div>
@@ -465,29 +511,39 @@ export default function TarefasPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Responsável *
+                  Responsável (Vendedor) *
                 </label>
-                <input
-                  type="text"
-                  value={novaTarefa.responsavel}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, responsavel: e.target.value })}
+                <select
+                  value={novaTarefa.responsavel_vendedor_id}
+                  onChange={(e) => setNovaTarefa({ ...novaTarefa, responsavel_vendedor_id: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Nome do responsável"
                   required
-                />
+                >
+                  <option value="">Selecione um vendedor</option>
+                  {vendedores.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.nome}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Cliente (Opcional)
                 </label>
-                <input
-                  type="text"
-                  value={novaTarefa.cliente}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, cliente: e.target.value })}
+                <select
+                  value={novaTarefa.cliente_id}
+                  onChange={(e) => setNovaTarefa({ ...novaTarefa, cliente_id: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Nome do cliente"
-                />
+                >
+                  <option value="">—</option>
+                  {clientes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
