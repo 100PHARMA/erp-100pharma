@@ -10,14 +10,16 @@ import {
   AlertCircle,
   XCircle,
   X,
+  Pencil,
+  RefreshCcw,
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 type Prioridade = 'BAIXA' | 'MEDIA' | 'ALTA' | 'URGENTE';
 type Estado = 'PENDENTE' | 'EM_ANDAMENTO' | 'CONCLUIDA' | 'CANCELADA';
 
-type Vendedor = { id: string; nome: string; email?: string | null };
-type Cliente = { id: string; nome: string };
+type VendedorMini = { id: string; nome: string };
+type ClienteMini = { id: string; nome: string };
 
 type TarefaRow = {
   id: string;
@@ -27,99 +29,83 @@ type TarefaRow = {
   estado: Estado;
   responsavel_vendedor_id: string | null;
   cliente_id: string | null;
-  data_vencimento: string; // YYYY-MM-DD
+  data_vencimento: string; // date (YYYY-MM-DD)
   created_at: string;
   updated_at: string;
-  vendedores?: { id: string; nome: string } | null;
-  clientes?: { id: string; nome: string } | null;
+
+  // joins (aliases)
+  responsavel?: { nome: string } | null;
+  cliente?: { nome: string } | null;
 };
+
+type ModalMode = 'create' | 'edit';
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(' ');
+}
 
 export default function TarefasPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
-  const [tarefas, setTarefas] = useState<TarefaRow[]>([]);
-  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
-  const [clientes, setClientes] = useState<Cliente[]>([]);
-
   const [searchTerm, setSearchTerm] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState<'TODOS' | Estado>('TODOS');
-  const [filtroPrioridade, setFiltroPrioridade] = useState<'TODOS' | Prioridade>('TODOS');
+  const [filtroEstado, setFiltroEstado] = useState<string>('TODOS');
+  const [filtroPrioridade, setFiltroPrioridade] = useState<string>('TODOS');
+
+  const [tarefas, setTarefas] = useState<TarefaRow[]>([]);
+  const [vendedores, setVendedores] = useState<VendedorMini[]>([]);
+  const [clientes, setClientes] = useState<ClienteMini[]>([]);
 
   const [showModal, setShowModal] = useState(false);
-  const [novaTarefa, setNovaTarefa] = useState<{
-    titulo: string;
-    descricao: string;
-    prioridade: Prioridade;
-    estado: Estado;
-    responsavel_vendedor_id: string;
-    cliente_id: string;
-    data_vencimento: string;
-  }>({
+  const [mode, setMode] = useState<ModalMode>('create');
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const [form, setForm] = useState({
     titulo: '',
     descricao: '',
-    prioridade: 'MEDIA',
-    estado: 'PENDENTE',
-    responsavel_vendedor_id: '',
-    cliente_id: '',
+    prioridade: 'MEDIA' as Prioridade,
+    estado: 'PENDENTE' as Estado,
+    responsavel_vendedor_id: '' as string, // '' => null
+    cliente_id: '' as string, // '' => null
     data_vencimento: '',
   });
 
-  async function carregarTudo() {
-    setLoading(true);
-    setErro(null);
-    try {
-      // 1) vendedores (para selects)
-      const { data: vendData, error: vendErr } = await supabase
-        .from('vendedores')
-        .select('id,nome,email')
-        .order('nome');
-      if (vendErr) throw vendErr;
-      setVendedores((vendData as any) || []);
-
-      // 2) clientes (para selects)
-      const { data: cliData, error: cliErr } = await supabase
-        .from('clientes')
-        .select('id,nome')
-        .order('nome');
-      if (cliErr) throw cliErr;
-      setClientes((cliData as any) || []);
-
-      // 3) tarefas (com joins)
-      const { data: tarData, error: tarErr } = await supabase
-        .from('tarefas')
-        .select(`
-          id,
-          titulo,
-          descricao,
-          prioridade,
-          estado,
-          responsavel_vendedor_id,
-          cliente_id,
-          data_vencimento,
-          created_at,
-          updated_at,
-          vendedores:responsavel_vendedor_id ( id, nome ),
-          clientes:cliente_id ( id, nome )
-        `)
-        .order('data_vencimento', { ascending: true });
-      if (tarErr) throw tarErr;
-
-      setTarefas((tarData as any) || []);
-    } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Falha ao carregar dados.');
-    } finally {
-      setLoading(false);
-    }
+  function resetForm() {
+    setForm({
+      titulo: '',
+      descricao: '',
+      prioridade: 'MEDIA',
+      estado: 'PENDENTE',
+      responsavel_vendedor_id: '',
+      cliente_id: '',
+      data_vencimento: '',
+    });
+    setEditingId(null);
+    setMode('create');
   }
 
-  useEffect(() => {
-    carregarTudo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  function openCreate() {
+    resetForm();
+    setShowModal(true);
+  }
+
+  function openEdit(t: TarefaRow) {
+    setMode('edit');
+    setEditingId(t.id);
+    setForm({
+      titulo: t.titulo ?? '',
+      descricao: t.descricao ?? '',
+      prioridade: t.prioridade,
+      estado: t.estado,
+      responsavel_vendedor_id: t.responsavel_vendedor_id ?? '',
+      cliente_id: t.cliente_id ?? '',
+      data_vencimento: t.data_vencimento ?? '',
+    });
+    setShowModal(true);
+  }
 
   const getPrioridadeConfig = (prioridade: Prioridade) => {
     const configs: Record<Prioridade, { color: string; label: string }> = {
@@ -144,70 +130,134 @@ export default function TarefasPage() {
     return configs[estado];
   };
 
+  async function loadLookups() {
+    // vendedores
+    const vendRes = await supabase
+      .from('vendedores')
+      .select('id,nome')
+      .order('nome', { ascending: true });
+
+    if (!vendRes.error) setVendedores((vendRes.data ?? []) as VendedorMini[]);
+
+    // clientes (ajuste o campo de nome conforme seu schema; aqui assumo "nome")
+    const cliRes = await supabase
+      .from('clientes')
+      .select('id,nome')
+      .order('nome', { ascending: true })
+      .limit(500);
+
+    if (!cliRes.error) setClientes((cliRes.data ?? []) as ClienteMini[]);
+  }
+
+  async function loadTarefas() {
+    setLoading(true);
+    setErro(null);
+
+    // IMPORTANTE:
+    // - join em vendedores e clientes via FKs
+    // - os nomes do relationship vêm do FK; normalmente:
+    //   vendedores!tarefas_responsavel_vendedor_id_fkey
+    //   clientes!tarefas_cliente_id_fkey
+    const { data, error } = await supabase
+      .from('tarefas')
+      .select(
+        `
+        id,
+        titulo,
+        descricao,
+        prioridade,
+        estado,
+        responsavel_vendedor_id,
+        cliente_id,
+        data_vencimento,
+        created_at,
+        updated_at,
+        responsavel:vendedores!tarefas_responsavel_vendedor_id_fkey ( nome ),
+        cliente:clientes!tarefas_cliente_id_fkey ( nome )
+      `
+      )
+      .order('data_vencimento', { ascending: true });
+
+    if (error) {
+      setErro(error.message);
+      setTarefas([]);
+      setLoading(false);
+      return;
+    }
+
+    setTarefas((data ?? []) as TarefaRow[]);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    (async () => {
+      await loadLookups();
+      await loadTarefas();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErro(null);
+
+    if (!form.titulo.trim() || !form.descricao.trim() || !form.data_vencimento) {
+      setErro('Preencha Título, Descrição e Data de Vencimento.');
+      return;
+    }
+
+    setSaving(true);
+
+    const payload = {
+      titulo: form.titulo.trim(),
+      descricao: form.descricao.trim(),
+      prioridade: form.prioridade,
+      estado: form.estado,
+      data_vencimento: form.data_vencimento,
+      responsavel_vendedor_id: form.responsavel_vendedor_id ? form.responsavel_vendedor_id : null,
+      cliente_id: form.cliente_id ? form.cliente_id : null,
+    };
+
+    try {
+      if (mode === 'create') {
+        const { error } = await supabase.from('tarefas').insert(payload);
+        if (error) throw error;
+      } else {
+        if (!editingId) throw new Error('ID da tarefa não encontrado para edição.');
+        const { error } = await supabase.from('tarefas').update(payload).eq('id', editingId);
+        if (error) throw error;
+      }
+
+      setShowModal(false);
+      resetForm();
+      await loadTarefas();
+    } catch (err: any) {
+      setErro(err?.message || 'Falha ao salvar tarefa.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const filteredTarefas = tarefas.filter((t) => {
-    const s = searchTerm.trim().toLowerCase();
+    const titulo = String(t.titulo ?? '').toLowerCase();
+    const desc = String(t.descricao ?? '').toLowerCase();
+    const cli = String(t.cliente?.nome ?? '').toLowerCase();
+    const resp = String(t.responsavel?.nome ?? '').toLowerCase();
 
     const matchSearch =
-      !s ||
-      t.titulo.toLowerCase().includes(s) ||
-      t.descricao.toLowerCase().includes(s) ||
-      (t.clientes?.nome?.toLowerCase().includes(s) ?? false) ||
-      (t.vendedores?.nome?.toLowerCase().includes(s) ?? false);
+      titulo.includes(searchTerm.toLowerCase()) ||
+      desc.includes(searchTerm.toLowerCase()) ||
+      cli.includes(searchTerm.toLowerCase()) ||
+      resp.includes(searchTerm.toLowerCase());
 
     const matchEstado = filtroEstado === 'TODOS' || t.estado === filtroEstado;
     const matchPrioridade = filtroPrioridade === 'TODOS' || t.prioridade === filtroPrioridade;
-
     return matchSearch && matchEstado && matchPrioridade;
   });
 
   const tarefasPendentes = tarefas.filter((t) => t.estado === 'PENDENTE').length;
   const tarefasEmAndamento = tarefas.filter((t) => t.estado === 'EM_ANDAMENTO').length;
   const tarefasConcluidas = tarefas.filter((t) => t.estado === 'CONCLUIDA').length;
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErro(null);
-
-    if (!novaTarefa.titulo || !novaTarefa.descricao || !novaTarefa.responsavel_vendedor_id || !novaTarefa.data_vencimento) {
-      setErro('Preencha: título, descrição, responsável e data de vencimento.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      const payload = {
-        titulo: novaTarefa.titulo,
-        descricao: novaTarefa.descricao,
-        prioridade: novaTarefa.prioridade,
-        estado: novaTarefa.estado,
-        responsavel_vendedor_id: novaTarefa.responsavel_vendedor_id,
-        cliente_id: novaTarefa.cliente_id || null,
-        data_vencimento: novaTarefa.data_vencimento,
-      };
-
-      const { error } = await supabase.from('tarefas').insert(payload);
-      if (error) throw error;
-
-      setShowModal(false);
-      setNovaTarefa({
-        titulo: '',
-        descricao: '',
-        prioridade: 'MEDIA',
-        estado: 'PENDENTE',
-        responsavel_vendedor_id: '',
-        cliente_id: '',
-        data_vencimento: '',
-      });
-
-      await carregarTudo();
-    } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Erro ao criar tarefa.');
-    } finally {
-      setLoading(false);
-    }
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-4 md:p-8">
@@ -217,21 +267,32 @@ export default function TarefasPage() {
           <div>
             <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Agenda e Tarefas</h1>
             <p className="text-gray-600 mt-1">Gestão de tarefas e compromissos</p>
+            {erro && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {erro}
+              </div>
+            )}
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105"
-          >
-            <Plus className="w-5 h-5" />
-            Nova Tarefa
-          </button>
-        </div>
 
-        {erro && (
-          <div className="bg-white rounded-xl shadow-md p-4 border border-red-200">
-            <p className="text-sm text-red-700">{erro}</p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => loadTarefas()}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-white border border-gray-200 hover:bg-gray-50"
+              title="Recarregar"
+            >
+              <RefreshCcw className="w-5 h-5" />
+              Recarregar
+            </button>
+
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
+            >
+              <Plus className="w-5 h-5" />
+              Nova Tarefa
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -300,7 +361,7 @@ export default function TarefasPage() {
 
             <select
               value={filtroEstado}
-              onChange={(e) => setFiltroEstado(e.target.value as any)}
+              onChange={(e) => setFiltroEstado(e.target.value)}
               className="px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="TODOS">Todos os Estados</option>
@@ -312,7 +373,7 @@ export default function TarefasPage() {
 
             <select
               value={filtroPrioridade}
-              onChange={(e) => setFiltroPrioridade(e.target.value as any)}
+              onChange={(e) => setFiltroPrioridade(e.target.value)}
               className="px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="TODOS">Todas Prioridades</option>
@@ -324,100 +385,101 @@ export default function TarefasPage() {
           </div>
         </div>
 
-        {/* Loading */}
-        {loading ? (
-          <div className="min-h-[40vh] flex items-center justify-center">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p className="text-gray-600">Carregando tarefas...</p>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4">
-            {filteredTarefas.length === 0 ? (
-              <div className="bg-white rounded-xl shadow-md p-10 text-center text-gray-600">
-                Nenhuma tarefa encontrada.
-              </div>
-            ) : (
-              filteredTarefas.map((tarefa) => {
-                const prioridadeConfig = getPrioridadeConfig(tarefa.prioridade);
-                const estadoConfig = getEstadoConfig(tarefa.estado);
-                const EstadoIcon = estadoConfig.icon;
+        {/* List */}
+        <div className="grid grid-cols-1 gap-4">
+          {loading ? (
+            <div className="text-center text-gray-600 py-12">Carregando tarefas...</div>
+          ) : filteredTarefas.length === 0 ? (
+            <div className="text-center text-gray-600 py-12">Nenhuma tarefa encontrada.</div>
+          ) : (
+            filteredTarefas.map((tarefa) => {
+              const prioridadeConfig = getPrioridadeConfig(tarefa.prioridade);
+              const estadoConfig = getEstadoConfig(tarefa.estado);
+              const EstadoIcon = estadoConfig.icon;
 
-                return (
-                  <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
-                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                      <div className="flex-1 space-y-3">
-                        <div className="flex items-start gap-3">
-                          <div className="flex-1">
-                            <h3 className="text-lg font-semibold text-gray-900">{tarefa.titulo}</h3>
-                            <p className="text-sm text-gray-600 mt-1">{tarefa.descricao}</p>
-                          </div>
+              return (
+                <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div className="flex-1 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1">
+                          <h3 className="text-lg font-semibold text-gray-900">{tarefa.titulo}</h3>
+                          <p className="text-sm text-gray-600 mt-1">{tarefa.descricao}</p>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-4 text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="text-gray-600">Responsável:</span>
-                            <span className="font-medium text-gray-900">{tarefa.vendedores?.nome || '-'}</span>
-                          </div>
-
-                          {tarefa.clientes?.nome && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-600">Cliente:</span>
-                              <span className="font-medium text-gray-900">{tarefa.clientes.nome}</span>
-                            </div>
-                          )}
-
-                          <div className="flex items-center gap-2">
-                            <Calendar className="w-4 h-4 text-gray-400" />
-                            <span className="text-gray-600">
-                              {new Date(tarefa.data_vencimento).toLocaleDateString('pt-PT')}
-                            </span>
-                          </div>
-                        </div>
+                        <button
+                          onClick={() => openEdit(tarefa)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-semibold"
+                          title="Editar"
+                        >
+                          <Pencil className="w-4 h-4" />
+                          Editar
+                        </button>
                       </div>
 
-                      <div className="flex flex-col gap-2">
-                        <span className={`inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${estadoConfig.color}`}>
-                          <EstadoIcon className="w-3 h-3" />
-                          {estadoConfig.label}
-                        </span>
-                        <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium ${prioridadeConfig.color}`}>
-                          {prioridadeConfig.label}
-                        </span>
+                      <div className="flex flex-wrap items-center gap-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-600">Responsável:</span>
+                          <span className="font-medium text-gray-900">
+                            {tarefa.responsavel?.nome ?? '—'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-600">Cliente:</span>
+                          <span className="font-medium text-gray-900">
+                            {tarefa.cliente?.nome ?? '—'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4 text-gray-400" />
+                          <span className="text-gray-600">
+                            {new Date(tarefa.data_vencimento).toLocaleDateString('pt-PT')}
+                          </span>
+                        </div>
                       </div>
                     </div>
+
+                    <div className="flex flex-col gap-2">
+                      <span className={cx('inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium', estadoConfig.color)}>
+                        <EstadoIcon className="w-3 h-3" />
+                        {estadoConfig.label}
+                      </span>
+
+                      <span className={cx('inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium', prioridadeConfig.color)}>
+                        {prioridadeConfig.label}
+                      </span>
+                    </div>
                   </div>
-                );
-              })
-            )}
-          </div>
-        )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
-      {/* Modal Nova Tarefa */}
+      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
-              <h2 className="text-2xl font-bold">Nova Tarefa</h2>
-              <button
-                onClick={() => setShowModal(false)}
-                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-              >
+              <h2 className="text-2xl font-bold">
+                {mode === 'create' ? 'Nova Tarefa' : 'Editar Tarefa'}
+              </h2>
+              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
                 <X className="w-6 h-6" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={onSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Título *</label>
                 <input
                   type="text"
-                  value={novaTarefa.titulo}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, titulo: e.target.value })}
+                  value={form.titulo}
+                  onChange={(e) => setForm({ ...form, titulo: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Ex: Follow-up com cliente"
                   required
                 />
               </div>
@@ -425,11 +487,10 @@ export default function TarefasPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Descrição *</label>
                 <textarea
-                  value={novaTarefa.descricao}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, descricao: e.target.value })}
+                  value={form.descricao}
+                  onChange={(e) => setForm({ ...form, descricao: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   rows={3}
-                  placeholder="Descreva a tarefa..."
                   required
                 />
               </div>
@@ -438,8 +499,8 @@ export default function TarefasPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Prioridade *</label>
                   <select
-                    value={novaTarefa.prioridade}
-                    onChange={(e) => setNovaTarefa({ ...novaTarefa, prioridade: e.target.value as Prioridade })}
+                    value={form.prioridade}
+                    onChange={(e) => setForm({ ...form, prioridade: e.target.value as Prioridade })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   >
@@ -453,8 +514,8 @@ export default function TarefasPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Estado *</label>
                   <select
-                    value={novaTarefa.estado}
-                    onChange={(e) => setNovaTarefa({ ...novaTarefa, estado: e.target.value as Estado })}
+                    value={form.estado}
+                    onChange={(e) => setForm({ ...form, estado: e.target.value as Estado })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   >
@@ -466,45 +527,46 @@ export default function TarefasPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Responsável (Vendedor) *</label>
-                <select
-                  value={novaTarefa.responsavel_vendedor_id}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, responsavel_vendedor_id: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                >
-                  <option value="">Selecione um responsável</option>
-                  {vendedores.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Responsável (Vendedor)</label>
+                  <select
+                    value={form.responsavel_vendedor_id}
+                    onChange={(e) => setForm({ ...form, responsavel_vendedor_id: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">—</option>
+                    {vendedores.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Cliente (Opcional)</label>
-                <select
-                  value={novaTarefa.cliente_id}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, cliente_id: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Sem cliente</option>
-                  {clientes.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.nome}
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
+                  <select
+                    value={form.cliente_id}
+                    onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">—</option>
+                    {clientes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Data de Vencimento *</label>
                 <input
                   type="date"
-                  value={novaTarefa.data_vencimento}
-                  onChange={(e) => setNovaTarefa({ ...novaTarefa, data_vencimento: e.target.value })}
+                  value={form.data_vencimento}
+                  onChange={(e) => setForm({ ...form, data_vencimento: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   required
                 />
@@ -513,17 +575,18 @@ export default function TarefasPage() {
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={() => { setShowModal(false); resetForm(); }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
+                  disabled={saving}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:shadow-lg font-medium transition-all disabled:opacity-60"
-                  disabled={loading}
+                  disabled={saving}
                 >
-                  {loading ? 'A criar...' : 'Criar Tarefa'}
+                  {saving ? 'A guardar...' : mode === 'create' ? 'Criar Tarefa' : 'Guardar Alterações'}
                 </button>
               </div>
             </form>
