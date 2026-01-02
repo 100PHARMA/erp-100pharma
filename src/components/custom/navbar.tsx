@@ -95,6 +95,9 @@ export default function Navbar() {
 
   const moreRef = useRef<HTMLDivElement | null>(null);
 
+  // Badge: contador de tarefas pendentes
+  const [tarefasPendentesCount, setTarefasPendentesCount] = useState<number>(0);
+
   const handleLogout = async () => {
     await signOut();
     router.push('/login');
@@ -102,6 +105,27 @@ export default function Navbar() {
 
   // Não renderiza no /login
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
+
+  async function loadTarefasPendentesCount(isAdmin: boolean, vendedorId: string | null) {
+    try {
+      // Admin: pendentes globais
+      // (Se futuramente você quiser filtrar por vendedor para algum role, já está pronto)
+      let q = supabase
+        .from('tarefas')
+        .select('id', { count: 'exact', head: true })
+        .eq('estado', 'PENDENTE');
+
+      if (!isAdmin && vendedorId) {
+        q = q.eq('responsavel_vendedor_id', vendedorId);
+      }
+
+      const { count, error } = await q;
+      if (error) return; // não quebra a navbar por causa do badge
+      setTarefasPendentesCount(count ?? 0);
+    } catch {
+      // silencioso por design
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -115,6 +139,7 @@ export default function Navbar() {
           setRole('UNKNOWN');
           setDisplayName('');
           setEmail('');
+          setTarefasPendentesCount(0);
         }
         return;
       }
@@ -152,6 +177,10 @@ export default function Navbar() {
         setRole(resolvedRole);
         setDisplayName(name);
       }
+
+      // Carrega contador de tarefas pendentes (badge)
+      // Admin = global
+      await loadTarefasPendentesCount(resolvedRole === 'ADMIN', perfil?.vendedor_id ?? null);
     }
 
     loadIdentity();
@@ -200,12 +229,15 @@ export default function Navbar() {
             {/* Logo */}
             <Link href={homeHref} className="flex items-center">
               <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
-                <img src={LOGO_URL} alt="100PHARMA" className="h-full w-full object-contain p-1" />
+                <img
+                  src={LOGO_URL}
+                  alt="100PHARMA"
+                  className="h-full w-full object-contain p-1"
+                />
               </div>
             </Link>
 
-            {/* Menu rolável (mantém dimensões/spacing iguais ao que você já tinha)
-                Só que agora sem mostrar scrollbar (CSS no-scrollbar) */}
+            {/* Menu rolável */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pr-2">
                 {primaryItems.map((item) => {
@@ -217,7 +249,9 @@ export default function Navbar() {
                       href={item.href}
                       className={cx(
                         'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap',
-                        active ? 'bg-white text-blue-600 shadow-lg' : 'text-white hover:bg-blue-500/30'
+                        active
+                          ? 'bg-white text-blue-600 shadow-lg'
+                          : 'text-white hover:bg-blue-500/30'
                       )}
                     >
                       <Icon className="w-4 h-4" />
@@ -228,7 +262,7 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Direita: Mais + Sair (fora do overflow -> dropdown nunca corta) */}
+            {/* Direita: Mais + Sair */}
             <div className="ml-auto flex-none flex items-center gap-2 pl-4 border-l border-white/20">
               {!isVendor && moreItems.length > 0 && (
                 <div className="relative" ref={moreRef}>
@@ -254,6 +288,7 @@ export default function Navbar() {
                         {moreItems.map((item) => {
                           const Icon = item.icon;
                           const active = isActivePath(pathname, item.href);
+
                           return (
                             <Link
                               key={item.href}
@@ -265,7 +300,14 @@ export default function Navbar() {
                               )}
                             >
                               <Icon className="w-4 h-4" />
-                              <span>{item.label}</span>
+                              <span className="flex items-center gap-2">
+                                {item.label}
+                                {item.href === '/tarefas' && tarefasPendentesCount > 0 && (
+                                  <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold bg-red-600 text-white">
+                                    {tarefasPendentesCount}
+                                  </span>
+                                )}
+                              </span>
                             </Link>
                           );
                         })}
@@ -306,7 +348,11 @@ export default function Navbar() {
           <div className="flex items-center justify-between h-16">
             <Link href={homeHref} className="flex items-center gap-2">
               <div className="h-10 w-10 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
-                <img src={LOGO_URL} alt="100PHARMA" className="h-full w-full object-contain p-1" />
+                <img
+                  src={LOGO_URL}
+                  alt="100PHARMA"
+                  className="h-full w-full object-contain p-1"
+                />
               </div>
             </Link>
 
@@ -335,6 +381,7 @@ export default function Navbar() {
               {menuItems.map((item) => {
                 const Icon = item.icon;
                 const active = isActivePath(pathname, item.href);
+
                 return (
                   <Link
                     key={item.href}
@@ -346,7 +393,16 @@ export default function Navbar() {
                     )}
                   >
                     <Icon className="w-5 h-5" />
-                    <span>{item.label}</span>
+                    <span className="flex items-center gap-2">
+                      {item.label}
+                      {/* Opcional: se quiser badge também no mobile (admin),
+                          o item '/tarefas' não aparece no vendorMenuItems */}
+                      {!isVendor && item.href === '/tarefas' && tarefasPendentesCount > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold bg-red-600 text-white">
+                          {tarefasPendentesCount}
+                        </span>
+                      )}
+                    </span>
                   </Link>
                 );
               })}
