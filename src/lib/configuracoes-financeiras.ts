@@ -1,4 +1,4 @@
-import { supabase } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ======================================================================
 // TIPOS
@@ -68,7 +68,7 @@ const CONFIGURACAO_PADRAO: Omit<ConfiguracaoFinanceira, 'id' | 'created_at' | 'u
  * Busca a configuração financeira mais recente do Supabase
  * Ordena por created_at desc e id desc, limit 1
  */
-export async function buscarConfiguracaoFinanceira(): Promise<ConfiguracaoFinanceira> {
+export async function buscarConfiguracaoFinanceira(supabase: SupabaseClient): Promise<ConfiguracaoFinanceira> {
   try {
     // Buscar o registro mais recente
     const { data, error } = await supabase
