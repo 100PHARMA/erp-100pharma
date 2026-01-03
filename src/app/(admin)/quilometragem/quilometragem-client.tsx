@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import {
   Calendar,
   Car,
@@ -13,6 +12,8 @@ import {
   CreditCard,
   RefreshCw,
 } from 'lucide-react';
+
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 type KmLancRow = {
   id: string;
@@ -26,6 +27,7 @@ type KmLancRow = {
   status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO';
   motivo_rejeicao: string | null;
   criado_em: string;
+
   vendedores?: { id: string; nome?: string | null } | null;
   clientes?: { id: string; nome?: string | null } | null;
 };
@@ -54,15 +56,9 @@ function formatEUR(valor: number) {
   });
 }
 
-function getSupabaseBrowser() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 export default function QuilometragemClient({ initialMes }: { initialMes: string }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -73,6 +69,22 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
   const [valorKmRef, setValorKmRef] = useState<number>(0.2);
   const [rows, setRows] = useState<KmLancRow[]>([]);
 
+  // ---------------------------------------------------------------------------
+  // AUTH GUARD
+  // ---------------------------------------------------------------------------
+  async function ensureAuthOrRedirect() {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) {
+      const next = encodeURIComponent('/quilometragem');
+      window.location.href = `/login?next=${next}`;
+      return null;
+    }
+    return data.user;
+  }
+
+  // ---------------------------------------------------------------------------
+  // LOADERS
+  // ---------------------------------------------------------------------------
   const carregarValorKmRef = async () => {
     const { data: cfgRows, error: cfgErr } = await supabase
       .from('configuracoes_financeiras')
@@ -120,12 +132,11 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
   const bootstrap = async () => {
     setLoading(true);
     setErro(null);
-    try {
-      const { data: u, error: uErr } = await supabase.auth.getUser();
-      if (uErr || !u?.user) {
-        throw new Error('Sessão não encontrada no browser (cookies). Faça login novamente.');
-      }
 
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
+    try {
       await carregarValorKmRef();
       await carregarLancamentos(mes);
     } catch (e: any) {
@@ -136,6 +147,9 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // EFFECTS
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     bootstrap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,6 +159,10 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     (async () => {
       setLoading(true);
       setErro(null);
+
+      const user = await ensureAuthOrRedirect();
+      if (!user) return;
+
       try {
         await carregarValorKmRef();
         await carregarLancamentos(mes);
@@ -186,16 +204,21 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
 
   const recarregar = async () => bootstrap();
 
+  // ---------------------------------------------------------------------------
+  // ACTIONS
+  // ---------------------------------------------------------------------------
   const aprovarLancamento = async (id: string) => {
     if (!confirm('Aprovar este lançamento de KM?')) return;
+
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     try {
       setLoading(true);
-      const { data: u } = await supabase.auth.getUser();
-      const userId = u?.user?.id ?? null;
 
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
-        .update({ status: 'APROVADO', aprovado_em: new Date().toISOString(), aprovado_por: userId })
+        .update({ status: 'APROVADO', aprovado_em: new Date().toISOString(), aprovado_por: user.id })
         .eq('id', id);
 
       if (error) throw new Error(error.message);
@@ -212,8 +235,12 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     const motivo = prompt('Motivo da rejeição (obrigatório):');
     if (!motivo || !motivo.trim()) return;
 
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     try {
       setLoading(true);
+
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
         .update({ status: 'REJEITADO', motivo_rejeicao: motivo.trim() })
@@ -232,14 +259,15 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
   const marcarComoPago = async (id: string) => {
     if (!confirm('Marcar este lançamento como PAGO?')) return;
 
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     try {
       setLoading(true);
-      const { data: u } = await supabase.auth.getUser();
-      const userId = u?.user?.id ?? null;
 
       const { error } = await supabase
         .from('vendedor_km_lancamentos')
-        .update({ status: 'PAGO', pago_em: new Date().toISOString(), pago_por: userId })
+        .update({ status: 'PAGO', pago_em: new Date().toISOString(), pago_por: user.id })
         .eq('id', id);
 
       if (error) throw new Error(error.message);
@@ -260,6 +288,9 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     return <span className={`${base} bg-red-100 text-red-800`}>Rejeitado</span>;
   };
 
+  // ---------------------------------------------------------------------------
+  // RENDER
+  // ---------------------------------------------------------------------------
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 flex items-center justify-center">
@@ -523,11 +554,13 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
               <div>
                 <p className="font-semibold text-gray-900">Nota</p>
                 <p className="mt-1">
-                  Esta página usa autenticação por <b>cookies</b> (SSR), alinhada com o middleware. Não depende de Local Storage.
+                  Esta página valida sessão no browser e, se não existir, redireciona para login.
+                  Se abrir a rota “direto”, não fica em estado vazio.
                 </p>
               </div>
             </div>
           </div>
+
         </div>
       </div>
     </div>
