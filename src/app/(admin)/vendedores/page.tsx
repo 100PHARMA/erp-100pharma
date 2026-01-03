@@ -387,12 +387,14 @@ export default function VendedoresPage() {
       const { ano, mes } = getAnoMesAtualUtc();
       const periodoMes = monthRangeUtc(ano, mes);
 
+      const supabase = createSupabaseBrowserClient();
+
       // 1) Config global (para telas e fallback)
-      const cfg = await buscarConfiguracaoFinanceira();
+      const cfg = await buscarConfiguracaoFinanceira(supabase);
       setConfigFinanceira(cfg);
 
       // 2) Métricas do mês (SEM IVA, por faturas emitidas)
-      const metricas = await getVendedorMetricasMes(ano, mes);
+      const metricas = await getVendedorMetricasMes(supabase, ano, mes);
       setMetricasMes(metricas);
 
       // 3) Vendedores (dados cadastrais)
