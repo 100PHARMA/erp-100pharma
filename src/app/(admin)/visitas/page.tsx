@@ -41,16 +41,8 @@ const statusLabels: Record<EstadoVisita, string> = {
   CANCELADA: 'Cancelada',
 };
 
-type ClienteRow = {
-  id: string;
-  nome: string;
-};
-
-type VendedorRow = {
-  id: string;
-  nome: string;
-  email?: string | null;
-};
+type ClienteRow = { id: string; nome: string };
+type VendedorRow = { id: string; nome: string; email?: string | null };
 
 type VisitaRow = {
   id: string;
@@ -74,28 +66,36 @@ type VisitaRow = {
 type KmLancamentoRow = {
   id: string;
   visita_id: string;
-  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO' | string;
+  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | string;
   km: number | null;
   valor_total: number | null;
 };
+
+function todayISO(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 export default function VisitasPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [filterStatus, setFilterStatus] = useState<
-    'TODOS' | 'AGENDADA' | 'REALIZADA' | 'CANCELADA'
-  >('TODOS');
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+
+  const [filterStatus, setFilterStatus] = useState<'TODOS' | EstadoVisita>('TODOS');
   const [busca, setBusca] = useState('');
 
   const [clientes, setClientes] = useState<ClienteRow[]>([]);
   const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
 
-  const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>(
-    {}
-  );
+  const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>({});
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -106,11 +106,11 @@ export default function VisitasPage() {
     vendedor_id: string;
     cliente_id: string;
     data_visita: string;
-    hora_inicio: string; // UI only
-    hora_fim: string; // UI only
-    objetivo: string; // notas
-    resultado: string; // notas
-    proxima_acao: string; // notas
+    hora_inicio: string;
+    hora_fim: string;
+    objetivo: string; // notas (campo principal)
+    resultado: string;
+    proxima_acao: string;
     km_informado: string;
     km_referencia: string;
     estado: EstadoVisita;
@@ -128,9 +128,9 @@ export default function VisitasPage() {
     estado: 'AGENDADA',
   });
 
-  // =========================================================
-  // AUTH GUARD (evita “tela vazia” quando não há sessão)
-  // =========================================================
+  // ---------------------------------------------------------------------------
+  // AUTH GUARD
+  // ---------------------------------------------------------------------------
   async function ensureAuthOrRedirect() {
     const { data, error } = await supabase.auth.getUser();
     if (error || !data?.user) {
@@ -141,9 +141,9 @@ export default function VisitasPage() {
     return data.user;
   }
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // LOAD
-  // =========================================================
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     (async () => {
       await carregarTudo();
@@ -153,6 +153,7 @@ export default function VisitasPage() {
 
   async function carregarTudo() {
     setLoading(true);
+    setPageError(null);
 
     const user = await ensureAuthOrRedirect();
     if (!user) return;
@@ -209,7 +210,6 @@ export default function VisitasPage() {
           .in('visita_id', visitaIds);
 
         if (kmErr) {
-          console.warn('Aviso: não consegui ler vendedor_km_lancamentos:', kmErr);
           setKmLancMap({});
         } else {
           const map: Record<string, KmLancamentoRow> = {};
@@ -223,20 +223,20 @@ export default function VisitasPage() {
       }
     } catch (e: any) {
       console.error(e);
-      alert('Erro ao carregar visitas: ' + (e?.message ?? 'Erro desconhecido'));
+      setPageError(e?.message ?? 'Erro desconhecido ao carregar visitas');
     } finally {
       setLoading(false);
     }
   }
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // HELPERS
-  // =========================================================
-  function resetForm() {
+  // ---------------------------------------------------------------------------
+  function resetForm(defaults?: Partial<typeof form>) {
     setForm({
       vendedor_id: '',
       cliente_id: '',
-      data_visita: '',
+      data_visita: todayISO(),
       hora_inicio: '',
       hora_fim: '',
       objetivo: '',
@@ -245,26 +245,30 @@ export default function VisitasPage() {
       km_informado: '',
       km_referencia: '',
       estado: 'AGENDADA',
+      ...(defaults ?? {}),
     });
     setModoEdicao(false);
     setVisitaEditandoId(null);
+    setModalError(null);
   }
 
   function abrirModalNova() {
-    resetForm();
+    resetForm({ data_visita: todayISO(), estado: 'AGENDADA' });
     setShowModal(true);
   }
 
   function abrirModalEditar(visita: VisitaRow) {
     setModoEdicao(true);
     setVisitaEditandoId(visita.id);
+    setModalError(null);
 
+    // Mantém o que está em notas como “objetivo” por enquanto
     const notas = visita.notas ?? '';
 
     setForm({
       vendedor_id: visita.vendedor_id,
       cliente_id: visita.cliente_id ?? '',
-      data_visita: visita.data_visita,
+      data_visita: visita.data_visita ?? todayISO(),
       hora_inicio: '',
       hora_fim: '',
       objetivo: notas,
@@ -290,31 +294,31 @@ export default function VisitasPage() {
     if (form.hora_inicio || form.hora_fim) {
       parts.push(`Horário: ${form.hora_inicio || '—'} - ${form.hora_fim || '—'}`);
     }
-    if (form.objetivo) parts.push(`Objetivo: ${form.objetivo}`);
+    if (form.objetivo) parts.push(`Notas: ${form.objetivo}`);
     if (form.resultado) parts.push(`Resultado: ${form.resultado}`);
     if (form.proxima_acao) parts.push(`Próxima ação: ${form.proxima_acao}`);
     return parts.join('\n');
   }
 
-  // KM PAGO? (trava tudo exceto notas)
   const kmPago = useMemo(() => {
     if (!modoEdicao || !visitaEditandoId) return false;
     const st = String(kmLancMap?.[visitaEditandoId]?.status ?? '').toUpperCase();
     return st === 'PAGO';
   }, [modoEdicao, visitaEditandoId, kmLancMap]);
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // SUBMIT
-  // =========================================================
+  // ---------------------------------------------------------------------------
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setModalError(null);
 
     const user = await ensureAuthOrRedirect();
     if (!user) return;
 
-    // Se estiver PAGO e estamos editando, só permitimos atualizar NOTAS.
+    // Se estiver PAGO e editando, só notas
     if (modoEdicao && visitaEditandoId && kmPago) {
-      setLoading(true);
+      setSaving(true);
       try {
         const notasSomente = buildNotas();
 
@@ -329,26 +333,34 @@ export default function VisitasPage() {
 
         if (error) throw error;
 
-        alert('Notas atualizadas (KM PAGO: demais campos bloqueados).');
         setShowModal(false);
         resetForm();
         await carregarTudo();
+        return;
       } catch (e: any) {
         console.error(e);
-        alert('Erro ao salvar notas: ' + (e?.message ?? 'Erro desconhecido'));
+        setModalError(e?.message ?? 'Erro ao salvar notas');
       } finally {
-        setLoading(false);
+        setSaving(false);
       }
       return;
     }
 
-    // Fluxo normal
-    if (!form.vendedor_id || !form.data_visita || !form.objetivo) {
-      alert('Preencha: Vendedor, Data e Objetivo.');
+    // Validação explícita (não depende do "required" do browser)
+    if (!form.cliente_id) {
+      setModalError('Selecione um Cliente/Farmácia.');
       return;
     }
-    if (!form.cliente_id) {
-      alert('Selecione um cliente/farmácia.');
+    if (!form.vendedor_id) {
+      setModalError('Selecione um Vendedor.');
+      return;
+    }
+    if (!form.data_visita) {
+      setModalError('Selecione a Data da Visita.');
+      return;
+    }
+    if (!form.objetivo.trim()) {
+      setModalError('Preencha as Notas (obrigatório).');
       return;
     }
 
@@ -356,15 +368,15 @@ export default function VisitasPage() {
     const kmReferencia = parseNum(form.km_referencia);
 
     if (kmInformado != null && kmInformado < 0) {
-      alert('KM informado não pode ser negativo.');
+      setModalError('KM informado não pode ser negativo.');
       return;
     }
     if (kmReferencia != null && kmReferencia < 0) {
-      alert('KM referência não pode ser negativo.');
+      setModalError('KM referência não pode ser negativo.');
       return;
     }
 
-    setLoading(true);
+    setSaving(true);
     try {
       const payload: any = {
         vendedor_id: form.vendedor_id,
@@ -385,12 +397,10 @@ export default function VisitasPage() {
           .eq('id', visitaEditandoId);
 
         if (error) throw error;
-        alert('Visita atualizada.');
       } else {
         payload.created_by = user.id;
         const { error } = await supabase.from('vendedor_visitas').insert(payload);
         if (error) throw error;
-        alert('Visita agendada.');
       }
 
       setShowModal(false);
@@ -398,20 +408,20 @@ export default function VisitasPage() {
       await carregarTudo();
     } catch (e: any) {
       console.error(e);
-      alert('Erro ao salvar visita: ' + (e?.message ?? 'Erro desconhecido'));
+      setModalError(e?.message ?? 'Erro ao salvar visita');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // AÇÕES
-  // =========================================================
+  // ---------------------------------------------------------------------------
   async function concluirVisita(visita: VisitaRow) {
+    if ((visita.estado ?? 'AGENDADA') === 'REALIZADA') return;
+
     const user = await ensureAuthOrRedirect();
     if (!user) return;
-
-    if ((visita.estado ?? 'AGENDADA') === 'REALIZADA') return;
 
     const km = visita.km_informado ?? null;
     if (km == null || Number(km) <= 0) {
@@ -447,10 +457,10 @@ export default function VisitasPage() {
   }
 
   async function cancelarVisita(visita: VisitaRow) {
+    if ((visita.estado ?? 'AGENDADA') === 'CANCELADA') return;
+
     const user = await ensureAuthOrRedirect();
     if (!user) return;
-
-    if ((visita.estado ?? 'AGENDADA') === 'CANCELADA') return;
 
     if (!confirm('Cancelar esta visita?')) return;
 
@@ -477,14 +487,13 @@ export default function VisitasPage() {
     }
   }
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // FILTRO + STATS
-  // =========================================================
+  // ---------------------------------------------------------------------------
   const visitasFiltradas = useMemo(() => {
     const term = busca.trim().toLowerCase();
     return visitas.filter((v) => {
       const estado = (v.estado ?? 'AGENDADA') as EstadoVisita;
-
       const matchStatus = filterStatus === 'TODOS' || estado === filterStatus;
 
       const clienteNome = (v.clientes?.nome ?? '').toLowerCase();
@@ -492,10 +501,7 @@ export default function VisitasPage() {
       const notas = (v.notas ?? '').toLowerCase();
 
       const matchBusca =
-        !term ||
-        clienteNome.includes(term) ||
-        vendedorNome.includes(term) ||
-        notas.includes(term);
+        !term || clienteNome.includes(term) || vendedorNome.includes(term) || notas.includes(term);
 
       return matchStatus && matchBusca;
     });
@@ -513,9 +519,9 @@ export default function VisitasPage() {
     return { total, agendadas, realizadas, totalKm };
   }, [visitas]);
 
-  // =========================================================
+  // ---------------------------------------------------------------------------
   // RENDER
-  // =========================================================
+  // ---------------------------------------------------------------------------
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
@@ -527,9 +533,31 @@ export default function VisitasPage() {
     );
   }
 
+  if (pageError) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="bg-white border border-red-200 rounded-xl p-4 text-red-700">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 mt-0.5" />
+            <div>
+              <p className="font-semibold">Erro ao carregar a página</p>
+              <p className="mt-1 whitespace-pre-wrap">{pageError}</p>
+              <button
+                className="mt-3 px-4 py-2 rounded-lg bg-gray-900 text-white font-semibold"
+                onClick={() => carregarTudo()}
+                type="button"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-      {/* Header */}
       <div className="mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -540,6 +568,7 @@ export default function VisitasPage() {
           </div>
           <button
             onClick={abrirModalNova}
+            type="button"
             className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
           >
             <Plus className="w-5 h-5" />
@@ -548,7 +577,6 @@ export default function VisitasPage() {
         </div>
       </div>
 
-      {/* Search + Filters */}
       <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6">
         <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="relative flex-1">
@@ -565,6 +593,7 @@ export default function VisitasPage() {
             {(['TODOS', 'AGENDADA', 'REALIZADA', 'CANCELADA'] as const).map((status) => (
               <button
                 key={status}
+                type="button"
                 onClick={() => setFilterStatus(status)}
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
                   filterStatus === status
@@ -579,7 +608,6 @@ export default function VisitasPage() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6">
           <div className="flex items-center gap-3 mb-2">
@@ -618,13 +646,10 @@ export default function VisitasPage() {
             </div>
             <span className="text-sm text-gray-600">Total KM (realizadas)</span>
           </div>
-          <p className="text-2xl sm:text-3xl font-bold text-purple-600">
-            {stats.totalKm.toLocaleString('pt-PT')}
-          </p>
+          <p className="text-2xl sm:text-3xl font-bold text-purple-600">{stats.totalKm.toLocaleString('pt-PT')}</p>
         </div>
       </div>
 
-      {/* List */}
       <div className="space-y-4">
         {visitasFiltradas.map((visita) => {
           const estado = (visita.estado ?? 'AGENDADA') as EstadoVisita;
@@ -641,10 +666,7 @@ export default function VisitasPage() {
             ) : null;
 
           return (
-            <div
-              key={visita.id}
-              className="bg-white rounded-xl shadow-lg p-4 sm:p-6 hover:shadow-xl transition-all duration-300"
-            >
+            <div key={visita.id} className="bg-white rounded-xl shadow-lg p-4 sm:p-6 hover:shadow-xl transition-all duration-300">
               <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-start gap-3 mb-3">
@@ -660,9 +682,7 @@ export default function VisitasPage() {
                     </div>
 
                     <div className="flex flex-col items-end gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${statusColors[estado]}`}
-                      >
+                      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${statusColors[estado]}`}>
                         <StatusIcon className="w-3 h-3" />
                         {statusLabels[estado]}
                       </span>
@@ -701,9 +721,7 @@ export default function VisitasPage() {
                       <span>
                         Concluída em:{' '}
                         <span className="font-semibold text-gray-900">
-                          {visita.concluida_em
-                            ? new Date(visita.concluida_em).toLocaleString('pt-PT')
-                            : '—'}
+                          {visita.concluida_em ? new Date(visita.concluida_em).toLocaleString('pt-PT') : '—'}
                         </span>
                       </span>
                     </div>
@@ -712,9 +730,7 @@ export default function VisitasPage() {
                   {visita.notas ? (
                     <div className="bg-slate-50 rounded-lg p-3">
                       <p className="text-xs text-gray-600 mb-1">Notas</p>
-                      <pre className="text-sm text-gray-900 whitespace-pre-wrap font-sans">
-                        {visita.notas}
-                      </pre>
+                      <pre className="text-sm text-gray-900 whitespace-pre-wrap font-sans">{visita.notas}</pre>
                     </div>
                   ) : (
                     <div className="bg-slate-50 rounded-lg p-3">
@@ -723,9 +739,9 @@ export default function VisitasPage() {
                   )}
                 </div>
 
-                {/* Actions */}
                 <div className="flex flex-row lg:flex-col gap-2 justify-end">
                   <button
+                    type="button"
                     onClick={() => abrirModalEditar(visita)}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-sm"
                   >
@@ -735,6 +751,7 @@ export default function VisitasPage() {
 
                   {(visita.estado ?? 'AGENDADA') !== 'REALIZADA' && (
                     <button
+                      type="button"
                       onClick={() => concluirVisita(visita)}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-sm"
                     >
@@ -744,6 +761,7 @@ export default function VisitasPage() {
                   )}
 
                   <button
+                    type="button"
                     onClick={() => cancelarVisita(visita)}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm"
                   >
@@ -764,13 +782,13 @@ export default function VisitasPage() {
         </div>
       )}
 
-      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
               <h2 className="text-2xl font-bold">{modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}</h2>
               <button
+                type="button"
                 onClick={() => {
                   setShowModal(false);
                   resetForm();
@@ -781,7 +799,6 @@ export default function VisitasPage() {
               </button>
             </div>
 
-            {/* ALERTA quando KM está PAGO */}
             {modoEdicao && kmPago && (
               <div className="mx-6 mt-6 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
                 <div className="flex items-start gap-3">
@@ -797,17 +814,27 @@ export default function VisitasPage() {
               </div>
             )}
 
+            {modalError && (
+              <div className="mx-6 mt-6 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-800">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Não foi possível gravar</p>
+                    <p className="mt-1 whitespace-pre-wrap">{modalError}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Cliente */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Cliente/Farmácia *</label>
                   <select
                     value={form.cliente_id}
                     onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   >
                     <option value="">Selecione...</option>
                     {clientes.map((c) => (
@@ -818,28 +845,24 @@ export default function VisitasPage() {
                   </select>
                 </div>
 
-                {/* Vendedor */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Vendedor *</label>
                   <select
                     value={form.vendedor_id}
                     onChange={(e) => setForm({ ...form, vendedor_id: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   >
                     <option value="">Selecione...</option>
                     {vendedores.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.nome}
-                        {v.email ? ` (${v.email})` : ''}
+                        {v.nome}{v.email ? ` (${v.email})` : ''}
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
 
-              {/* Data */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Data da Visita *</label>
                 <input
@@ -847,12 +870,10 @@ export default function VisitasPage() {
                   value={form.data_visita}
                   onChange={(e) => setForm({ ...form, data_visita: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                  disabled={kmPago}
+                  disabled={kmPago || saving}
                 />
               </div>
 
-              {/* Horas (UI) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Hora Início (opcional)</label>
@@ -861,7 +882,7 @@ export default function VisitasPage() {
                     value={form.hora_inicio}
                     onChange={(e) => setForm({ ...form, hora_inicio: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
 
@@ -872,12 +893,11 @@ export default function VisitasPage() {
                     value={form.hora_fim}
                     onChange={(e) => setForm({ ...form, hora_fim: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
               </div>
 
-              {/* KM */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">KM informado</label>
@@ -889,7 +909,7 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, km_informado: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
 
@@ -903,12 +923,11 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, km_referencia: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Ex: 15"
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
               </div>
 
-              {/* Notas (sempre editável) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Notas *</label>
                 <textarea
@@ -916,12 +935,14 @@ export default function VisitasPage() {
                   onChange={(e) => setForm({ ...form, objetivo: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   rows={4}
-                  required
+                  disabled={saving}
+                  required={false}
                 />
-                {kmPago && <p className="text-xs text-amber-700 mt-1">KM PAGO: apenas este campo será salvo.</p>}
+                {kmPago && (
+                  <p className="text-xs text-amber-700 mt-1">KM PAGO: apenas este campo será salvo.</p>
+                )}
               </div>
 
-              {/* Resultado / Próxima ação (bloqueia quando PAGO) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Resultado (opcional)</label>
@@ -930,7 +951,7 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, resultado: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     rows={3}
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
 
@@ -941,19 +962,18 @@ export default function VisitasPage() {
                     onChange={(e) => setForm({ ...form, proxima_acao: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     rows={3}
-                    disabled={kmPago}
+                    disabled={kmPago || saving}
                   />
                 </div>
               </div>
 
-              {/* Estado (bloqueia quando PAGO) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
                 <select
                   value={form.estado}
                   onChange={(e) => setForm({ ...form, estado: e.target.value as EstadoVisita })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  disabled={kmPago}
+                  disabled={kmPago || saving}
                 >
                   <option value="AGENDADA">Agendada</option>
                   <option value="REALIZADA">Realizada</option>
@@ -969,16 +989,18 @@ export default function VisitasPage() {
                     resetForm();
                   }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold transition-colors"
+                  disabled={saving}
                 >
                   Fechar
                 </button>
 
                 <button
                   type="submit"
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:shadow-lg font-semibold transition-all flex items-center justify-center gap-2"
+                  disabled={saving}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:shadow-lg font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-60"
                 >
                   <Save className="w-5 h-5" />
-                  {modoEdicao ? (kmPago ? 'Salvar notas' : 'Salvar alterações') : 'Agendar visita'}
+                  {saving ? 'A guardar...' : modoEdicao ? (kmPago ? 'Salvar notas' : 'Salvar alterações') : 'Agendar visita'}
                 </button>
               </div>
             </form>
