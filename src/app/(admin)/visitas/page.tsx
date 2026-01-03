@@ -74,7 +74,7 @@ type VisitaRow = {
 type KmLancamentoRow = {
   id: string;
   visita_id: string;
-  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | string;
+  status: 'PENDENTE' | 'APROVADO' | 'PAGO' | 'REJEITADO' | string;
   km: number | null;
   valor_total: number | null;
 };
@@ -129,9 +129,21 @@ export default function VisitasPage() {
   });
 
   // =========================================================
+  // AUTH GUARD (evita “tela vazia” quando não há sessão)
+  // =========================================================
+  async function ensureAuthOrRedirect() {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) {
+      const next = encodeURIComponent('/visitas');
+      window.location.href = `/login?next=${next}`;
+      return null;
+    }
+    return data.user;
+  }
+
+  // =========================================================
   // LOAD
   // =========================================================
-
   useEffect(() => {
     (async () => {
       await carregarTudo();
@@ -141,6 +153,10 @@ export default function VisitasPage() {
 
   async function carregarTudo() {
     setLoading(true);
+
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     try {
       const { data: clientesData, error: cErr } = await supabase
         .from('clientes')
@@ -216,7 +232,6 @@ export default function VisitasPage() {
   // =========================================================
   // HELPERS
   // =========================================================
-
   function resetForm() {
     setForm({
       vendedor_id: '',
@@ -252,13 +267,11 @@ export default function VisitasPage() {
       data_visita: visita.data_visita,
       hora_inicio: '',
       hora_fim: '',
-      objetivo: notas, // por enquanto reaproveita
+      objetivo: notas,
       resultado: '',
       proxima_acao: '',
-      km_informado:
-        visita.km_informado != null ? String(visita.km_informado) : '',
-      km_referencia:
-        visita.km_referencia != null ? String(visita.km_referencia) : '',
+      km_informado: visita.km_informado != null ? String(visita.km_informado) : '',
+      km_referencia: visita.km_referencia != null ? String(visita.km_referencia) : '',
       estado: (visita.estado ?? 'AGENDADA') as EstadoVisita,
     });
 
@@ -293,25 +306,23 @@ export default function VisitasPage() {
   // =========================================================
   // SUBMIT
   // =========================================================
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
 
     // Se estiver PAGO e estamos editando, só permitimos atualizar NOTAS.
     if (modoEdicao && visitaEditandoId && kmPago) {
       setLoading(true);
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
         const notasSomente = buildNotas();
 
         const { error } = await supabase
           .from('vendedor_visitas')
           .update({
             notas: notasSomente,
-            updated_by: user?.id ?? null,
+            updated_by: user.id,
             origem: 'ADMIN',
           })
           .eq('id', visitaEditandoId);
@@ -331,7 +342,7 @@ export default function VisitasPage() {
       return;
     }
 
-    // Fluxo normal (AGENDADA/REALIZADA/CANCELADA não pago)
+    // Fluxo normal
     if (!form.vendedor_id || !form.data_visita || !form.objetivo) {
       alert('Preencha: Vendedor, Data e Objetivo.');
       return;
@@ -355,10 +366,6 @@ export default function VisitasPage() {
 
     setLoading(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
       const payload: any = {
         vendedor_id: form.vendedor_id,
         cliente_id: form.cliente_id,
@@ -368,7 +375,7 @@ export default function VisitasPage() {
         km_informado: kmInformado,
         km_referencia: kmReferencia,
         origem: 'ADMIN',
-        updated_by: user?.id ?? null,
+        updated_by: user.id,
       };
 
       if (modoEdicao && visitaEditandoId) {
@@ -380,7 +387,7 @@ export default function VisitasPage() {
         if (error) throw error;
         alert('Visita atualizada.');
       } else {
-        payload.created_by = user?.id ?? null;
+        payload.created_by = user.id;
         const { error } = await supabase.from('vendedor_visitas').insert(payload);
         if (error) throw error;
         alert('Visita agendada.');
@@ -400,8 +407,10 @@ export default function VisitasPage() {
   // =========================================================
   // AÇÕES
   // =========================================================
-
   async function concluirVisita(visita: VisitaRow) {
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     if ((visita.estado ?? 'AGENDADA') === 'REALIZADA') return;
 
     const km = visita.km_informado ?? null;
@@ -414,17 +423,13 @@ export default function VisitasPage() {
 
     setLoading(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
       const { error } = await supabase
         .from('vendedor_visitas')
         .update({
           estado: 'REALIZADA',
           concluida_em: new Date().toISOString(),
-          concluida_por: user?.id ?? null,
-          updated_by: user?.id ?? null,
+          concluida_por: user.id,
+          updated_by: user.id,
           origem: 'ADMIN',
         })
         .eq('id', visita.id);
@@ -442,21 +447,20 @@ export default function VisitasPage() {
   }
 
   async function cancelarVisita(visita: VisitaRow) {
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
+
     if ((visita.estado ?? 'AGENDADA') === 'CANCELADA') return;
 
     if (!confirm('Cancelar esta visita?')) return;
 
     setLoading(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
       const { error } = await supabase
         .from('vendedor_visitas')
         .update({
           estado: 'CANCELADA',
-          updated_by: user?.id ?? null,
+          updated_by: user.id,
           origem: 'ADMIN',
         })
         .eq('id', visita.id);
@@ -476,7 +480,6 @@ export default function VisitasPage() {
   // =========================================================
   // FILTRO + STATS
   // =========================================================
-
   const visitasFiltradas = useMemo(() => {
     const term = busca.trim().toLowerCase();
     return visitas.filter((v) => {
@@ -513,7 +516,6 @@ export default function VisitasPage() {
   // =========================================================
   // RENDER
   // =========================================================
-
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
@@ -531,9 +533,7 @@ export default function VisitasPage() {
       <div className="mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-1">
-              Visitas (Admin)
-            </h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-1">Visitas (Admin)</h1>
             <p className="text-gray-600 text-sm sm:text-base">
               Agendamento, conclusão e quilometragem por visita (gera lançamento de KM ao concluir)
             </p>
@@ -653,9 +653,7 @@ export default function VisitasPage() {
                     </div>
 
                     <div className="flex-1">
-                      <h3 className="font-bold text-gray-900 mb-1">
-                        {visita.clientes?.nome ?? '—'}
-                      </h3>
+                      <h3 className="font-bold text-gray-900 mb-1">{visita.clientes?.nome ?? '—'}</h3>
                       <p className="text-sm text-gray-600">
                         Vendedor: {visita.vendedores?.nome ?? visita.vendedor_id}
                       </p>
@@ -771,9 +769,7 @@ export default function VisitasPage() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
-              <h2 className="text-2xl font-bold">
-                {modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}
-              </h2>
+              <h2 className="text-2xl font-bold">{modoEdicao ? 'Editar Visita' : 'Agendar Nova Visita'}</h2>
               <button
                 onClick={() => {
                   setShowModal(false);
@@ -805,9 +801,7 @@ export default function VisitasPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Cliente */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Cliente/Farmácia *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Cliente/Farmácia *</label>
                   <select
                     value={form.cliente_id}
                     onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
@@ -826,9 +820,7 @@ export default function VisitasPage() {
 
                 {/* Vendedor */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vendedor *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Vendedor *</label>
                   <select
                     value={form.vendedor_id}
                     onChange={(e) => setForm({ ...form, vendedor_id: e.target.value })}
@@ -839,7 +831,8 @@ export default function VisitasPage() {
                     <option value="">Selecione...</option>
                     {vendedores.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.nome}{v.email ? ` (${v.email})` : ''}
+                        {v.nome}
+                        {v.email ? ` (${v.email})` : ''}
                       </option>
                     ))}
                   </select>
@@ -848,9 +841,7 @@ export default function VisitasPage() {
 
               {/* Data */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Data da Visita *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Data da Visita *</label>
                 <input
                   type="date"
                   value={form.data_visita}
@@ -864,9 +855,7 @@ export default function VisitasPage() {
               {/* Horas (UI) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Hora Início (opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Hora Início (opcional)</label>
                   <input
                     type="time"
                     value={form.hora_inicio}
@@ -877,9 +866,7 @@ export default function VisitasPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Hora Fim (opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Hora Fim (opcional)</label>
                   <input
                     type="time"
                     value={form.hora_fim}
@@ -893,9 +880,7 @@ export default function VisitasPage() {
               {/* KM */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    KM informado
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">KM informado</label>
                   <input
                     type="number"
                     step="0.1"
@@ -909,9 +894,7 @@ export default function VisitasPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    KM referência (opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">KM referência (opcional)</label>
                   <input
                     type="number"
                     step="0.1"
@@ -925,11 +908,9 @@ export default function VisitasPage() {
                 </div>
               </div>
 
-              {/* Objetivo / Notas (EDITÁVEL mesmo quando PAGO) */}
+              {/* Notas (sempre editável) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Notas *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Notas *</label>
                 <textarea
                   value={form.objetivo}
                   onChange={(e) => setForm({ ...form, objetivo: e.target.value })}
@@ -937,19 +918,13 @@ export default function VisitasPage() {
                   rows={4}
                   required
                 />
-                {kmPago && (
-                  <p className="text-xs text-amber-700 mt-1">
-                    KM PAGO: apenas este campo será salvo.
-                  </p>
-                )}
+                {kmPago && <p className="text-xs text-amber-700 mt-1">KM PAGO: apenas este campo será salvo.</p>}
               </div>
 
               {/* Resultado / Próxima ação (bloqueia quando PAGO) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Resultado (opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Resultado (opcional)</label>
                   <textarea
                     value={form.resultado}
                     onChange={(e) => setForm({ ...form, resultado: e.target.value })}
@@ -960,9 +935,7 @@ export default function VisitasPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Próxima ação (opcional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Próxima ação (opcional)</label>
                   <textarea
                     value={form.proxima_acao}
                     onChange={(e) => setForm({ ...form, proxima_acao: e.target.value })}
@@ -975,9 +948,7 @@ export default function VisitasPage() {
 
               {/* Estado (bloqueia quando PAGO) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Estado
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
                 <select
                   value={form.estado}
                   onChange={(e) => setForm({ ...form, estado: e.target.value as EstadoVisita })}
