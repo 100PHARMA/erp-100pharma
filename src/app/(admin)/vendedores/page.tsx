@@ -253,6 +253,7 @@ async function buscarKmPagoPeriodo(vendedorId: string, dataInicio: string, dataF
 // ======================================================================
 
 export default function VendedoresPage() {
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [vendedorClientes, setVendedorClientes] = useState<VendedorCliente[]>([]);
