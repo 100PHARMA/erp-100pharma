@@ -24,7 +24,7 @@ import {
   Download,
   AlertCircle,
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { buscarConfiguracaoFinanceira, type ConfiguracaoFinanceira } from '@/lib/configuracoes-financeiras';
 import { gerarRelatorioVendedorPdf } from '@/lib/relatorio-vendedor-pdf';
 import {
