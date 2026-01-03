@@ -15,7 +15,7 @@
 // Observação importante:
 // - Comissão e Meta são calculadas sempre sobre BASE SEM IVA (faturas emitidas).
 
-import { supabase } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   buscarConfiguracaoFinanceira,
   type ConfiguracaoFinanceira,
@@ -239,6 +239,7 @@ function pickRegraParaVendedor(
  * Comissão e meta sempre em € sem IVA (base por faturas emitidas).
  */
 export async function getVendedorMetricasMes(
+  supabase: SupabaseClient,
   ano: number,
   mes: number,
 ): Promise<VendedorMetricasMes[]> {
