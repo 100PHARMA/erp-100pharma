@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import {
   Calendar,
   Car,
@@ -62,8 +62,7 @@ function getSupabaseBrowser() {
 }
 
 export default function QuilometragemClient({ initialMes }: { initialMes: string }) {
-  const supabase = useMemo(() => getSupabaseBrowser(), []);
-
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
