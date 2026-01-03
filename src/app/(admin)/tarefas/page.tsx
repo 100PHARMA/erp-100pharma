@@ -33,7 +33,6 @@ type TarefaRow = {
   created_at: string;
   updated_at: string;
 
-  // joins (aliases)
   responsavel?: { nome: string } | null;
   cliente?: { nome: string } | null;
 };
@@ -68,10 +67,23 @@ export default function TarefasPage() {
     descricao: '',
     prioridade: 'MEDIA' as Prioridade,
     estado: 'PENDENTE' as Estado,
-    responsavel_vendedor_id: '' as string, // '' => null
-    cliente_id: '' as string, // '' => null
+    responsavel_vendedor_id: '' as string,
+    cliente_id: '' as string,
     data_vencimento: '',
   });
+
+  // ---------------------------------------------------------------------------
+  // AUTH GUARD
+  // ---------------------------------------------------------------------------
+  async function ensureAuthOrRedirect() {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) {
+      const next = encodeURIComponent('/tarefas');
+      window.location.href = `/login?next=${next}`;
+      return null;
+    }
+    return data.user;
+  }
 
   function resetForm() {
     setForm({
@@ -127,27 +139,10 @@ export default function TarefasPage() {
     return configs[estado];
   };
 
-  // =========================================================
-  // AUTH GUARD (impede “tela vazia” quando não há sessão)
-  // =========================================================
-  async function ensureAuthOrRedirect() {
-    const { data, error } = await supabase.auth.getUser();
-
-    // Se não tem user, não é “bug”: é falta de sessão.
-    // Redireciona explicitamente para login com next.
-    if (error || !data?.user) {
-      const next = encodeURIComponent('/tarefas');
-      window.location.href = `/login?next=${next}`;
-      return false;
-    }
-    return true;
-  }
-
   async function loadLookups() {
-    const ok = await ensureAuthOrRedirect();
-    if (!ok) return;
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
 
-    // vendedores
     const vendRes = await supabase
       .from('vendedores')
       .select('id,nome')
@@ -155,7 +150,6 @@ export default function TarefasPage() {
 
     if (!vendRes.error) setVendedores((vendRes.data ?? []) as VendedorMini[]);
 
-    // clientes
     const cliRes = await supabase
       .from('clientes')
       .select('id,nome')
@@ -166,11 +160,11 @@ export default function TarefasPage() {
   }
 
   async function loadTarefas() {
-    const ok = await ensureAuthOrRedirect();
-    if (!ok) return;
-
     setLoading(true);
     setErro(null);
+
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
 
     const { data, error } = await supabase
       .from('tarefas')
@@ -205,12 +199,6 @@ export default function TarefasPage() {
 
   useEffect(() => {
     (async () => {
-      setLoading(true);
-      setErro(null);
-
-      const ok = await ensureAuthOrRedirect();
-      if (!ok) return;
-
       await loadLookups();
       await loadTarefas();
     })();
@@ -221,8 +209,8 @@ export default function TarefasPage() {
     e.preventDefault();
     setErro(null);
 
-    const ok = await ensureAuthOrRedirect();
-    if (!ok) return;
+    const user = await ensureAuthOrRedirect();
+    if (!user) return;
 
     if (!form.titulo.trim() || !form.descricao.trim() || !form.data_vencimento) {
       setErro('Preencha Título, Descrição e Data de Vencimento.');
@@ -275,6 +263,7 @@ export default function TarefasPage() {
 
     const matchEstado = filtroEstado === 'TODOS' || t.estado === filtroEstado;
     const matchPrioridade = filtroPrioridade === 'TODOS' || t.prioridade === filtroPrioridade;
+
     return matchSearch && matchEstado && matchPrioridade;
   });
 
@@ -285,7 +274,6 @@ export default function TarefasPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Agenda e Tarefas</h1>
@@ -317,7 +305,6 @@ export default function TarefasPage() {
           </div>
         </div>
 
-        {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl shadow-md p-6">
             <div className="flex items-center gap-4">
@@ -368,7 +355,6 @@ export default function TarefasPage() {
           </div>
         </div>
 
-        {/* Filters */}
         <div className="bg-white rounded-xl shadow-md p-4">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 relative">
@@ -408,7 +394,6 @@ export default function TarefasPage() {
           </div>
         </div>
 
-        {/* List */}
         <div className="grid grid-cols-1 gap-4">
           {loading ? (
             <div className="text-center text-gray-600 py-12">Carregando tarefas...</div>
@@ -421,10 +406,7 @@ export default function TarefasPage() {
               const EstadoIcon = estadoConfig.icon;
 
               return (
-                <div
-                  key={tarefa.id}
-                  className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow"
-                >
+                <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="flex-1 space-y-3">
                       <div className="flex items-start gap-3">
@@ -446,16 +428,12 @@ export default function TarefasPage() {
                       <div className="flex flex-wrap items-center gap-4 text-sm">
                         <div className="flex items-center gap-2">
                           <span className="text-gray-600">Responsável:</span>
-                          <span className="font-medium text-gray-900">
-                            {tarefa.responsavel?.nome ?? '—'}
-                          </span>
+                          <span className="font-medium text-gray-900">{tarefa.responsavel?.nome ?? '—'}</span>
                         </div>
 
                         <div className="flex items-center gap-2">
                           <span className="text-gray-600">Cliente:</span>
-                          <span className="font-medium text-gray-900">
-                            {tarefa.cliente?.nome ?? '—'}
-                          </span>
+                          <span className="font-medium text-gray-900">{tarefa.cliente?.nome ?? '—'}</span>
                         </div>
 
                         <div className="flex items-center gap-2">
@@ -468,22 +446,12 @@ export default function TarefasPage() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <span
-                        className={cx(
-                          'inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium',
-                          estadoConfig.color
-                        )}
-                      >
+                      <span className={cx('inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium', estadoConfig.color)}>
                         <EstadoIcon className="w-3 h-3" />
                         {estadoConfig.label}
                       </span>
 
-                      <span
-                        className={cx(
-                          'inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium',
-                          prioridadeConfig.color
-                        )}
-                      >
+                      <span className={cx('inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium', prioridadeConfig.color)}>
                         {prioridadeConfig.label}
                       </span>
                     </div>
@@ -495,19 +463,12 @@ export default function TarefasPage() {
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
               <h2 className="text-2xl font-bold">{mode === 'create' ? 'Nova Tarefa' : 'Editar Tarefa'}</h2>
-              <button
-                onClick={() => {
-                  setShowModal(false);
-                  resetForm();
-                }}
-                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-              >
+              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
                 <X className="w-6 h-6" />
               </button>
             </div>
@@ -577,9 +538,7 @@ export default function TarefasPage() {
                   >
                     <option value="">—</option>
                     {vendedores.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.nome}
-                      </option>
+                      <option key={v.id} value={v.id}>{v.nome}</option>
                     ))}
                   </select>
                 </div>
@@ -593,9 +552,7 @@ export default function TarefasPage() {
                   >
                     <option value="">—</option>
                     {clientes.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.nome}
-                      </option>
+                      <option key={c.id} value={c.id}>{c.nome}</option>
                     ))}
                   </select>
                 </div>
@@ -615,10 +572,7 @@ export default function TarefasPage() {
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowModal(false);
-                    resetForm();
-                  }}
+                  onClick={() => { setShowModal(false); resetForm(); }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
                   disabled={saving}
                 >
