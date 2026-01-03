@@ -15,7 +15,7 @@
 // Observação importante:
 // - Comissão e Meta são calculadas sempre sobre BASE SEM IVA (faturas emitidas).
 
-import { supabase } from './supabase';
+import { supabase } from '@supabase/supabase-js';
 import {
   buscarConfiguracaoFinanceira,
   type ConfiguracaoFinanceira,
@@ -245,7 +245,7 @@ export async function getVendedorMetricasMes(
   const periodo = getMonthRange(ano, mes);
 
   // 1) Config global mais recente
-  const cfg = await buscarConfiguracaoFinanceira();
+  const cfg = await buscarConfiguracaoFinanceira(supabase);
 
   // 2) Vendedores
   const { data: vendedoresData, error: vendErr } = await supabase
