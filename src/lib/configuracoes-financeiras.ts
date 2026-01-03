@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase } from '@supabase/supabase-js';
 
 // ======================================================================
 // TIPOS
@@ -111,6 +111,7 @@ export async function buscarConfiguracaoFinanceira(): Promise<ConfiguracaoFinanc
  * NUNCA faz UPDATE - sempre cria novo registro para histórico
  */
 export async function criarConfiguracaoFinanceira(
+  supabase: SupabaseClient,
   config: Omit<ConfiguracaoFinanceira, 'id' | 'created_at' | 'updated_at'>
 ): Promise<ConfiguracaoFinanceira> {
   try {
