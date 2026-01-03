@@ -118,10 +118,7 @@ export default function TarefasPage() {
   };
 
   const getEstadoConfig = (estado: Estado) => {
-    const configs: Record<
-      Estado,
-      { color: string; icon: any; label: string }
-    > = {
+    const configs: Record<Estado, { color: string; icon: any; label: string }> = {
       PENDENTE: { color: 'bg-yellow-100 text-yellow-700', icon: Clock, label: 'Pendente' },
       EM_ANDAMENTO: { color: 'bg-blue-100 text-blue-700', icon: AlertCircle, label: 'Em Andamento' },
       CONCLUIDA: { color: 'bg-green-100 text-green-700', icon: CheckCircle, label: 'Concluída' },
@@ -130,7 +127,26 @@ export default function TarefasPage() {
     return configs[estado];
   };
 
+  // =========================================================
+  // AUTH GUARD (impede “tela vazia” quando não há sessão)
+  // =========================================================
+  async function ensureAuthOrRedirect() {
+    const { data, error } = await supabase.auth.getUser();
+
+    // Se não tem user, não é “bug”: é falta de sessão.
+    // Redireciona explicitamente para login com next.
+    if (error || !data?.user) {
+      const next = encodeURIComponent('/tarefas');
+      window.location.href = `/login?next=${next}`;
+      return false;
+    }
+    return true;
+  }
+
   async function loadLookups() {
+    const ok = await ensureAuthOrRedirect();
+    if (!ok) return;
+
     // vendedores
     const vendRes = await supabase
       .from('vendedores')
@@ -139,7 +155,7 @@ export default function TarefasPage() {
 
     if (!vendRes.error) setVendedores((vendRes.data ?? []) as VendedorMini[]);
 
-    // clientes (ajuste o campo de nome conforme seu schema; aqui assumo "nome")
+    // clientes
     const cliRes = await supabase
       .from('clientes')
       .select('id,nome')
@@ -150,14 +166,12 @@ export default function TarefasPage() {
   }
 
   async function loadTarefas() {
+    const ok = await ensureAuthOrRedirect();
+    if (!ok) return;
+
     setLoading(true);
     setErro(null);
 
-    // IMPORTANTE:
-    // - join em vendedores e clientes via FKs
-    // - os nomes do relationship vêm do FK; normalmente:
-    //   vendedores!tarefas_responsavel_vendedor_id_fkey
-    //   clientes!tarefas_cliente_id_fkey
     const { data, error } = await supabase
       .from('tarefas')
       .select(
@@ -191,6 +205,12 @@ export default function TarefasPage() {
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
+      setErro(null);
+
+      const ok = await ensureAuthOrRedirect();
+      if (!ok) return;
+
       await loadLookups();
       await loadTarefas();
     })();
@@ -200,6 +220,9 @@ export default function TarefasPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErro(null);
+
+    const ok = await ensureAuthOrRedirect();
+    if (!ok) return;
 
     if (!form.titulo.trim() || !form.descricao.trim() || !form.data_vencimento) {
       setErro('Preencha Título, Descrição e Data de Vencimento.');
@@ -398,7 +421,10 @@ export default function TarefasPage() {
               const EstadoIcon = estadoConfig.icon;
 
               return (
-                <div key={tarefa.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div
+                  key={tarefa.id}
+                  className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow"
+                >
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="flex-1 space-y-3">
                       <div className="flex items-start gap-3">
@@ -442,12 +468,22 @@ export default function TarefasPage() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <span className={cx('inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium', estadoConfig.color)}>
+                      <span
+                        className={cx(
+                          'inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-xs font-medium',
+                          estadoConfig.color
+                        )}
+                      >
                         <EstadoIcon className="w-3 h-3" />
                         {estadoConfig.label}
                       </span>
 
-                      <span className={cx('inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium', prioridadeConfig.color)}>
+                      <span
+                        className={cx(
+                          'inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-medium',
+                          prioridadeConfig.color
+                        )}
+                      >
                         {prioridadeConfig.label}
                       </span>
                     </div>
@@ -464,10 +500,14 @@ export default function TarefasPage() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
-              <h2 className="text-2xl font-bold">
-                {mode === 'create' ? 'Nova Tarefa' : 'Editar Tarefa'}
-              </h2>
-              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+              <h2 className="text-2xl font-bold">{mode === 'create' ? 'Nova Tarefa' : 'Editar Tarefa'}</h2>
+              <button
+                onClick={() => {
+                  setShowModal(false);
+                  resetForm();
+                }}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              >
                 <X className="w-6 h-6" />
               </button>
             </div>
@@ -575,7 +615,10 @@ export default function TarefasPage() {
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => { setShowModal(false); resetForm(); }}
+                  onClick={() => {
+                    setShowModal(false);
+                    resetForm();
+                  }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
                   disabled={saving}
                 >
