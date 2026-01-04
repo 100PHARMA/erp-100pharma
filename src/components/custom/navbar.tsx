@@ -109,6 +109,12 @@ export default function Navbar() {
     } catch {}
 
     // 3) Logout definitivo: navegação imediata para rota server que limpa cookies e redireciona
+    try {
+    // Se algum legado do supabase-js ainda existir, mata aqui
+    localStorage.removeItem('erp-100pharma-auth');
+    localStorage.removeItem('supabase.auth.token');
+    sessionStorage.clear();
+    } catch {}
     window.location.href = '/auth/signout';
   }, [logoutLoading, supabase]);
 
