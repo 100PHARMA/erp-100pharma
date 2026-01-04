@@ -10,7 +10,6 @@ function isEmail(value: string) {
 
 function safeInternalPath(input: string | null | undefined): string | null {
   if (!input) return null;
-  // segurança mínima: só permite redirects internos
   if (input.startsWith('/')) return input;
   return null;
 }
@@ -19,11 +18,10 @@ export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // O middleware usa `next`. Mantemos fallback para `redirect` por compatibilidade.
   const nextPath = useMemo(() => {
     const next = safeInternalPath(searchParams?.get('next'));
     const redirect = safeInternalPath(searchParams?.get('redirect'));
-    return next || redirect; // pode ser null
+    return next || redirect;
   }, [searchParams]);
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -49,7 +47,6 @@ export default function LoginClient() {
 
     setLoading(true);
     try {
-      // Client browser da @supabase/ssr escreve sessão em cookies
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
@@ -62,7 +59,12 @@ export default function LoginClient() {
         return;
       }
 
-      // Fonte única: public.perfis
+      // Força o browser a “assentar” a sessão no server antes de redirecionar.
+      // Isso reduz bugs de incógnito/refresh imediato.
+      try {
+        await fetch('/auth/whoami', { cache: 'no-store' });
+      } catch {}
+
       const { data: perfil, error: perfilError } = await supabase
         .from('perfis')
         .select('role')
@@ -82,7 +84,6 @@ export default function LoginClient() {
       } else if (role === 'ADMIN') {
         target = nextPath || '/dashboard';
       } else {
-        // Segurança: não joga para área errada se role estiver ausente/inválida
         setErro('Perfil sem role definido (ADMIN|VENDEDOR). Verifique public.perfis.');
         return;
       }
