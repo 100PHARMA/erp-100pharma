@@ -1,7 +1,4 @@
 // src/app/(admin)/dashboard/page.tsx
-
-import DashboardHome from '../page';
-
 export default function DashboardPage() {
-  return <DashboardHome />;
+  return <div style={{ padding: 24 }}>DASHBOARD OK</div>;
 }
