@@ -1,7 +1,7 @@
 // src/app/portal/layout.tsx
 import { redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import AuthProvider from '@/components/auth/AuthProvider';
+import { AuthProvider } from '@/components/auth/AuthProvider';
 import PortalNavbar from '@/components/custom/portal-navbar';
 
 export const dynamic = 'force-dynamic';
