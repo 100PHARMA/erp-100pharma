@@ -129,20 +129,21 @@ export default function PortalVisitasPage() {
   // BOOTSTRAP: user -> perfis -> vendedor_id
   // =========================================================
   useEffect(() => {
-    (async () => {
-      setLoading(true);
+  let cancelled = false;
 
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
+  (async () => {
+    setLoading(true); // ou setCarregando(true)
+
+    try {
+      const { data: uRes, error: userErr } = await supabase.auth.getUser();
+      const user = uRes.user;
 
       if (userErr || !user) {
         router.push('/login');
         return;
       }
 
-      setVendedorEmail(user.email ?? null);
+      if (!cancelled) setVendedorEmail(user.email ?? null);
 
       const { data: perfil, error: perfilErr } = await supabase
         .from('perfis')
@@ -150,12 +151,7 @@ export default function PortalVisitasPage() {
         .eq('id', user.id)
         .maybeSingle();
 
-      if (perfilErr) {
-        console.error('Erro ao buscar perfil:', perfilErr);
-        alert('Erro ao buscar perfil: ' + perfilErr.message);
-        router.push('/login');
-        return;
-      }
+      if (perfilErr) throw perfilErr;
 
       const role = String(perfil?.role ?? '').toUpperCase();
       if (role !== 'VENDEDOR') {
@@ -164,17 +160,30 @@ export default function PortalVisitasPage() {
       }
 
       if (!perfil?.vendedor_id) {
-        alert('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
-        router.push('/portal');
-        return;
+        throw new Error('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
       }
 
-      setVendedorId(perfil.vendedor_id);
-      await carregarTudo(perfil.vendedor_id);
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      if (!cancelled) setVendedorId(perfil.vendedor_id);
+
+      // CHAME A FUNÇÃO QUE VOCÊ JÁ TEM:
+      // visitas: await carregarTudo(perfil.vendedor_id);
+      // vendas:  await carregarDados(perfil.vendedor_id);
+      await carregarTudo(perfil.vendedor_id); // ou carregarDados
+    } catch (e: any) {
+      console.error(e);
+      alert('Erro no portal: ' + (e?.message ?? 'Erro'));
+      router.push('/login');
+    } finally {
+      if (!cancelled) setLoading(false); // ou setCarregando(false)
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   async function carregarTudo(vendId: string) {
     try {
