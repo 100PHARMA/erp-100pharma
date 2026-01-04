@@ -12,7 +12,7 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // IMPORTANTe: client estável (não recriar a cada render)
+  // Client estável (não recriar a cada render)
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [user, setUser] = useState<User | null>(null);
@@ -24,19 +24,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async function init() {
       try {
         // 1) rápido: pega sessão do storage/cookies
-        const { data: sess } = await supabase.auth.getSession();
+        const { data: sess, error: sessErr } = await supabase.auth.getSession();
         if (!mounted) return;
+
+        if (sessErr) {
+          setUser(null);
+          setLoading(false);
+          return;
+        }
 
         const sessionUser = sess.session?.user ?? null;
         setUser(sessionUser);
         setLoading(false);
 
-        // 2) opcional (robustez): confirma user no servidor
-        // (se isso der erro em anônimo/3rd party cookies, não quebra o app)
+        // 2) robustez: confirma user (se falhar, mantém o sessionUser)
         if (sessionUser) {
-          const { data } = await supabase.auth.getUser();
+          const { data: u, error: uErr } = await supabase.auth.getUser();
           if (!mounted) return;
-          setUser(data.user ?? sessionUser);
+          if (!uErr) setUser(u.user ?? sessionUser);
         }
       } catch {
         if (!mounted) return;
