@@ -2,6 +2,7 @@
 import { redirect } from 'next/navigation';
 import NavbarGate from '@/components/custom/navbar-gate';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import AuthProvider, { type AuthRole } from '@/components/auth/AuthProvider';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,39 +11,31 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // 🔒 Auth gate SERVER-SIDE (fonte única)
   const supabase = createSupabaseServerClient();
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Não logado → login
-  if (!user) {
-    redirect('/login');
-  }
+  if (!user) redirect('/login');
 
-  // Role gate
   const { data: perfil } = await supabase
     .from('perfis')
     .select('role')
     .eq('id', user.id)
     .maybeSingle();
 
-  const role = String(perfil?.role ?? '').toUpperCase();
+  const role = String(perfil?.role ?? '').toUpperCase() as AuthRole;
 
-  // Não é ADMIN → portal
-  if (role !== 'ADMIN') {
-    redirect('/portal');
-  }
+  if (role !== 'ADMIN') redirect('/portal');
 
-  // UI só renderiza se passou nos gates acima
   return (
-    <>
+    <AuthProvider
+      initialUser={{ id: user.id, email: user.email ?? null }}
+      initialRole="ADMIN"
+    >
       <NavbarGate />
-      <main className="min-h-[calc(100vh-4rem)]">
-        {children}
-      </main>
-    </>
+      <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+    </AuthProvider>
   );
 }
