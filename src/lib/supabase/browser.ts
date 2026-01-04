@@ -1,4 +1,3 @@
-// src/lib/supabase/browser.ts
 import { createBrowserClient } from '@supabase/ssr';
 
 let browserClient: ReturnType<typeof createBrowserClient> | null = null;
@@ -8,7 +7,7 @@ type CookieToSet = {
   value: string;
   options?: {
     path?: string;
-    domain?: string;
+    domain?: string; // vamos IGNORAR
     maxAge?: number;
     expires?: Date | string;
     secure?: boolean;
@@ -17,7 +16,6 @@ type CookieToSet = {
   };
 };
 
-// Parse simples de document.cookie -> [{name,value}]
 function getAllCookies(): Array<{ name: string; value: string }> {
   if (typeof document === 'undefined') return [];
   const raw = document.cookie || '';
@@ -37,9 +35,11 @@ function setCookie({ name, value, options }: CookieToSet) {
 
   parts.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
 
+  // Path sempre
   parts.push(`Path=${opts.path ?? '/'}`);
 
-  if (opts.domain) parts.push(`Domain=${opts.domain}`);
+  // CRÍTICO: NÃO setar Domain — deixa o browser assumir o host atual
+  // if (opts.domain) parts.push(`Domain=${opts.domain}`);
 
   if (typeof opts.maxAge === 'number') parts.push(`Max-Age=${opts.maxAge}`);
 
@@ -48,13 +48,13 @@ function setCookie({ name, value, options }: CookieToSet) {
     parts.push(`Expires=${exp.toUTCString()}`);
   }
 
-  // Em produção com HTTPS, isso deve estar true.
-  // Se você estiver em localhost http, o browser ignora Secure.
-  if (opts.secure) parts.push('Secure');
+  // Default Secure em HTTPS (evita cookies “fracos”)
+  const isHttps =
+    typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+  if (opts.secure ?? isHttps) parts.push('Secure');
 
-  // httpOnly não pode ser setado no browser (apenas server), então ignoramos.
-
-  if (opts.sameSite) parts.push(`SameSite=${opts.sameSite}`);
+  // Default SameSite=Lax (compatível e seguro)
+  parts.push(`SameSite=${opts.sameSite ?? 'lax'}`);
 
   document.cookie = parts.join('; ');
 }
@@ -65,9 +65,6 @@ export function createSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-  // IMPORTANTÍSSIMO:
-  // - Força o browser client a ler/escrever sessão via cookies,
-  //   alinhado com o middleware/server (SSR).
   browserClient = createBrowserClient(url, anon, {
     cookies: {
       getAll() {
