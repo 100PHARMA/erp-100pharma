@@ -1,6 +1,15 @@
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 
+function sanitizeCookieOptions(options: any) {
+  if (!options) return options;
+  const { domain, ...rest } = options;
+  return {
+    ...rest,
+    httpOnly: false,
+  };
+}
+
 export function createSupabaseServerClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -15,13 +24,10 @@ export function createSupabaseServerClient() {
       setAll(cookiesToSet) {
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, {
-              ...options,
-              httpOnly: false, // crítico p/ não “matar” o client após refresh
-            });
+            cookieStore.set(name, value, sanitizeCookieOptions(options));
           });
         } catch {
-          // Em alguns cenários, Next pode impedir set cookies.
+          // Next pode impedir set cookies em alguns cenários.
         }
       },
     },
