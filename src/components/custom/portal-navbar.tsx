@@ -29,18 +29,15 @@ export default function PortalNavbar() {
   const handleLogout = useCallback(async () => {
     if (logoutLoading) return;
 
+    setLogoutLoading(true);
+
+    // best-effort limpar client
     try {
-      setLogoutLoading(true);
-      await fetch('/auth/signout', { method: 'POST' });
+      await supabase.auth.signOut();
+    } catch {}
 
-      try {
-        await supabase.auth.signOut();
-      } catch {}
-
-      window.location.assign('/login');
-    } finally {
-      setLogoutLoading(false);
-    }
+    // logout definitivo + redirect
+    window.location.assign('/auth/signout');
   }, [logoutLoading, supabase]);
 
   useEffect(() => {
