@@ -1,15 +1,6 @@
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 
-function sanitizeCookieOptions(options: any) {
-  if (!options) return options;
-  const { domain, ...rest } = options;
-  return {
-    ...rest,
-    httpOnly: false,
-  };
-}
-
 export function createSupabaseServerClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -24,10 +15,12 @@ export function createSupabaseServerClient() {
       setAll(cookiesToSet) {
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, sanitizeCookieOptions(options));
+            // NÃO altere options
+            cookieStore.set(name, value, options);
           });
         } catch {
-          // Next pode impedir set cookies em alguns cenários.
+          // Em alguns cenários (RSC sem mutation), o Next bloqueia set.
+          // Isso é esperado e não quebra o fluxo.
         }
       },
     },
