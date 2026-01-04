@@ -1,22 +1,29 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { User, Session } from '@supabase/supabase-js';
+import type { User } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+
+type WhoAmIResponse =
+  | { ok: true; authenticated: false; user: null }
+  | { ok: true; authenticated: true; user: { id: string; email: string | null } };
 
 type AuthState = {
   user: User | null;
-  session: Session | null;
   loading: boolean;
-  ready: boolean; // sessão já foi verificada pelo menos 1 vez
+  ready: boolean;
 };
+
+async function fetchWhoAmI(): Promise<WhoAmIResponse> {
+  const res = await fetch('/auth/whoami', { cache: 'no-store' });
+  return res.json();
+}
 
 export function useAuth() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [state, setState] = useState<AuthState>({
     user: null,
-    session: null,
     loading: true,
     ready: false,
   });
@@ -24,38 +31,44 @@ export function useAuth() {
   useEffect(() => {
     let mounted = true;
 
-    async function init() {
-      // 1) fonte única no browser: sessão via cookies (SSR client)
-      const { data, error } = await supabase.auth.getSession();
+    async function syncFromServer() {
+      try {
+        const me = await fetchWhoAmI();
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      if (error) {
-        // Se falhar, considera deslogado, mas "ready"
-        setState({ user: null, session: null, loading: false, ready: true });
-        return;
+        if (!me.authenticated) {
+          setState({ user: null, loading: false, ready: true });
+          return;
+        }
+
+        // Opcional: tentar obter o user completo do supabase client (metadados).
+        // Se falhar, ao menos mantemos id/email.
+        const { data } = await supabase.auth.getUser();
+
+        const u = data.user;
+        if (u && u.id === me.user.id) {
+          setState({ user: u, loading: false, ready: true });
+        } else {
+          // fallback mínimo (id/email) para evitar “sumir”
+          setState({
+            user: { id: me.user.id, email: me.user.email ?? undefined } as any,
+            loading: false,
+            ready: true,
+          });
+        }
+      } catch {
+        if (!mounted) return;
+        setState({ user: null, loading: false, ready: true });
       }
-
-      setState({
-        user: data.session?.user ?? null,
-        session: data.session ?? null,
-        loading: false,
-        ready: true,
-      });
     }
 
-    init();
+    // 1) bootstrap via server (funciona em incógnito / refresh)
+    syncFromServer();
 
-    // 2) mantém em sincronia com mudanças de auth
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!mounted) return;
-      setState((prev) => ({
-        ...prev,
-        user: session?.user ?? null,
-        session: session ?? null,
-        loading: false,
-        ready: true,
-      }));
+    // 2) em mudanças de auth, ressincroniza via server
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      syncFromServer();
     });
 
     return () => {
@@ -64,20 +77,15 @@ export function useAuth() {
     };
   }, [supabase]);
 
-  // IMPORTANTÍSSIMO:
-  // - NÃO aguardar supabase.auth.signOut() (pode pendurar)
-  // - logout definitivo é via /auth/signout (server)
+  // Não aguardar (pode pendurar). Logout definitivo é /auth/signout.
   const signOut = () => {
     try {
       void supabase.auth.signOut();
-    } catch {
-      // ignora
-    }
+    } catch {}
   };
 
   return {
     user: state.user,
-    session: state.session,
     loading: state.loading,
     ready: state.ready,
     signOut,
