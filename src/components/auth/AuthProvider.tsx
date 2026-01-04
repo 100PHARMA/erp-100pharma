@@ -1,72 +1,48 @@
 'use client';
 
-import React, { createContext, useContext, useMemo, useState, useEffect } from 'react';
-import type { User } from '@supabase/supabase-js';
+import { createContext, useContext, useEffect, useState } from 'react';
+import { User } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
-export type AuthRole = 'ADMIN' | 'VENDEDOR' | 'UNKNOWN';
-
-type AuthContextValue = {
+type AuthContextType = {
   user: User | null;
-  role: AuthRole;
-  ready: boolean;
-  setAuth: (next: { user: User | null; role: AuthRole }) => void;
+  loading: boolean;
 };
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-type Props = {
-  initialUser: { id: string; email?: string | null } | null;
-  initialRole: AuthRole;
-  children: React.ReactNode;
-};
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const supabase = createSupabaseBrowserClient();
 
-export default function AuthProvider({ initialUser, initialRole, children }: Props) {
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Estado inicial vem do SERVER (crítico para refresh/incógnito)
-  const [user, setUser] = useState<User | null>(
-    initialUser ? ({ id: initialUser.id, email: initialUser.email ?? undefined } as any) : null
-  );
-  const [role, setRole] = useState<AuthRole>(initialRole);
-  const [ready, setReady] = useState(true); // já nasce pronto, porque veio do server
-
-  // Mantém sincronizado em runtime (login/logout sem refresh)
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange(async () => {
-      // best-effort: tenta obter user real do supabase
-      const { data } = await supabase.auth.getUser();
+    supabase.auth.getUser().then(({ data }) => {
       setUser(data.user ?? null);
-      // role é mantido pelo server gates; opcionalmente atualizar aqui se quiseres
-      setReady(true);
+      setLoading(false);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      setUser(session?.user ?? null);
     });
 
     return () => {
-      sub?.subscription?.unsubscribe();
+      sub.subscription.unsubscribe();
     };
   }, [supabase]);
 
-  const value: AuthContextValue = useMemo(
-    () => ({
-      user,
-      role,
-      ready,
-      setAuth: (next) => {
-        setUser(next.user);
-        setRole(next.role);
-        setReady(true);
-      },
-    }),
-    [user, role, ready]
+  return (
+    <AuthContext.Provider value={{ user, loading }}>
+      {children}
+    </AuthContext.Provider>
   );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuthContext() {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    throw new Error('useAuthContext must be used within <AuthProvider />');
+    throw new Error('useAuthContext must be used within AuthProvider');
   }
   return ctx;
 }
