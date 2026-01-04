@@ -4,6 +4,8 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
+export type AuthRole = 'ADMIN' | 'VENDEDOR' | 'UNKNOWN';
+
 type AuthContextType = {
   user: User | null;
   loading: boolean;
@@ -12,7 +14,7 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Client estável (não recriar a cada render)
+  // client estável (não recriar a cada render)
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [user, setUser] = useState<User | null>(null);
@@ -24,24 +26,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async function init() {
       try {
         // 1) rápido: pega sessão do storage/cookies
-        const { data: sess, error: sessErr } = await supabase.auth.getSession();
+        const { data: sess } = await supabase.auth.getSession();
         if (!mounted) return;
-
-        if (sessErr) {
-          setUser(null);
-          setLoading(false);
-          return;
-        }
 
         const sessionUser = sess.session?.user ?? null;
         setUser(sessionUser);
         setLoading(false);
 
-        // 2) robustez: confirma user (se falhar, mantém o sessionUser)
+        // 2) robustez: confirma user (best-effort)
         if (sessionUser) {
-          const { data: u, error: uErr } = await supabase.auth.getUser();
+          const { data } = await supabase.auth.getUser();
           if (!mounted) return;
-          if (!uErr) setUser(u.user ?? sessionUser);
+          setUser(data.user ?? sessionUser);
         }
       } catch {
         if (!mounted) return;
@@ -50,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    init();
+    void init();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!mounted) return;
@@ -72,3 +68,6 @@ export function useAuthContext() {
   if (!ctx) throw new Error('useAuthContext must be used within AuthProvider');
   return ctx;
 }
+
+// CRÍTICO: isto resolve o seu erro de import default (React #130)
+export default AuthProvider;
