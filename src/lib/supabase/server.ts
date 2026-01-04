@@ -15,11 +15,13 @@ export function createSupabaseServerClient() {
       setAll(cookiesToSet) {
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            cookieStore.set(name, value, {
+              ...options,
+              httpOnly: false, // crítico p/ não “matar” o client após refresh
+            });
           });
         } catch {
-          // Em alguns cenários (ex: Server Components sem mutation), o Next pode impedir set.
-          // Isso não quebra leitura; é apenas para fluxos que precisam escrever cookies.
+          // Em alguns cenários, Next pode impedir set cookies.
         }
       },
     },
