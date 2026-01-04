@@ -46,24 +46,26 @@ export default function LoginClient() {
     }
 
     setLoading(true);
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error) throw error;
+try {
+  const res = await fetch('/auth/sign-in', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: email.trim(),
+      password,
+    }),
+  });
 
-      const userId = data.user?.id;
-      if (!userId) {
-        setErro('Login efetuado, mas não foi possível identificar o utilizador.');
-        return;
-      }
+  const json = await res.json();
 
-      // Força o browser a “assentar” a sessão no server antes de redirecionar.
-      // Isso reduz bugs de incógnito/refresh imediato.
-      try {
-        await fetch('/auth/whoami', { cache: 'no-store' });
-      } catch {}
+  if (!res.ok) {
+    throw new Error(json?.error || 'Falha no login');
+  }
+
+  // Login OK — cookies sb-* agora existem
+  router.replace('/dashboard'); // depois ajustamos por role
+  router.refresh();
+
 
       const { data: perfil, error: perfilError } = await supabase
         .from('perfis')
