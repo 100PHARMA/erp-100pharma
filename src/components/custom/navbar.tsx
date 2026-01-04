@@ -102,7 +102,7 @@ export default function Navbar() {
   setLogoutLoading(true);
   try {
     // Logout correto: SERVER limpa cookies HttpOnly (sb-*)
-    await fetch('/auth/sign-out', { method: 'POST' });
+    await fetch('/auth/signout', { method: 'POST' });
 
     // Redireciona após o server invalidar a sessão
     router.replace('/login');
