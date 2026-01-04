@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { LogOut } from 'lucide-react';
 
@@ -18,16 +18,12 @@ function isActivePath(pathname: string, href: string) {
 
 export default function PortalNavbar() {
   const pathname = usePathname();
-  const router = useRouter();
-
-  // Mantemos useAuth apenas para exibição/metadata
   const { user } = useAuth();
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [displayName, setDisplayName] = useState<string>('');
-
   const [logoutLoading, setLogoutLoading] = useState(false);
 
   const handleLogout = useCallback(async () => {
@@ -35,15 +31,17 @@ export default function PortalNavbar() {
 
     try {
       setLogoutLoading(true);
-
       await fetch('/auth/signout', { method: 'POST' });
 
-      router.replace('/login');
-      router.refresh();
+      try {
+        await supabase.auth.signOut();
+      } catch {}
+
+      window.location.assign('/login');
     } finally {
       setLogoutLoading(false);
     }
-  }, [router, logoutLoading]);
+  }, [logoutLoading, supabase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,18 +80,15 @@ export default function PortalNavbar() {
 
         let name = String((user?.user_metadata as any)?.nome ?? '').trim();
 
-        // Se for vendedor e tiver vendedor_id, buscar nome em vendedores
         if (resolvedRole === 'VENDEDOR' && perfil?.vendedor_id) {
-          const { data: vend, error: vErr } = await supabase
+          const { data: vend } = await supabase
             .from('vendedores')
             .select('nome')
             .eq('id', perfil.vendedor_id)
             .maybeSingle();
 
-          if (!vErr) {
-            const vendNome = String(vend?.nome ?? '').trim();
-            if (vendNome) name = vendNome;
-          }
+          const vendNome = String(vend?.nome ?? '').trim();
+          if (vendNome) name = vendNome;
         }
 
         if (!name) name = email;
