@@ -11,6 +11,8 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/login/') ||
     pathname === '/auth/callback' ||
     pathname.startsWith('/auth/callback/') ||
+    pathname === '/auth/signout' || // IMPORTANTÍSSIMO: permitir logout server-side
+    pathname.startsWith('/auth/signout/') ||
     pathname === '/reset-password' ||
     pathname.startsWith('/reset-password/') ||
     pathname.startsWith('/_next') ||
