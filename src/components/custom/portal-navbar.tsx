@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { LogOut } from 'lucide-react';
 
 import { useAuth } from '@/hooks/useAuth';
@@ -19,25 +19,40 @@ function isActivePath(pathname: string, href: string) {
 export default function PortalNavbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, signOut } = useAuth();
+
+  // Mantemos useAuth apenas para exibição/metadata
+  const { user } = useAuth();
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [role, setRole] = useState<Role>('UNKNOWN');
   const [displayName, setDisplayName] = useState<string>('');
 
-  const handleLogout = async () => {
-    await signOut();
-    router.push('/login');
-  };
+  const [logoutLoading, setLogoutLoading] = useState(false);
+
+  const handleLogout = useCallback(async () => {
+    if (logoutLoading) return;
+
+    try {
+      setLogoutLoading(true);
+
+      await fetch('/auth/signout', { method: 'POST' });
+
+      router.replace('/login');
+      router.refresh();
+    } finally {
+      setLogoutLoading(false);
+    }
+  }, [router, logoutLoading]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadIdentity() {
       try {
-        const userId = user?.id || (await supabase.auth.getUser()).data.user?.id;
-        const email = user?.email || (await supabase.auth.getUser()).data.user?.email || '';
+        const uRes = await supabase.auth.getUser();
+        const userId = user?.id || uRes.data.user?.id;
+        const email = user?.email || uRes.data.user?.email || '';
 
         if (!userId) {
           if (!cancelled) {
@@ -65,7 +80,7 @@ export default function PortalNavbar() {
         const resolvedRole: Role =
           r === 'ADMIN' ? 'ADMIN' : r === 'VENDEDOR' ? 'VENDEDOR' : 'UNKNOWN';
 
-        let name = (user?.user_metadata?.nome ?? '').trim();
+        let name = String((user?.user_metadata as any)?.nome ?? '').trim();
 
         // Se for vendedor e tiver vendedor_id, buscar nome em vendedores
         if (resolvedRole === 'VENDEDOR' && perfil?.vendedor_id) {
@@ -88,7 +103,6 @@ export default function PortalNavbar() {
           setDisplayName(name);
         }
       } catch {
-        // fallback mínimo
         if (!cancelled) {
           setRole('UNKNOWN');
           setDisplayName(user?.email ?? '');
@@ -97,7 +111,6 @@ export default function PortalNavbar() {
     }
 
     loadIdentity();
-
     return () => {
       cancelled = true;
     };
@@ -111,46 +124,64 @@ export default function PortalNavbar() {
 
       <Link
         href="/portal/vendas"
-        className={isActivePath(pathname, '/portal/vendas') ? 'underline underline-offset-4' : 'opacity-95 hover:opacity-100'}
+        className={
+          isActivePath(pathname, '/portal/vendas')
+            ? 'underline underline-offset-4'
+            : 'opacity-95 hover:opacity-100'
+        }
       >
         Vendas
       </Link>
 
       <Link
         href="/portal/metas"
-        className={isActivePath(pathname, '/portal/metas') ? 'underline underline-offset-4' : 'opacity-95 hover:opacity-100'}
+        className={
+          isActivePath(pathname, '/portal/metas')
+            ? 'underline underline-offset-4'
+            : 'opacity-95 hover:opacity-100'
+        }
       >
         Metas
       </Link>
 
       <Link
         href="/portal/quilometragem"
-        className={isActivePath(pathname, '/portal/quilometragem') ? 'underline underline-offset-4' : 'opacity-95 hover:opacity-100'}
+        className={
+          isActivePath(pathname, '/portal/quilometragem')
+            ? 'underline underline-offset-4'
+            : 'opacity-95 hover:opacity-100'
+        }
       >
         Quilometragem
       </Link>
 
       <Link
         href="/portal/visitas"
-        className={isActivePath(pathname, '/portal/visitas') ? 'underline underline-offset-4' : 'opacity-95 hover:opacity-100'}
+        className={
+          isActivePath(pathname, '/portal/visitas')
+            ? 'underline underline-offset-4'
+            : 'opacity-95 hover:opacity-100'
+        }
       >
         Visitas
       </Link>
 
       <div className="ml-auto flex items-center gap-4">
-        {/* Identidade do logado */}
         <div className="text-right leading-tight">
           <div className="text-sm font-semibold">{displayName || user?.email || '—'}</div>
-          <div className="text-xs opacity-90">{role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}</div>
+          <div className="text-xs opacity-90">
+            {role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
+          </div>
         </div>
 
         <button
           onClick={handleLogout}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+          disabled={logoutLoading}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-60"
           title="Sair"
         >
           <LogOut className="w-4 h-4" />
-          <span className="text-sm font-medium">Sair</span>
+          <span className="text-sm font-medium">{logoutLoading ? 'A sair...' : 'Sair'}</span>
         </button>
       </div>
     </div>
