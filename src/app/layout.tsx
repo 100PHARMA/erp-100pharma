@@ -5,6 +5,8 @@ import Script from "next/script";
 import "./globals.css";
 import "../lib/fonts";
 
+import { AuthProvider } from "@/components/auth/AuthProvider";
+
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
@@ -20,9 +22,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script src="/lasy-bridge.js" strategy="beforeInteractive" />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}>
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
 }
-
