@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -14,6 +15,24 @@ function isActivePath(pathname: string, href: string) {
 export default function PortalNavbar() {
   const pathname = usePathname();
   const { user, role, ready, signOut, debug } = useAuth();
+  const router = useRouter();
+const [logoutLoading, setLogoutLoading] = useState(false);
+
+const handleLogout = useCallback(async () => {
+  if (logoutLoading) return;
+
+  setLogoutLoading(true);
+  try {
+    // IMPORTANTE: chama a rota server que limpa cookies sb-*
+    await fetch('/auth/sign-out', { method: 'POST' });
+
+    router.replace('/login');
+    router.refresh();
+  } finally {
+    setLogoutLoading(false);
+  }
+}, [logoutLoading, router]);
+
 
   // Nunca fica “a carregar” eternamente, por causa do timeout do hook.
   if (!ready) {
@@ -106,13 +125,14 @@ export default function PortalNavbar() {
             </div>
           </div>
 
-          <button
-            onClick={signOut}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-            title="Sair"
-          >
+        <button
+           onClick={handleLogout}
+           disabled={logoutLoading}
+           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-60"
+           title="Sair"
+        >
             <LogOut className="w-4 h-4" />
-            <span className="text-sm font-medium">Sair</span>
+            <span className="text-sm font-medium">{logoutLoading ? 'A sair...' : 'Sair'}</span>
           </button>
         </div>
       </div>
