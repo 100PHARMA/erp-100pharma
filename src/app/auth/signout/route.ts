@@ -1,21 +1,18 @@
-import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
-function createSupabaseServer() {
-  const cookieStore = cookies();
-
+function createSupabaseServer(req: NextRequest, res: NextResponse) {
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll() {
-          return cookieStore.getAll();
+          return req.cookies.getAll();
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            res.cookies.set(name, value, options);
           });
         },
       },
@@ -23,21 +20,29 @@ function createSupabaseServer() {
   );
 }
 
-// GET: logout + redirect (mais robusto para UI)
-// Use assim: window.location.assign('/auth/signout')
-export async function GET(request: Request) {
-  const { origin } = new URL(request.url);
+// GET: logout + redirect (modo mais robusto para UI)
+export async function GET(req: NextRequest) {
+  const url = req.nextUrl.clone();
+  url.pathname = '/login';
+  url.search = '';
 
-  const supabase = createSupabaseServer();
+  const res = NextResponse.redirect(url, { status: 302 });
+
+  const supabase = createSupabaseServer(req, res);
+
+  // Isso DEVE expirar os cookies no response (Set-Cookie)
   await supabase.auth.signOut();
 
-  // Redireciona para login após limpar cookies
-  return NextResponse.redirect(`${origin}/login`, { status: 302 });
+  return res;
 }
 
-// POST: mantém compatibilidade (caso use fetch)
-export async function POST() {
-  const supabase = createSupabaseServer();
+// POST: compatibilidade caso alguém use fetch
+export async function POST(req: NextRequest) {
+  const res = NextResponse.json({ ok: true });
+
+  const supabase = createSupabaseServer(req, res);
+
   await supabase.auth.signOut();
-  return NextResponse.json({ ok: true });
+
+  return res;
 }
