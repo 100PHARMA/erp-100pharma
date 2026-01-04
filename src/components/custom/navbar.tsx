@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   Package,
@@ -48,7 +48,6 @@ const adminMenuItems = [
   { href: '/vendas', label: 'Vendas', icon: ShoppingCart },
   { href: '/faturas', label: 'Faturas', icon: FileText },
 
-  // Dropdown "Mais"
   { href: '/comissoes', label: 'Comissões', icon: TrendingUp },
   { href: '/financeiro', label: 'Financeiro', icon: Wallet },
   { href: '/tarefas', label: 'Tarefas', icon: Calendar },
@@ -81,9 +80,6 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 export default function Navbar() {
   const pathname = usePathname();
-  const router = useRouter();
-
-  // Mantemos useAuth apenas para exibição; não confiamos nele para logout
   const { user } = useAuth();
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -97,9 +93,7 @@ export default function Navbar() {
 
   const moreRef = useRef<HTMLDivElement | null>(null);
 
-  // Badge: contador de tarefas pendentes
   const [tarefasPendentesCount, setTarefasPendentesCount] = useState<number>(0);
-
   const [logoutLoading, setLogoutLoading] = useState(false);
 
   const handleLogout = useCallback(async () => {
@@ -108,29 +102,18 @@ export default function Navbar() {
     try {
       setLogoutLoading(true);
 
-      // 1) Logout definitivo (server) - limpa cookies
-      await fetch('/auth/signout', { method: 'POST' });
-
-      // 2) Best-effort: limpa estado local/in-memory no browser
-      // (importante caso exista algum resquício de auth via libs antigas/hooks)
+      // Best-effort: limpa estado local/in-memory
       try {
         await supabase.auth.signOut();
-      } catch {
-        // ignorar
-      }
+      } catch {}
 
-      // Fecha menus para evitar UI “presa”
-      setMobileMenuOpen(false);
-      setMoreOpen(false);
-
-      // 3) Hard reload para garantir novo request + middleware + cookies já aplicados
-      window.location.assign('/login');
+      // Logout definitivo via GET (server) + redirect
+      window.location.assign('/auth/signout');
     } finally {
-      setLogoutLoading(false);
+      // não precisa setLogoutLoading(false) porque haverá navegação
     }
   }, [logoutLoading, supabase]);
 
-  // Não renderiza no /login
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
   async function loadTarefasPendentesCount(isAdmin: boolean, vendedorId: string | null) {
@@ -147,9 +130,7 @@ export default function Navbar() {
       const { count, error } = await q;
       if (error) return;
       setTarefasPendentesCount(count ?? 0);
-    } catch {
-      // silencioso por design
-    }
+    } catch {}
   }
 
   useEffect(() => {
@@ -215,7 +196,6 @@ export default function Navbar() {
     };
   }, [supabase, user?.id]);
 
-  // Fechar dropdown ao clicar fora / ESC
   useEffect(() => {
     function onDown(e: MouseEvent) {
       if (!moreOpen) return;
@@ -237,7 +217,6 @@ export default function Navbar() {
   const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
   const homeHref = isVendor ? '/portal' : '/dashboard';
 
-  // Admin: visível até Faturas; resto no Mais
   const primaryItems = isVendor ? menuItems : menuItems.slice(0, 8);
   const moreItems = isVendor ? [] : menuItems.slice(8);
 
@@ -249,7 +228,6 @@ export default function Navbar() {
       <nav className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center h-16 gap-3">
-            {/* Logo */}
             <Link href={homeHref} className="flex items-center">
               <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
                 <img
@@ -260,7 +238,6 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Menu rolável */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pr-2">
                 {primaryItems.map((item) => {
@@ -285,7 +262,6 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Direita: Mais + Sair */}
             <div className="ml-auto flex-none flex items-center gap-2 pl-4 border-l border-white/20">
               {!isVendor && moreItems.length > 0 && (
                 <div className="relative" ref={moreRef}>
