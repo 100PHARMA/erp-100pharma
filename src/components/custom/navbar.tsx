@@ -96,27 +96,21 @@ export default function Navbar() {
   const [tarefasPendentesCount, setTarefasPendentesCount] = useState<number>(0);
   const [logoutLoading, setLogoutLoading] = useState(false);
 
-  const handleLogout = useCallback(() => {
-    if (logoutLoading) return;
+  const handleLogout = useCallback(async () => {
+  if (logoutLoading) return;
 
-    // 1) travar UI para evitar duplo clique
-    setLogoutLoading(true);
+  setLogoutLoading(true);
+  try {
+    // Logout correto: SERVER limpa cookies HttpOnly (sb-*)
+    await fetch('/auth/sign-out', { method: 'POST' });
 
-    // 2) NÃO esperar nada do client (evita hang)
-    // best-effort para limpar estado local — sem await
-    try {
-      void supabase.auth.signOut();
-    } catch {}
-
-    // 3) Logout definitivo: navegação imediata para rota server que limpa cookies e redireciona
-    try {
-    // Se algum legado do supabase-js ainda existir, mata aqui
-    localStorage.removeItem('erp-100pharma-auth');
-    localStorage.removeItem('supabase.auth.token');
-    sessionStorage.clear();
-    } catch {}
-    window.location.href = '/auth/signout';
-  }, [logoutLoading, supabase]);
+    // Redireciona após o server invalidar a sessão
+    router.replace('/login');
+    router.refresh();
+  } finally {
+    setLogoutLoading(false);
+  }
+}, [logoutLoading, router]);
 
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
