@@ -1,4 +1,3 @@
-// src/app/portal/quilometragem/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -14,7 +13,7 @@ type Perfil = {
 type KmLancRow = {
   id: string;
   vendedor_id: string;
-  data: string; // date (YYYY-MM-DD)
+  data: string; // YYYY-MM-DD
   km: number | null;
   valor_total: number | null;
   status: 'PENDENTE' | 'APROVADO' | 'PAGO' | string | null;
@@ -30,7 +29,6 @@ function yyyyMmToDateRange(yyyymm: string) {
   const y = Number(yStr);
   const m = Number(mStr);
 
-  // intervalo: [startDate, endDate) (end exclusivo)
   const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
   const end = new Date(Date.UTC(y, m, 1, 0, 0, 0));
 
@@ -63,71 +61,9 @@ export default function PortalQuilometragemPage() {
   const [rows, setRows] = useState<KmLancRow[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // =========================================================
-  // BOOTSTRAP: user -> perfis -> vendedor_id
-  // =========================================================
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-
-      if (userErr || !user) {
-        router.push('/login');
-        return;
-      }
-
-      setVendedorEmail(user.email ?? null);
-
-      const { data: perfil, error: perfilErr } = await supabase
-        .from('perfis')
-        .select('role, vendedor_id')
-        .eq('id', user.id)
-        .maybeSingle<Perfil>();
-
-      if (perfilErr) {
-        alert('Erro ao buscar perfil: ' + perfilErr.message);
-        router.push('/login');
-        return;
-      }
-
-      const role = String(perfil?.role ?? '').toUpperCase();
-      if (role !== 'VENDEDOR') {
-        router.push('/dashboard');
-        return;
-      }
-
-      if (!perfil?.vendedor_id) {
-        alert('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
-        router.push('/portal');
-        return;
-      }
-
-      setVendedorId(perfil.vendedor_id);
-      await carregar(perfil.vendedor_id, mes);
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!vendedorId) return;
-    (async () => {
-      setLoading(true);
-      await carregar(vendedorId, mes);
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes]);
-
   const carregar = async (vendId: string, yyyymm: string) => {
     const { startDate, endDate } = yyyyMmToDateRange(yyyymm);
 
-    // Fonte correta: vendedor_km_lancamentos (com status)
-    // Importante: NÃO usar created_at se não existe no banco.
     const { data, error } = await supabase
       .from('vendedor_km_lancamentos')
       .select('id, vendedor_id, data, km, valor_total, status')
@@ -137,15 +73,89 @@ export default function PortalQuilometragemPage() {
       .order('data', { ascending: false })
       .order('id', { ascending: false });
 
-    if (error) {
-      console.error(error);
-      alert('Erro ao carregar quilometragem: ' + error.message);
-      setRows([]);
-      return;
-    }
+    if (error) throw error;
 
     setRows((data ?? []) as KmLancRow[]);
   };
+
+  // BOOTSTRAP (robusto)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+
+      try {
+        const { data: uRes, error: userErr } = await supabase.auth.getUser();
+        const user = uRes.user;
+
+        if (userErr || !user) {
+          router.push('/login');
+          return;
+        }
+
+        if (!cancelled) setVendedorEmail(user.email ?? null);
+
+        const { data: perfil, error: perfilErr } = await supabase
+          .from('perfis')
+          .select('role, vendedor_id')
+          .eq('id', user.id)
+          .maybeSingle<Perfil>();
+
+        if (perfilErr) throw perfilErr;
+
+        const role = String(perfil?.role ?? '').toUpperCase();
+        if (role !== 'VENDEDOR') {
+          router.push('/dashboard');
+          return;
+        }
+
+        if (!perfil?.vendedor_id) {
+          throw new Error('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
+        }
+
+        if (!cancelled) setVendedorId(perfil.vendedor_id);
+
+        await carregar(perfil.vendedor_id, mes);
+      } catch (e: any) {
+        console.error(e);
+        alert('Erro no portal (quilometragem): ' + (e?.message ?? 'Erro'));
+        router.push('/login');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mudança de mês (robusto)
+  useEffect(() => {
+    if (!vendedorId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      try {
+        await carregar(vendedorId, mes);
+      } catch (e: any) {
+        console.error(e);
+        alert('Erro ao carregar mês (quilometragem): ' + (e?.message ?? 'Erro'));
+        setRows([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mes, vendedorId]);
 
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -156,23 +166,13 @@ export default function PortalQuilometragemPage() {
       const kmStr = String(r.km ?? '').toLowerCase();
       const valorStr = String(r.valor_total ?? '').toLowerCase();
       const statusStr = String(r.status ?? '').toLowerCase();
-      return (
-        dataStr.includes(term) ||
-        kmStr.includes(term) ||
-        valorStr.includes(term) ||
-        statusStr.includes(term)
-      );
+      return dataStr.includes(term) || kmStr.includes(term) || valorStr.includes(term) || statusStr.includes(term);
     });
   }, [rows, searchTerm]);
 
-  // TOTAL do mês: PENDENTE + APROVADO + PAGO (na prática, tudo que veio)
   const totalKmMes = useMemo(() => filtered.reduce((acc, r) => acc + safeNum(r.km), 0), [filtered]);
-  const totalValorMes = useMemo(
-    () => filtered.reduce((acc, r) => acc + safeNum(r.valor_total), 0),
-    [filtered],
-  );
+  const totalValorMes = useMemo(() => filtered.reduce((acc, r) => acc + safeNum(r.valor_total), 0), [filtered]);
 
-  // Total pago no mês: somente PAGO
   const totalPagoMes = useMemo(() => {
     return filtered
       .filter((r) => String(r.status ?? '').toUpperCase() === 'PAGO')
@@ -197,8 +197,10 @@ export default function PortalQuilometragemPage() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl shadow-lg p-6">
-        <p className="text-gray-600">Carregando quilometragem...</p>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-lg p-6">
+          <p className="text-gray-600">Carregando quilometragem...</p>
+        </div>
       </div>
     );
   }
@@ -227,7 +229,6 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* KPIs (limpo: 3 cards) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
             <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl">
               <div className="flex items-center gap-3">
@@ -236,9 +237,7 @@ export default function PortalQuilometragemPage() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Total km (mês)</p>
-                  <p className="text-2xl font-bold text-blue-700">
-                    {totalKmMes.toLocaleString('pt-PT')} km
-                  </p>
+                  <p className="text-2xl font-bold text-blue-700">{totalKmMes.toLocaleString('pt-PT')} km</p>
                 </div>
               </div>
             </div>
@@ -268,7 +267,6 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* Busca */}
           <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1 relative">
@@ -284,7 +282,6 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* Tabela */}
           <div className="mt-4 bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -336,7 +333,6 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
 
-          {/* Nota */}
           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-gray-700">
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
@@ -350,8 +346,6 @@ export default function PortalQuilometragemPage() {
             </div>
           </div>
         </div>
-
-        {/* Evolução futura: filtros por status, export, etc. */}
       </div>
     </div>
   );
