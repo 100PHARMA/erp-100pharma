@@ -1,11 +1,42 @@
 // src/app/portal/layout.tsx
+import { redirect } from 'next/navigation';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import AuthProvider from '@/components/auth/AuthProvider';
 import PortalNavbar from '@/components/custom/portal-navbar';
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export const dynamic = 'force-dynamic';
+
+export default async function PortalLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const supabase = createSupabaseServerClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) redirect('/login');
+
+  const { data: perfil } = await supabase
+    .from('perfis')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  const role = String(perfil?.role ?? '').toUpperCase();
+
+  // Segurança: se não for vendedor, manda para o admin (ou dashboard)
+  if (role !== 'VENDEDOR') redirect('/dashboard');
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <AuthProvider
+      initialUser={{ id: user.id, email: user.email ?? null }}
+      initialRole="VENDEDOR"
+    >
       <PortalNavbar />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">{children}</div>
-    </div>
+      <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+    </AuthProvider>
   );
 }
