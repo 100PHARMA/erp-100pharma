@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Target,
   TrendingUp,
   Users,
   MapPin,
@@ -84,8 +83,6 @@ export default function PortalMetasPage() {
   });
 
   const [row, setRow] = useState<PortalMetasRow | null>(null);
-
-  // Extra (opcional): frascos no mês
   const [qtFrascos, setQtFrascos] = useState<number>(0);
 
   const { anoSelecionado, mesSelecionado } = useMemo(() => {
@@ -93,55 +90,9 @@ export default function PortalMetasPage() {
     return { anoSelecionado: Number(y), mesSelecionado: Number(m) };
   }, [mes]);
 
-  async function bootstrap() {
-    setLoading(true);
-    setErro(null);
-
-    try {
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-
-      if (userErr || !user) {
-        router.push('/login');
-        return;
-      }
-
-      setVendedorEmail(user.email ?? null);
-
-      const { data: perfil, error: perfilErr } = await supabase
-        .from('perfis')
-        .select('role, vendedor_id')
-        .eq('id', user.id)
-        .maybeSingle<Perfil>();
-
-      if (perfilErr) throw perfilErr;
-
-      const role = String(perfil?.role ?? '').toUpperCase();
-      if (role !== 'VENDEDOR') {
-        router.push('/dashboard');
-        return;
-      }
-
-      if (!perfil?.vendedor_id) {
-        throw new Error('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
-      }
-
-      setVendedorId(perfil.vendedor_id);
-      await carregar(perfil.vendedor_id, mes);
-    } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Erro ao carregar metas do portal');
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function carregar(vendId: string, yyyymm: string) {
     setErro(null);
 
-    // 1) Dados principais via RPC
     const { data, error } = await supabase.rpc('portal_metas_meu_mes', {
       p_ano: anoSelecionado,
       p_mes: mesSelecionado,
@@ -162,7 +113,6 @@ export default function PortalMetasPage() {
       comissao_estimada: Number(r.comissao_estimada ?? 0),
     });
 
-    // 2) (Opcional) frascos no mês
     const { startISO, endISO } = yyyyMmToRange(yyyymm);
 
     const { data: fatRows, error: fatErr } = await supabase
@@ -211,13 +161,68 @@ export default function PortalMetasPage() {
     setQtFrascos(frascos);
   }
 
+  async function bootstrap() {
+    setLoading(true);
+    setErro(null);
+
+    try {
+      const { data: uRes, error: userErr } = await supabase.auth.getUser();
+      const user = uRes.user;
+
+      if (userErr || !user) {
+        router.push('/login');
+        return;
+      }
+
+      setVendedorEmail(user.email ?? null);
+
+      const { data: perfil, error: perfilErr } = await supabase
+        .from('perfis')
+        .select('role, vendedor_id')
+        .eq('id', user.id)
+        .maybeSingle<Perfil>();
+
+      if (perfilErr) throw perfilErr;
+
+      const role = String(perfil?.role ?? '').toUpperCase();
+      if (role !== 'VENDEDOR') {
+        router.push('/dashboard');
+        return;
+      }
+
+      if (!perfil?.vendedor_id) {
+        throw new Error('Seu perfil não possui vendedor_id. Ajuste em public.perfis.');
+      }
+
+      setVendedorId(perfil.vendedor_id);
+      await carregar(perfil.vendedor_id, mes);
+    } catch (e: any) {
+      console.error(e);
+      setErro(e?.message || 'Erro ao carregar metas do portal');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    bootstrap();
+    let cancelled = false;
+
+    (async () => {
+      if (cancelled) return;
+      await bootstrap();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!vendedorId) return;
+
+    let cancelled = false;
+
     (async () => {
       setLoading(true);
       try {
@@ -226,11 +231,15 @@ export default function PortalMetasPage() {
         console.error(e);
         setErro(e?.message || 'Erro ao atualizar mês');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes]);
+  }, [mes, vendedorId]);
 
   const calc = useMemo(() => {
     if (!row) return null;
@@ -318,7 +327,6 @@ export default function PortalMetasPage() {
             </div>
           </div>
 
-          {/* KPIs */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-6">
             <Kpi
               title="Vendas (sem IVA)"
@@ -357,7 +365,6 @@ export default function PortalMetasPage() {
             />
           </div>
 
-          {/* Progresso */}
           <div className="mt-6 bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-4">
             <Bar label="Atingimento Geral" value={calc.geral} />
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -375,8 +382,6 @@ export default function PortalMetasPage() {
             </div>
           </div>
         </div>
-
-        {/* depois: histórico, ranking interno, etc. */}
       </div>
     </div>
   );
@@ -418,7 +423,10 @@ function Bar({ label, value }: { label: string; value: number }) {
         <span className="font-semibold text-gray-900">{Math.round(v)}%</span>
       </div>
       <div className="w-full h-3 bg-white rounded-full border border-gray-200 overflow-hidden">
-        <div className="h-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600" style={{ width: `${v}%` }} />
+        <div
+          className="h-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600"
+          style={{ width: `${v}%` }}
+        />
       </div>
     </div>
   );
