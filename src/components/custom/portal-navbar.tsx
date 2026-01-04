@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -13,17 +13,26 @@ function isActivePath(pathname: string, href: string) {
 
 export default function PortalNavbar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { user, role, ready, signOut } = useAuth();
 
-  const handleLogout = () => {
-    signOut(); // agora é /auth/signout
-  };
+  if (!ready) {
+    return (
+      <div className="h-16 bg-indigo-600 text-white flex items-center px-4">
+        A carregar...
+      </div>
+    );
+  }
 
-  // Evita render instável no primeiro paint
-  if (!ready) return null;
+  // Se por algum motivo o client não tem user, força re-login
+  // (o server ainda pode estar autenticado, mas o client não consegue operar com RLS)
+  if (!user) {
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+    return null;
+  }
 
-  const displayName = user?.email ?? '—';
+  const displayName = user.email ?? '—';
 
   return (
     <div className="h-16 bg-indigo-600 text-white flex items-center px-4 gap-4">
@@ -84,7 +93,7 @@ export default function PortalNavbar() {
         </div>
 
         <button
-          onClick={handleLogout}
+          onClick={signOut}
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
           title="Sair"
         >
