@@ -29,7 +29,7 @@ import {
   MoreHorizontal,
   ChevronDown,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
@@ -82,7 +82,9 @@ function cx(...classes: Array<string | false | null | undefined>) {
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, signOut } = useAuth();
+
+  // Mantemos useAuth apenas para exibir user (não confiamos nele para logout)
+  const { user } = useAuth();
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
@@ -98,18 +100,33 @@ export default function Navbar() {
   // Badge: contador de tarefas pendentes
   const [tarefasPendentesCount, setTarefasPendentesCount] = useState<number>(0);
 
-  const handleLogout = async () => {
-    await signOut();
-    router.push('/login');
-  };
+  const [logoutLoading, setLogoutLoading] = useState(false);
+
+  const handleLogout = useCallback(async () => {
+    if (logoutLoading) return;
+
+    try {
+      setLogoutLoading(true);
+
+      // Logout definitivo via SSR (limpa cookies corretamente)
+      await fetch('/auth/signout', { method: 'POST' });
+
+      // Fecha menus (melhora UX)
+      setMobileMenuOpen(false);
+      setMoreOpen(false);
+
+      router.replace('/login');
+      router.refresh();
+    } finally {
+      setLogoutLoading(false);
+    }
+  }, [router, logoutLoading]);
 
   // Não renderiza no /login
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
   async function loadTarefasPendentesCount(isAdmin: boolean, vendedorId: string | null) {
     try {
-      // Admin: pendentes globais
-      // (Se futuramente você quiser filtrar por vendedor para algum role, já está pronto)
       let q = supabase
         .from('tarefas')
         .select('id', { count: 'exact', head: true })
@@ -120,7 +137,7 @@ export default function Navbar() {
       }
 
       const { count, error } = await q;
-      if (error) return; // não quebra a navbar por causa do badge
+      if (error) return;
       setTarefasPendentesCount(count ?? 0);
     } catch {
       // silencioso por design
@@ -178,8 +195,6 @@ export default function Navbar() {
         setDisplayName(name);
       }
 
-      // Carrega contador de tarefas pendentes (badge)
-      // Admin = global
       await loadTarefasPendentesCount(resolvedRole === 'ADMIN', perfil?.vendedor_id ?? null);
     }
 
@@ -331,11 +346,12 @@ export default function Navbar() {
 
               <button
                 onClick={handleLogout}
-                className="min-w-[96px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors"
+                disabled={logoutLoading}
+                className="min-w-[96px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors disabled:opacity-60"
                 title="Sair"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Sair</span>
+                <span>{logoutLoading ? 'A sair...' : 'Sair'}</span>
               </button>
             </div>
           </div>
@@ -395,8 +411,6 @@ export default function Navbar() {
                     <Icon className="w-5 h-5" />
                     <span className="flex items-center gap-2">
                       {item.label}
-                      {/* Opcional: se quiser badge também no mobile (admin),
-                          o item '/tarefas' não aparece no vendorMenuItems */}
                       {!isVendor && item.href === '/tarefas' && tarefasPendentesCount > 0 && (
                         <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold bg-red-600 text-white">
                           {tarefasPendentesCount}
@@ -409,10 +423,11 @@ export default function Navbar() {
 
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors mt-2"
+                disabled={logoutLoading}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-white hover:bg-red-500/30 transition-colors mt-2 disabled:opacity-60"
               >
                 <LogOut className="w-5 h-5" />
-                <span>Sair</span>
+                <span>{logoutLoading ? 'A sair...' : 'Sair'}</span>
               </button>
             </div>
           </div>
