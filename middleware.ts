@@ -1,97 +1,87 @@
-'use client';
+import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { LogOut } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+function sanitizeCookieOptions(options: any) {
+  if (!options) return options;
 
-function isActivePath(pathname: string, href: string) {
-  if (pathname === href) return true;
-  if (href !== '/' && pathname.startsWith(href + '/')) return true;
-  return false;
-}
+  // Remover Domain (muito frequentemente é a causa do cookie ser rejeitado)
+  const { domain, ...rest } = options;
 
-export default function PortalNavbar() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { user, role, ready, signOut } = useAuth();
-
-  const handleLogout = () => {
-    signOut(); // agora é /auth/signout
+  // Garantir consistência para browser-client (document.cookie)
+  return {
+    ...rest,
+    httpOnly: false,
   };
-
-  // Evita render instável no primeiro paint
-  if (!ready) return null;
-
-  const displayName = user?.email ?? '—';
-
-  return (
-    <div className="h-16 bg-indigo-600 text-white flex items-center px-4 gap-4">
-      <Link href="/portal" className="font-semibold">
-        Portal
-      </Link>
-
-      <Link
-        href="/portal/vendas"
-        className={
-          isActivePath(pathname, '/portal/vendas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Vendas
-      </Link>
-
-      <Link
-        href="/portal/metas"
-        className={
-          isActivePath(pathname, '/portal/metas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Metas
-      </Link>
-
-      <Link
-        href="/portal/quilometragem"
-        className={
-          isActivePath(pathname, '/portal/quilometragem')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Quilometragem
-      </Link>
-
-      <Link
-        href="/portal/visitas"
-        className={
-          isActivePath(pathname, '/portal/visitas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Visitas
-      </Link>
-
-      <div className="ml-auto flex items-center gap-4">
-        <div className="text-right leading-tight">
-          <div className="text-sm font-semibold">{displayName}</div>
-          <div className="text-xs opacity-90">
-            {role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-          </div>
-        </div>
-
-        <button
-          onClick={handleLogout}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-          title="Sair"
-        >
-          <LogOut className="w-4 h-4" />
-          <span className="text-sm font-medium">Sair</span>
-        </button>
-      </div>
-    </div>
-  );
 }
+
+export async function middleware(req: NextRequest) {
+  const res = NextResponse.next();
+  const pathname = req.nextUrl.pathname;
+
+  const isPublic =
+    pathname === '/login' ||
+    pathname.startsWith('/login/') ||
+    pathname === '/auth/callback' ||
+    pathname.startsWith('/auth/callback/') ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/reset-password/') ||
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/favicon') ||
+    pathname === '/favicon.ico';
+
+  if (isPublic) return res;
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return req.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            res.cookies.set(name, value, sanitizeCookieOptions(options));
+          });
+        },
+      },
+    }
+  );
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/login';
+    url.searchParams.set('next', pathname);
+    return NextResponse.redirect(url);
+  }
+
+  const { data: perfil } = await supabase
+    .from('perfis')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  const role = String(perfil?.role ?? 'VENDEDOR').toUpperCase();
+
+  const vendorAllowedBases = ['/portal'];
+  const isAllowedForVendor = vendorAllowedBases.some(
+    (base) => pathname === base || pathname.startsWith(base + '/')
+  );
+
+  if (role === 'VENDEDOR' && !isAllowedForVendor) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/portal';
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
+  return res;
+}
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+};
