@@ -24,7 +24,7 @@ const handleLogout = useCallback(async () => {
   setLogoutLoading(true);
   try {
     // IMPORTANTE: chama a rota server que limpa cookies sb-*
-    await fetch('/auth/sign-out', { method: 'POST' });
+    await fetch('/auth/signout', { method: 'POST' });
 
     router.replace('/login');
     router.refresh();
