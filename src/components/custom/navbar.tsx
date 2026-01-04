@@ -83,7 +83,7 @@ export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Mantemos useAuth apenas para exibir user (não confiamos nele para logout)
+  // Mantemos useAuth apenas para exibição; não confiamos nele para logout
   const { user } = useAuth();
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -108,19 +108,27 @@ export default function Navbar() {
     try {
       setLogoutLoading(true);
 
-      // Logout definitivo via SSR (limpa cookies corretamente)
+      // 1) Logout definitivo (server) - limpa cookies
       await fetch('/auth/signout', { method: 'POST' });
 
-      // Fecha menus (melhora UX)
+      // 2) Best-effort: limpa estado local/in-memory no browser
+      // (importante caso exista algum resquício de auth via libs antigas/hooks)
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignorar
+      }
+
+      // Fecha menus para evitar UI “presa”
       setMobileMenuOpen(false);
       setMoreOpen(false);
 
-      router.replace('/login');
-      router.refresh();
+      // 3) Hard reload para garantir novo request + middleware + cookies já aplicados
+      window.location.assign('/login');
     } finally {
       setLogoutLoading(false);
     }
-  }, [router, logoutLoading]);
+  }, [logoutLoading, supabase]);
 
   // Não renderiza no /login
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
