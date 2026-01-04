@@ -13,8 +13,9 @@ function isActivePath(pathname: string, href: string) {
 
 export default function PortalNavbar() {
   const pathname = usePathname();
-  const { user, role, ready, signOut } = useAuth();
+  const { user, role, ready, signOut, debug } = useAuth();
 
+  // Nunca fica “a carregar” eternamente, por causa do timeout do hook.
   if (!ready) {
     return (
       <div className="h-16 bg-indigo-600 text-white flex items-center px-4">
@@ -23,83 +24,97 @@ export default function PortalNavbar() {
     );
   }
 
-  // Se por algum motivo o client não tem user, força re-login
-  // (o server ainda pode estar autenticado, mas o client não consegue operar com RLS)
+  // Se ready e não tem user, não fica preso: força login
   if (!user) {
-    if (typeof window !== 'undefined') {
-      window.location.href = '/login';
-    }
-    return null;
+    return (
+      <div className="h-16 bg-indigo-600 text-white flex items-center justify-between px-4">
+        <div>
+          Sessão não disponível no client. ({debug.mode} / {debug.step})
+          {debug.lastError ? ` — ${debug.lastError}` : ''}
+        </div>
+        <a className="underline" href="/login">
+          Ir para login
+        </a>
+      </div>
+    );
   }
 
   const displayName = user.email ?? '—';
 
   return (
-    <div className="h-16 bg-indigo-600 text-white flex items-center px-4 gap-4">
-      <Link href="/portal" className="font-semibold">
-        Portal
-      </Link>
+    <div className="bg-indigo-600 text-white">
+      {/* DEBUG (remover depois) */}
+      <div className="text-[11px] opacity-90 px-4 py-1 border-b border-white/15">
+        debug: {debug.mode} / {debug.step}
+        {debug.lastError ? ` — ${debug.lastError}` : ''}
+      </div>
 
-      <Link
-        href="/portal/vendas"
-        className={
-          isActivePath(pathname, '/portal/vendas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Vendas
-      </Link>
+      <div className="h-16 flex items-center px-4 gap-4">
+        <Link href="/portal" className="font-semibold">
+          Portal
+        </Link>
 
-      <Link
-        href="/portal/metas"
-        className={
-          isActivePath(pathname, '/portal/metas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Metas
-      </Link>
-
-      <Link
-        href="/portal/quilometragem"
-        className={
-          isActivePath(pathname, '/portal/quilometragem')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Quilometragem
-      </Link>
-
-      <Link
-        href="/portal/visitas"
-        className={
-          isActivePath(pathname, '/portal/visitas')
-            ? 'underline underline-offset-4'
-            : 'opacity-95 hover:opacity-100'
-        }
-      >
-        Visitas
-      </Link>
-
-      <div className="ml-auto flex items-center gap-4">
-        <div className="text-right leading-tight">
-          <div className="text-sm font-semibold">{displayName}</div>
-          <div className="text-xs opacity-90">
-            {role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-          </div>
-        </div>
-
-        <button
-          onClick={signOut}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-          title="Sair"
+        <Link
+          href="/portal/vendas"
+          className={
+            isActivePath(pathname, '/portal/vendas')
+              ? 'underline underline-offset-4'
+              : 'opacity-95 hover:opacity-100'
+          }
         >
-          <LogOut className="w-4 h-4" />
-          <span className="text-sm font-medium">Sair</span>
-        </button>
+          Vendas
+        </Link>
+
+        <Link
+          href="/portal/metas"
+          className={
+            isActivePath(pathname, '/portal/metas')
+              ? 'underline underline-offset-4'
+              : 'opacity-95 hover:opacity-100'
+          }
+        >
+          Metas
+        </Link>
+
+        <Link
+          href="/portal/quilometragem"
+          className={
+            isActivePath(pathname, '/portal/quilometragem')
+              ? 'underline underline-offset-4'
+              : 'opacity-95 hover:opacity-100'
+          }
+        >
+          Quilometragem
+        </Link>
+
+        <Link
+          href="/portal/visitas"
+          className={
+            isActivePath(pathname, '/portal/visitas')
+              ? 'underline underline-offset-4'
+              : 'opacity-95 hover:opacity-100'
+          }
+        >
+          Visitas
+        </Link>
+
+        <div className="ml-auto flex items-center gap-4">
+          <div className="text-right leading-tight">
+            <div className="text-sm font-semibold">{displayName}</div>
+            <div className="text-xs opacity-90">
+              {role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
+            </div>
+          </div>
+
+          <button
+            onClick={signOut}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+            title="Sair"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="text-sm font-medium">Sair</span>
+          </button>
+        </div>
       </div>
     </div>
   );
