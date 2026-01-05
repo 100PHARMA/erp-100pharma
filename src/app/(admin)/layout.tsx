@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-// (NavbarGate entra depois)
+import NavbarGate from '@/components/custom/navbar-gate';
+
 export const dynamic = 'force-dynamic';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -21,5 +22,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   if (role !== 'ADMIN') redirect('/portal');
 
-  return <main>{children}</main>;
-}
+  return (
+  <>
+    <NavbarGate />
+    <main>{children}</main>
+  </>
+);
