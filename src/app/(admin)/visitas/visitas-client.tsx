@@ -1,4 +1,3 @@
-// src/app/(admin)/visitas/visitas-client.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -48,7 +47,7 @@ type VisitaRow = {
   id: string;
   vendedor_id: string;
   cliente_id: string | null;
-  data_visita: string; // date
+  data_visita: string;
   estado: EstadoVisita | null;
   notas: string | null;
 
@@ -79,6 +78,12 @@ function todayISO(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function isAuthzError(e: any) {
+  const code = e?.code ?? e?.status ?? e?.statusCode;
+  const msg = String(e?.message ?? '').toLowerCase();
+  return code === 401 || code === 403 || msg.includes('jwt') || msg.includes('permission') || msg.includes('not authorized');
+}
+
 export default function VisitasClient({ userId }: { userId: string }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
@@ -94,10 +99,8 @@ export default function VisitasClient({ userId }: { userId: string }) {
   const [clientes, setClientes] = useState<ClienteRow[]>([]);
   const [vendedores, setVendedores] = useState<VendedorRow[]>([]);
   const [visitas, setVisitas] = useState<VisitaRow[]>([]);
-
   const [kmLancMap, setKmLancMap] = useState<Record<string, KmLancamentoRow>>({});
 
-  // Modal
   const [showModal, setShowModal] = useState(false);
   const [modoEdicao, setModoEdicao] = useState(false);
   const [visitaEditandoId, setVisitaEditandoId] = useState<string | null>(null);
@@ -108,7 +111,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
     data_visita: string;
     hora_inicio: string;
     hora_fim: string;
-    objetivo: string; // notas (campo principal)
+    objetivo: string;
     resultado: string;
     proxima_acao: string;
     km_informado: string;
@@ -128,13 +131,8 @@ export default function VisitasClient({ userId }: { userId: string }) {
     estado: 'AGENDADA',
   });
 
-  // ---------------------------------------------------------------------------
-  // LOAD
-  // ---------------------------------------------------------------------------
   useEffect(() => {
-    (async () => {
-      await carregarTudo();
-    })();
+    void carregarTudo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -143,12 +141,19 @@ export default function VisitasClient({ userId }: { userId: string }) {
     setPageError(null);
 
     try {
+      // Diagnóstico: confirma se o CLIENT enxerga sessão
+      const sess = await supabase.auth.getSession();
+      const hasClientSession = Boolean(sess?.data?.session?.access_token);
+      if (!hasClientSession) {
+        console.warn('[VisitasClient] Sem sessão no CLIENT (getSession vazio). SSR pode estar OK, mas client não.');
+      }
+
       const { data: clientesData, error: cErr } = await supabase
         .from('clientes')
         .select('id, nome')
         .order('nome', { ascending: true });
 
-      if (cErr) throw cErr;
+      if (cErr) throw Object.assign(cErr, { _where: 'clientes.select' });
       setClientes((clientesData ?? []) as any);
 
       const { data: vendedoresData, error: vErr } = await supabase
@@ -156,7 +161,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
         .select('id, nome, email')
         .order('nome', { ascending: true });
 
-      if (vErr) throw vErr;
+      if (vErr) throw Object.assign(vErr, { _where: 'vendedores.select' });
       setVendedores((vendedoresData ?? []) as any);
 
       const { data: visitasData, error: visErr } = await supabase
@@ -181,7 +186,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
         .order('data_visita', { ascending: false })
         .order('created_at', { ascending: false });
 
-      if (visErr) throw visErr;
+      if (visErr) throw Object.assign(visErr, { _where: 'vendedor_visitas.select' });
 
       const rows = (visitasData ?? []) as any as VisitaRow[];
       setVisitas(rows);
@@ -194,6 +199,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
           .in('visita_id', visitaIds);
 
         if (kmErr) {
+          console.warn('[VisitasClient] Falha ao carregar km_lancamentos:', kmErr);
           setKmLancMap({});
         } else {
           const map: Record<string, KmLancamentoRow> = {};
@@ -206,16 +212,23 @@ export default function VisitasClient({ userId }: { userId: string }) {
         setKmLancMap({});
       }
     } catch (e: any) {
-      console.error(e);
-      setPageError(e?.message ?? 'Erro desconhecido ao carregar visitas');
+      console.error('[VisitasClient] erro:', e);
+
+      if (isAuthzError(e)) {
+        const where = e?._where ? ` (${e._where})` : '';
+        setPageError(
+          `Falha de autenticação/permissão${where}. ` +
+            `Isto normalmente significa: o CLIENT não está autenticado (cookies HttpOnly) ou RLS bloqueando. ` +
+            `Abra DevTools > Network e procure 401/403 nas chamadas do Supabase.`
+        );
+      } else {
+        setPageError(e?.message ?? 'Erro desconhecido ao carregar visitas');
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // HELPERS
-  // ---------------------------------------------------------------------------
   function resetForm(defaults?: Partial<typeof form>) {
     setForm({
       vendedor_id: '',
@@ -247,7 +260,6 @@ export default function VisitasClient({ userId }: { userId: string }) {
     setModalError(null);
 
     const notas = visita.notas ?? '';
-
     setForm({
       vendedor_id: visita.vendedor_id,
       cliente_id: visita.cliente_id ?? '',
@@ -289,26 +301,16 @@ export default function VisitasClient({ userId }: { userId: string }) {
     return st === 'PAGO';
   }, [modoEdicao, visitaEditandoId, kmLancMap]);
 
-  // ---------------------------------------------------------------------------
-  // SUBMIT
-  // ---------------------------------------------------------------------------
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setModalError(null);
 
-    // Se estiver PAGO e editando, só notas
     if (modoEdicao && visitaEditandoId && kmPago) {
       setSaving(true);
       try {
-        const notasSomente = buildNotas();
-
         const { error } = await supabase
           .from('vendedor_visitas')
-          .update({
-            notas: notasSomente,
-            updated_by: userId,
-            origem: 'ADMIN',
-          })
+          .update({ notas: buildNotas(), updated_by: userId, origem: 'ADMIN' })
           .eq('id', visitaEditandoId);
 
         if (error) throw error;
@@ -352,11 +354,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
       };
 
       if (modoEdicao && visitaEditandoId) {
-        const { error } = await supabase
-          .from('vendedor_visitas')
-          .update(payload)
-          .eq('id', visitaEditandoId);
-
+        const { error } = await supabase.from('vendedor_visitas').update(payload).eq('id', visitaEditandoId);
         if (error) throw error;
       } else {
         payload.created_by = userId;
@@ -375,9 +373,6 @@ export default function VisitasClient({ userId }: { userId: string }) {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // AÇÕES
-  // ---------------------------------------------------------------------------
   async function concluirVisita(visita: VisitaRow) {
     if ((visita.estado ?? 'AGENDADA') === 'REALIZADA') return;
 
@@ -423,11 +418,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
     try {
       const { error } = await supabase
         .from('vendedor_visitas')
-        .update({
-          estado: 'CANCELADA',
-          updated_by: userId,
-          origem: 'ADMIN',
-        })
+        .update({ estado: 'CANCELADA', updated_by: userId, origem: 'ADMIN' })
         .eq('id', visita.id);
 
       if (error) throw error;
@@ -442,9 +433,6 @@ export default function VisitasClient({ userId }: { userId: string }) {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // FILTRO + STATS
-  // ---------------------------------------------------------------------------
   const visitasFiltradas = useMemo(() => {
     const term = busca.trim().toLowerCase();
     return visitas.filter((v) => {
@@ -455,9 +443,7 @@ export default function VisitasClient({ userId }: { userId: string }) {
       const vendedorNome = (v.vendedores?.nome ?? '').toLowerCase();
       const notas = (v.notas ?? '').toLowerCase();
 
-      const matchBusca =
-        !term || clienteNome.includes(term) || vendedorNome.includes(term) || notas.includes(term);
-
+      const matchBusca = !term || clienteNome.includes(term) || vendedorNome.includes(term) || notas.includes(term);
       return matchStatus && matchBusca;
     });
   }, [visitas, filterStatus, busca]);
