@@ -32,7 +32,7 @@ export default function LoginPage() {
       }
 
       setMsg('Login OK');
-      router.replace('/ssr-check'); // primeiro valida SSR
+      router.replace('/entry'); // primeiro valida SSR
       router.refresh();
     } catch (e: any) {
       setMsg(e?.message ?? 'Erro inesperado');
