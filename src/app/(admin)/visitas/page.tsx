@@ -12,7 +12,7 @@ export default async function VisitasAdminPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) redirect('/login?next=/visitas');
+  if (!user) redirect('/login');
 
   // OBS: (admin)/layout.tsx já garante role ADMIN.
   // Aqui só garantimos user para entregar userId ao client.
