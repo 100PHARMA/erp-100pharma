@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-// (PortalNavbar entra depois)
+import PortalNavbar from '@/components/custom/portal-navbar';
+
 export const dynamic = 'force-dynamic';
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -21,5 +22,10 @@ export default async function PortalLayout({ children }: { children: React.React
 
   if (role !== 'VENDEDOR') redirect('/dashboard');
 
-  return <main>{children}</main>;
+  return (
+    <>
+      <PortalNavbar />
+      <main>{children}</main>
+    </>
+  );
 }
