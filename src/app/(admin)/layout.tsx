@@ -1,13 +1,20 @@
 import { redirect } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import NavbarGate from '@/components/custom/navbar-gate';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
-export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+export default async function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const supabase = createSupabaseServerClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   if (!user) redirect('/login');
 
   const { data: perfil, error } = await supabase
@@ -17,14 +24,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     .maybeSingle();
 
   if (error) redirect('/login?e=perfil_read');
+
   const role = String(perfil?.role ?? '').toUpperCase();
   if (!role) redirect('/login?e=perfil_missing');
 
   if (role !== 'ADMIN') redirect('/portal');
 
   return (
-  <>
-    <NavbarGate />
-    <main>{children}</main>
-  </>
-);
+    <>
+      <NavbarGate />
+      <main>{children}</main>
+    </>
+  );
+}
