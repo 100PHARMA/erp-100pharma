@@ -1,8 +1,7 @@
-// src/components/custom/navbar.tsx
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Package,
@@ -25,15 +24,11 @@ import {
   Car,
   LogOut,
   Wallet,
-  Home,
   MoreHorizontal,
   ChevronDown,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useAuth } from '@/hooks/useAuth';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
-
-type Role = 'ADMIN' | 'VENDEDOR' | 'UNKNOWN';
 
 const LOGO_URL =
   'https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/98b4bab4-3285-44fa-9df9-72210bf18f3d.png';
@@ -60,14 +55,6 @@ const adminMenuItems = [
   { href: '/configuracoes', label: 'Configurações', icon: Settings },
 ];
 
-const vendorMenuItems = [
-  { href: '/portal', label: 'Início', icon: Home },
-  { href: '/portal/vendas', label: 'Vendas', icon: ShoppingCart },
-  { href: '/portal/visitas', label: 'Visitas', icon: MapPin },
-  { href: '/portal/quilometragem', label: 'Quilometragem', icon: Car },
-  { href: '/portal/metas', label: 'Metas', icon: Target },
-];
-
 function isActivePath(pathname: string, href: string) {
   if (pathname === href) return true;
   if (href !== '/' && pathname.startsWith(href + '/')) return true;
@@ -80,119 +67,49 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { user } = useAuth();
-
+  const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-
-  const [role, setRole] = useState<Role>('UNKNOWN');
-  const [displayName, setDisplayName] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-
   const moreRef = useRef<HTMLDivElement | null>(null);
 
   const [tarefasPendentesCount, setTarefasPendentesCount] = useState<number>(0);
   const [logoutLoading, setLogoutLoading] = useState(false);
 
   const handleLogout = useCallback(async () => {
-  if (logoutLoading) return;
+    if (logoutLoading) return;
 
-  setLogoutLoading(true);
-  try {
-    // Logout correto: SERVER limpa cookies HttpOnly (sb-*)
-    await fetch('/auth/signout', { method: 'POST' });
+    setLogoutLoading(true);
+    try {
+      await fetch('/auth/signout', { method: 'POST' });
+      router.replace('/login');
+      router.refresh();
+    } finally {
+      setLogoutLoading(false);
+    }
+  }, [logoutLoading, router]);
 
-    // Redireciona após o server invalidar a sessão
-    router.replace('/login');
-    router.refresh();
-  } finally {
-    setLogoutLoading(false);
-  }
-}, [logoutLoading, router]);
-
+  // Se por algum motivo este componente for renderizado no login, não mostra.
   if (pathname === '/login' || pathname.startsWith('/login/')) return null;
 
-  async function loadTarefasPendentesCount(isAdmin: boolean, vendedorId: string | null) {
+  async function loadTarefasPendentesCount() {
     try {
-      let q = supabase
+      const { count, error } = await supabase
         .from('tarefas')
         .select('id', { count: 'exact', head: true })
         .eq('estado', 'PENDENTE');
 
-      if (!isAdmin && vendedorId) {
-        q = q.eq('responsavel_vendedor_id', vendedorId);
-      }
-
-      const { count, error } = await q;
-      if (error) return;
-      setTarefasPendentesCount(count ?? 0);
+      if (!error) setTarefasPendentesCount(count ?? 0);
     } catch {}
   }
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadIdentity() {
-      const { data: uRes } = await supabase.auth.getUser();
-      const u = user ?? uRes.user ?? null;
-
-      if (!u) {
-        if (!cancelled) {
-          setRole('UNKNOWN');
-          setDisplayName('');
-          setEmail('');
-          setTarefasPendentesCount(0);
-        }
-        return;
-      }
-
-      const userId = u.id;
-      const userEmail = u.email ?? '';
-      if (!cancelled) setEmail(userEmail);
-
-      const { data: perfil } = await supabase
-        .from('perfis')
-        .select('role, vendedor_id')
-        .eq('id', userId)
-        .maybeSingle();
-
-      const r = String(perfil?.role ?? '').toUpperCase();
-      const resolvedRole: Role =
-        r === 'ADMIN' ? 'ADMIN' : r === 'VENDEDOR' ? 'VENDEDOR' : 'UNKNOWN';
-
-      let name = String((u.user_metadata as any)?.nome ?? '').trim();
-
-      if (resolvedRole === 'VENDEDOR' && perfil?.vendedor_id) {
-        const { data: vend } = await supabase
-          .from('vendedores')
-          .select('nome')
-          .eq('id', perfil.vendedor_id)
-          .maybeSingle();
-
-        const vendNome = String(vend?.nome ?? '').trim();
-        if (vendNome) name = vendNome;
-      }
-
-      if (!name) name = userEmail;
-
-      if (!cancelled) {
-        setRole(resolvedRole);
-        setDisplayName(name);
-      }
-
-      await loadTarefasPendentesCount(resolvedRole === 'ADMIN', perfil?.vendedor_id ?? null);
-    }
-
-    loadIdentity();
-    const { data: sub } = supabase.auth.onAuthStateChange(() => loadIdentity());
-
-    return () => {
-      cancelled = true;
-      sub?.subscription?.unsubscribe();
-    };
-  }, [supabase, user?.id]);
+    loadTarefasPendentesCount();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => loadTarefasPendentesCount());
+    return () => sub?.subscription?.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -211,14 +128,9 @@ export default function Navbar() {
     };
   }, [moreOpen]);
 
-  const isVendor = role === 'VENDEDOR';
-  const menuItems = isVendor ? vendorMenuItems : adminMenuItems;
-  const homeHref = isVendor ? '/portal' : '/dashboard';
-
-  const primaryItems = isVendor ? menuItems : menuItems.slice(0, 8);
-  const moreItems = isVendor ? [] : menuItems.slice(8);
-
-  const nameToShow = displayName || email || '';
+  const homeHref = '/dashboard';
+  const primaryItems = adminMenuItems.slice(0, 8);
+  const moreItems = adminMenuItems.slice(8);
 
   return (
     <>
@@ -260,7 +172,7 @@ export default function Navbar() {
             </div>
 
             <div className="ml-auto flex-none flex items-center gap-2 pl-4 border-l border-white/20">
-              {!isVendor && moreItems.length > 0 && (
+              {moreItems.length > 0 && (
                 <div className="relative" ref={moreRef}>
                   <button
                     type="button"
@@ -307,18 +219,6 @@ export default function Navbar() {
                             </Link>
                           );
                         })}
-
-                        <div className="my-2 h-px bg-gray-200" />
-
-                        {nameToShow && (
-                          <div className="px-3 py-2">
-                            <div className="text-sm font-semibold">{nameToShow}</div>
-                            <div className="text-xs text-gray-600">
-                              {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-                            </div>
-                            {email && <div className="text-xs text-gray-500 mt-1">{email}</div>}
-                          </div>
-                        )}
                       </div>
                     </div>
                   )}
@@ -365,16 +265,7 @@ export default function Navbar() {
         {mobileMenuOpen && (
           <div className="border-t border-blue-500/30 bg-blue-700/95 backdrop-blur-sm">
             <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
-              {(displayName || email) && (
-                <div className="px-4 py-3 mb-2 bg-blue-600/50 rounded-lg">
-                  <p className="text-sm font-semibold">{displayName || email}</p>
-                  <p className="text-xs opacity-90">
-                    {isVendor ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-                  </p>
-                </div>
-              )}
-
-              {menuItems.map((item) => {
+              {adminMenuItems.map((item) => {
                 const Icon = item.icon;
                 const active = isActivePath(pathname, item.href);
 
@@ -391,7 +282,7 @@ export default function Navbar() {
                     <Icon className="w-5 h-5" />
                     <span className="flex items-center gap-2">
                       {item.label}
-                      {!isVendor && item.href === '/tarefas' && tarefasPendentesCount > 0 && (
+                      {item.href === '/tarefas' && tarefasPendentesCount > 0 && (
                         <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold bg-red-600 text-white">
                           {tarefasPendentesCount}
                         </span>
