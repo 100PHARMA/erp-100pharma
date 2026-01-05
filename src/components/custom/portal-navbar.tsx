@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LogOut } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 function isActivePath(pathname: string, href: string) {
   if (pathname === href) return true;
@@ -14,60 +14,44 @@ function isActivePath(pathname: string, href: string) {
 
 export default function PortalNavbar() {
   const pathname = usePathname();
-  const { user, role, ready, signOut, debug } = useAuth();
   const router = useRouter();
-const [logoutLoading, setLogoutLoading] = useState(false);
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
-const handleLogout = useCallback(async () => {
-  if (logoutLoading) return;
+  const [email, setEmail] = useState<string>('');
+  const [logoutLoading, setLogoutLoading] = useState(false);
 
-  setLogoutLoading(true);
-  try {
-    // IMPORTANTE: chama a rota server que limpa cookies sb-*
-    await fetch('/auth/signout', { method: 'POST' });
+  useEffect(() => {
+    let cancelled = false;
 
-    router.replace('/login');
-    router.refresh();
-  } finally {
-    setLogoutLoading(false);
-  }
-}, [logoutLoading, router]);
+    async function load() {
+      const { data } = await supabase.auth.getUser();
+      if (!cancelled) setEmail(data.user?.email ?? '');
+    }
 
+    load();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => load());
 
-  // Nunca fica “a carregar” eternamente, por causa do timeout do hook.
-  if (!ready) {
-    return (
-      <div className="h-16 bg-indigo-600 text-white flex items-center px-4">
-        A carregar...
-      </div>
-    );
-  }
+    return () => {
+      cancelled = true;
+      sub?.subscription?.unsubscribe();
+    };
+  }, [supabase]);
 
-  // Se ready e não tem user, não fica preso: força login
-  if (!user) {
-    return (
-      <div className="h-16 bg-indigo-600 text-white flex items-center justify-between px-4">
-        <div>
-          Sessão não disponível no client. ({debug.mode} / {debug.step})
-          {debug.lastError ? ` — ${debug.lastError}` : ''}
-        </div>
-        <a className="underline" href="/login">
-          Ir para login
-        </a>
-      </div>
-    );
-  }
+  const handleLogout = useCallback(async () => {
+    if (logoutLoading) return;
 
-  const displayName = user.email ?? '—';
+    setLogoutLoading(true);
+    try {
+      await fetch('/auth/signout', { method: 'POST' });
+      router.replace('/login');
+      router.refresh();
+    } finally {
+      setLogoutLoading(false);
+    }
+  }, [logoutLoading, router]);
 
   return (
     <div className="bg-indigo-600 text-white">
-      {/* DEBUG (remover depois) */}
-      <div className="text-[11px] opacity-90 px-4 py-1 border-b border-white/15">
-        debug: {debug.mode} / {debug.step}
-        {debug.lastError ? ` — ${debug.lastError}` : ''}
-      </div>
-
       <div className="h-16 flex items-center px-4 gap-4">
         <Link href="/portal" className="font-semibold">
           Portal
@@ -119,18 +103,16 @@ const handleLogout = useCallback(async () => {
 
         <div className="ml-auto flex items-center gap-4">
           <div className="text-right leading-tight">
-            <div className="text-sm font-semibold">{displayName}</div>
-            <div className="text-xs opacity-90">
-              {role === 'VENDEDOR' ? 'Vendedor' : role === 'ADMIN' ? 'Admin' : ''}
-            </div>
+            <div className="text-sm font-semibold">{email || '—'}</div>
+            <div className="text-xs opacity-90">Vendedor</div>
           </div>
 
-        <button
-           onClick={handleLogout}
-           disabled={logoutLoading}
-           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-60"
-           title="Sair"
-        >
+          <button
+            onClick={handleLogout}
+            disabled={logoutLoading}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-60"
+            title="Sair"
+          >
             <LogOut className="w-4 h-4" />
             <span className="text-sm font-medium">{logoutLoading ? 'A sair...' : 'Sair'}</span>
           </button>
