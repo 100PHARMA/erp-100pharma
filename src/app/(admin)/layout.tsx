@@ -25,9 +25,9 @@ export default async function AdminLayout({
   if (role !== 'ADMIN') redirect('/portal');
 
   return (
-  <div style={{ padding: 24 }}>
-    <div>ADMIN LAYOUT OK</div>
-    {children}
-  </div>
+  <>
+    <NavbarGate />
+    <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+  </>
 );
 }
