@@ -91,15 +91,16 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
     const { data, error } = await supabase
       .from('vendedor_km_lancamentos')
       .select(
-  'id,visita_id,vendedor_id,cliente_id,data,km,valor_km,valor_total,status,motivo_rejeicao,criado_em,' +
+    'id,visita_id,vendedor_id,cliente_id,data,km,valor_km,valor_total,status,motivo_rejeicao,criado_em,' +
     'vendedor:vendedores!vendedor_km_lancamentos_vendedor_fkey(id,nome),' +
     'cliente:clientes!vendedor_km_lancamentos_cliente_fkey(id,nome)'
 )
-      .gte('data', startDate)
-      .lt('data', endDate)
       .order('data', { ascending: false })
-      .order('criado_em', { ascending: false });
-
+      .limit(3);
+      console.log('[KM] range', startDate, endDate);
+      console.log('[KM] count', (data ?? []).length);
+      console.log('[KM] first', (data ?? [])[0]);
+    
     if (error) throw new Error(`Erro ao ler vendedor_km_lancamentos: ${error.message}`);
     setRows((data ?? []) as KmLancRow[]);
   };
