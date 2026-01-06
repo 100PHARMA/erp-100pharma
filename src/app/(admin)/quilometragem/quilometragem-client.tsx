@@ -103,6 +103,9 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
         status,
         motivo_rejeicao,
         criado_em,
+        aprovado_por,
+        pago_em,
+        pago_por,
         vendedor:vendedores!vendedor_km_lancamentos_vendedor_fkey ( id, nome ),
         cliente:clientes!vendedor_km_lancamentos_cliente_fkey ( id, nome 
         `
