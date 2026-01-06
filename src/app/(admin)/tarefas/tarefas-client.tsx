@@ -461,19 +461,12 @@ export default function TarefasClient({ userId: _userId }: Props) {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 flex items-center justify-between rounded-t-2xl">
               <h2 className="text-2xl font-bold">{mode === 'create' ? 'Nova Tarefa' : 'Editar Tarefa'}</h2>
-              <button
-                onClick={() => {
-                  setShowModal(false);
-                  resetForm();
-                }}
-                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-              >
+              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
                 <X className="w-6 h-6" />
               </button>
             </div>
 
             <form onSubmit={onSubmit} className="p-6 space-y-4">
-              {/* (restante do seu modal permanece igual — você já colou tudo acima e está mantido) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Título *</label>
                 <input
@@ -496,15 +489,83 @@ export default function TarefasClient({ userId: _userId }: Props) {
                 />
               </div>
 
-              {/* ... mantenha o restante do formulário exatamente como já está no seu código ... */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Prioridade *</label>
+                  <select
+                    value={form.prioridade}
+                    onChange={(e) => setForm({ ...form, prioridade: e.target.value as Prioridade })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    <option value="BAIXA">Baixa</option>
+                    <option value="MEDIA">Média</option>
+                    <option value="ALTA">Alta</option>
+                    <option value="URGENTE">Urgente</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Estado *</label>
+                  <select
+                    value={form.estado}
+                    onChange={(e) => setForm({ ...form, estado: e.target.value as Estado })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    <option value="PENDENTE">Pendente</option>
+                    <option value="EM_ANDAMENTO">Em Andamento</option>
+                    <option value="CONCLUIDA">Concluída</option>
+                    <option value="CANCELADA">Cancelada</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Responsável (Vendedor)</label>
+                  <select
+                    value={form.responsavel_vendedor_id}
+                    onChange={(e) => setForm({ ...form, responsavel_vendedor_id: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">—</option>
+                    {vendedores.map((v) => (
+                      <option key={v.id} value={v.id}>{v.nome}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
+                  <select
+                    value={form.cliente_id}
+                    onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">—</option>
+                    {clientes.map((c) => (
+                      <option key={c.id} value={c.id}>{c.nome}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Data de Vencimento *</label>
+                <input
+                  type="date"
+                  value={form.data_vencimento}
+                  onChange={(e) => setForm({ ...form, data_vencimento: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                />
+              </div>
 
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowModal(false);
-                    resetForm();
-                  }}
+                  onClick={() => { setShowModal(false); resetForm(); }}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
                   disabled={saving}
                 >
