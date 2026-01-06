@@ -28,8 +28,8 @@ type KmLancRow = {
   motivo_rejeicao: string | null;
   criado_em: string;
 
-  vendedores?: { id: string; nome?: string | null } | null;
-  clientes?: { id: string; nome?: string | null } | null;
+  vendedor?: { id: string; nome?: string | null } | null;
+  cliente?: { id: string; nome?: string | null } | null;
 };
 
 function safeNumber(n: any): number {
@@ -164,8 +164,8 @@ export default function QuilometragemClient({ initialMes }: { initialMes: string
       if (statusFiltro !== 'TODOS' && r.status !== statusFiltro) return false;
       if (!term) return true;
 
-      const vendedorNome = String(r.vendedores?.nome ?? '').toLowerCase();
-      const clienteNome = String(r.clientes?.nome ?? '').toLowerCase();
+      const vendedorNome = String(r.vendedor?.nome ?? '').toLowerCase();
+      const clienteNome = String(r.cliente?.nome ?? '').toLowerCase();
       const dataStr = String(r.data ?? '').toLowerCase();
 
       return (
